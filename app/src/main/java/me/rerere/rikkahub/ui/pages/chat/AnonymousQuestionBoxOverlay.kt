@@ -73,7 +73,7 @@ fun AnonymousQuestionBoxOverlay(
     val questions by remember(scopeId) { vm.observeQuestions(scopeId) }.collectAsStateWithLifecycle(emptyList())
     val processing by vm.processing.collectAsStateWithLifecycle()
     var composerVisible by remember { mutableStateOf(false) }
-    LaunchedEffect(scopeId) {
+    LaunchedEffect(scopeId, conversation.compressedSummary) {
         vm.processDue(scopeId, assistant, conversation, conversationSystemPrompt)
         vm.markViewed(scopeId)
     }

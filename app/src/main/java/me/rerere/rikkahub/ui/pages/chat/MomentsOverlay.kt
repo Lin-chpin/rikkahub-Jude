@@ -133,7 +133,7 @@ fun MomentsOverlay(
         }
     }
 
-    LaunchedEffect(assistantId) {
+    LaunchedEffect(assistantId, conversation.compressedSummary) {
         vm.markViewed(assistantId)
         vm.processDue(assistantId, assistant, conversation, conversationSystemPrompt)
     }

@@ -200,6 +200,7 @@ class AnonymousQuestionBoxVM(
             conversationSystemPrompt = conversationSystemPrompt,
             conversationContextSummary = conversationContextSummary,
             memories = memories,
+            includeMemoriesInPrompt = true,
             tools = emptyList(),
             maxSteps = 1,
             maxTokensOverride = maxTokens,
