@@ -22,6 +22,7 @@ import me.rerere.rikkahub.data.repository.AnonymousQuestionEntry
 import me.rerere.rikkahub.data.repository.AnonymousQuestionReply
 import me.rerere.rikkahub.data.repository.AnonymousQuestionReplyStatus
 import me.rerere.rikkahub.data.repository.AnonymousQuestionRepository
+import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import kotlin.uuid.Uuid
 
@@ -40,6 +41,7 @@ internal fun List<UIMessagePart>.anonymousQuestionVisibleText(): String {
 class AnonymousQuestionBoxVM(
     private val settingsStore: SettingsStore,
     private val repository: AnonymousQuestionRepository,
+    private val conversationRepository: ConversationRepository,
     private val memoryRepository: MemoryRepository,
     private val generationHandler: GenerationHandler,
 ) : ViewModel() {
@@ -75,11 +77,12 @@ class AnonymousQuestionBoxVM(
             if (_processing.value) return@launch
             _processing.value = true
             try {
+                val generationConversation = conversationRepository.getConversationById(conversation.id) ?: conversation
                 val now = System.currentTimeMillis()
                 repository.getDueQuestions(scopeId, now, AnonymousQuestionRepository.MAX_PROCESSING_ITEMS)
-                    .forEach { processQuestion(it, assistant, conversation, conversationSystemPrompt) }
+                    .forEach { processQuestion(it, assistant, generationConversation, conversationSystemPrompt) }
                 repository.getDueAnswers(scopeId, now, AnonymousQuestionRepository.MAX_PROCESSING_ITEMS)
-                    .forEach { processAnswer(it, assistant, conversation, conversationSystemPrompt) }
+                    .forEach { processAnswer(it, assistant, generationConversation, conversationSystemPrompt) }
             } finally {
                 _processing.value = false
             }

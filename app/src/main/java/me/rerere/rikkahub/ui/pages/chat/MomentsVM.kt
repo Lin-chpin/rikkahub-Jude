@@ -29,6 +29,7 @@ import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.repository.Moment
 import me.rerere.rikkahub.data.repository.MomentAuthor
@@ -43,6 +44,7 @@ import kotlin.uuid.Uuid
 class MomentsVM(
     private val settingsStore: SettingsStore,
     private val momentRepository: MomentRepository,
+    private val conversationRepository: ConversationRepository,
     private val memoryRepository: MemoryRepository,
     private val generationHandler: GenerationHandler,
     val filesManager: FilesManager,
@@ -109,6 +111,7 @@ class MomentsVM(
             }
             _processing.value = true
             try {
+                val generationConversation = conversationRepository.getConversationById(conversation.id) ?: conversation
                 val now = System.currentTimeMillis()
                 val moments = if (manual) {
                     momentRepository.getRefreshUserMoments(assistantId, limit = 3)
@@ -122,10 +125,10 @@ class MomentsVM(
                 }
                 val outcomes = buildList {
                     moments.forEach { moment ->
-                        add(processDueMoment(moment, assistant, conversation, conversationSystemPrompt))
+                        add(processDueMoment(moment, assistant, generationConversation, conversationSystemPrompt))
                     }
                     comments.forEach { comment ->
-                        add(processDueComment(comment, assistant, conversation, conversationSystemPrompt))
+                        add(processDueComment(comment, assistant, generationConversation, conversationSystemPrompt))
                     }
                 }
                 if (manual) {
