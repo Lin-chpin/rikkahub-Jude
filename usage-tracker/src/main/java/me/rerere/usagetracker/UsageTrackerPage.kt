@@ -131,7 +131,6 @@ fun UsageTrackerPage(
         value = if (hasAccess) reader.loadUsage(selectedPeriod) else emptyList()
     }
     val reminderState = usageReminderState.takeIf { it.date == todayKey() } ?: UsageReminderState(date = todayKey())
-    val activeLock = reminderState.activeLock?.takeIf { it.lockedUntilMillis > System.currentTimeMillis() }
     val maxUsageMillis = usages.maxOfOrNull { it.totalTimeForegroundMillis } ?: 0L
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -215,9 +214,8 @@ fun UsageTrackerPage(
                     )
                 }
                 item {
-                    ReminderLockCard(
+                    AiLockPermissionCard(
                         enabled = usageReminderConfig.lockEnabled,
-                        activeLock = activeLock,
                         hasOverlayPermission = hasOverlayPermission,
                         onOpenOverlaySettings = { context.openOverlayPermissionSettings() },
                         onEnabledChange = { enabled ->
@@ -225,11 +223,8 @@ fun UsageTrackerPage(
                                 usageReminderConfig.copy(lockEnabled = enabled)
                             )
                             if (!enabled) {
-                                onUsageReminderStateChange(
-                                    reminderState.copy(activeLock = null)
-                                )
-                            }
-                            if (enabled && !context.canDrawOverlays()) {
+                                onUsageReminderStateChange(reminderState.copy(activeLock = null))
+                            } else if (!hasOverlayPermission) {
                                 context.openOverlayPermissionSettings()
                             }
                         },
@@ -278,9 +273,8 @@ fun UsageTrackerPage(
 }
 
 @Composable
-private fun ReminderLockCard(
+private fun AiLockPermissionCard(
     enabled: Boolean,
-    activeLock: UsageReminderLock?,
     hasOverlayPermission: Boolean,
     onOpenOverlaySettings: () -> Unit,
     onEnabledChange: (Boolean) -> Unit,
@@ -296,28 +290,21 @@ private fun ReminderLockCard(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text(
-                    text = "超时锁定",
+                    text = "AI 应用锁定工具",
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Text(
                     text = if (enabled) {
-                        "超时后显示全屏悬浮窗，自动锁到第二天 00:00；助手也可以在你确认后锁定或解锁。"
+                        "开启后，助手才可以使用 usage_lock_control；关闭后会自动解开所有锁定。第三方应用锁定时自动退出并显示 10 秒中心提示，RikkaHub 只禁用聊天输入框。"
                     } else {
-                        "关闭后，自动锁定和助手锁定工具都会失效。"
+                        "开启后助手才会获得 usage_lock_control；关闭后不会提供 AI 应用锁定工具。"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (enabled && activeLock != null) {
-                    Text(
-                        text = "当前锁定到 ${formatLockUntil(activeLock.lockedUntilMillis)}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
                 if (enabled && !hasOverlayPermission) {
                     Text(
-                        text = "悬浮窗权限未开启，锁定提示无法覆盖其他应用。",
+                        text = "悬浮窗权限未开启，第三方应用锁定只能发送通知。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
@@ -859,10 +846,4 @@ private fun Context.openOverlayPermissionSettings() {
         }
     }
     startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-}
-
-@Composable
-private fun formatLockUntil(millis: Long): String {
-    return DateFormat.getDateFormat(LocalContext.current).format(Date(millis)) + " " +
-        DateFormat.getTimeFormat(LocalContext.current).format(Date(millis))
 }

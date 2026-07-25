@@ -28,7 +28,7 @@ import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
-import me.rerere.rikkahub.data.repository.ConversationRepository
+import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.repository.Moment
 import me.rerere.rikkahub.data.repository.MomentAuthor
@@ -43,7 +43,6 @@ import kotlin.uuid.Uuid
 class MomentsVM(
     private val settingsStore: SettingsStore,
     private val momentRepository: MomentRepository,
-    private val conversationRepository: ConversationRepository,
     private val memoryRepository: MemoryRepository,
     private val generationHandler: GenerationHandler,
     val filesManager: FilesManager,
@@ -97,6 +96,7 @@ class MomentsVM(
     fun processDue(
         assistantId: Uuid,
         assistant: Assistant,
+        conversation: Conversation,
         conversationSystemPrompt: String?,
         manual: Boolean = false,
     ) {
@@ -122,10 +122,10 @@ class MomentsVM(
                 }
                 val outcomes = buildList {
                     moments.forEach { moment ->
-                        add(processDueMoment(moment, assistant, conversationSystemPrompt))
+                        add(processDueMoment(moment, assistant, conversation, conversationSystemPrompt))
                     }
                     comments.forEach { comment ->
-                        add(processDueComment(comment, assistant, conversationSystemPrompt))
+                        add(processDueComment(comment, assistant, conversation, conversationSystemPrompt))
                     }
                 }
                 if (manual) {
@@ -152,12 +152,13 @@ class MomentsVM(
     private suspend fun processDueMoment(
         moment: Moment,
         assistant: Assistant,
+        conversation: Conversation,
         conversationSystemPrompt: String?,
     ): MomentsProcessOutcome {
         val key = "moment:${moment.id}"
         if (!processingIds.add(key)) return MomentsProcessOutcome(MomentsProcessIssue.ALREADY_PROCESSING)
         try {
-            val result = generateMomentReaction(moment, assistant, conversationSystemPrompt)
+            val result = generateMomentReaction(moment, assistant, conversation, conversationSystemPrompt)
             val reaction = when (result) {
                 MomentReactionGeneration.VisionModelSetupRequired -> {
                     _visionModelSetupRequired.emit(Unit)
@@ -209,6 +210,7 @@ class MomentsVM(
     private suspend fun processDueComment(
         comment: MomentComment,
         assistant: Assistant,
+        conversation: Conversation,
         conversationSystemPrompt: String?,
     ): MomentsProcessOutcome {
         val key = "comment:${comment.id}"
@@ -217,7 +219,7 @@ class MomentsVM(
             val moment = momentRepository.getMoment(comment.momentId)
                 ?: return MomentsProcessOutcome(MomentsProcessIssue.PERSISTENCE_FAILED)
             val comments = momentRepository.getComments(moment.id)
-            return when (val result = generateCommentReply(moment, comments, comment, assistant, conversationSystemPrompt)) {
+            return when (val result = generateCommentReply(moment, comments, comment, assistant, conversation, conversationSystemPrompt)) {
                 CommentGenerationResult.EmptyText ->
                     MomentsProcessOutcome(MomentsProcessIssue.EMPTY_TEXT)
 
@@ -258,6 +260,7 @@ class MomentsVM(
     private suspend fun generateMomentReaction(
         moment: Moment,
         assistant: Assistant,
+        conversation: Conversation,
         conversationSystemPrompt: String?,
     ): MomentReactionGeneration {
         val settings = settingsStore.settingsFlow.value
@@ -275,7 +278,6 @@ class MomentsVM(
         } else {
             memoryRepository.getMemoriesOfAssistant(assistant.id.toString())
         }
-        val recentContext = buildRecentChatContext(assistant.id)
         val timelineContext = buildTimelineContext(moment.assistantId, excludeMomentId = moment.id)
         val imageInstruction = if (moment.imageUris.isNotEmpty() && moment.imageDescription.isBlank()) {
             """
@@ -289,9 +291,6 @@ class MomentsVM(
             Generate the assistant's private reaction to this user Moment.
             Output only JSON with optional fields: {"like": true|false, "comment": "short natural comment"}.
             The comment should be brief, intimate, and specific. It may be empty.
-
-            Recent chat context:
-            $recentContext
 
             Recent Moments context:
             $timelineContext
@@ -316,9 +315,13 @@ class MomentsVM(
             assistant = assistant,
             model = model,
             memories = memories,
-            messages = listOf(UIMessage(role = MessageRole.USER, parts = parts)),
+            messages = listOf(UIMessage(
+                role = MessageRole.USER,
+                parts = parts,
+            )),
             inputTransformers = inputTransformers,
             conversationSystemPrompt = conversationSystemPrompt,
+            conversationContextSummary = conversation.compressedSummary,
             maxTokens = 360,
         )
         if (text.isBlank()) return MomentReactionGeneration.EmptyText
@@ -337,6 +340,7 @@ class MomentsVM(
         comments: List<MomentComment>,
         target: MomentComment,
         assistant: Assistant,
+        conversation: Conversation,
         conversationSystemPrompt: String?,
     ): CommentGenerationResult {
         val settings = settingsStore.settingsFlow.value
@@ -371,22 +375,12 @@ class MomentsVM(
             memories = memories,
             messages = listOf(UIMessage.user(prompt)),
             conversationSystemPrompt = conversationSystemPrompt,
+            conversationContextSummary = conversation.compressedSummary,
             maxTokens = 180,
         ).trim()
         return text.takeIf { it.isNotBlank() }
             ?.let(CommentGenerationResult::Ready)
             ?: CommentGenerationResult.EmptyText
-    }
-
-    private suspend fun buildRecentChatContext(assistantId: Uuid): String {
-        val conversations = conversationRepository.getRecentConversations(assistantId, limit = 2)
-        return conversations
-            .flatMap { it.currentMessages.takeLast(8) }
-            .takeLast(8)
-            .joinToString("\n") { message ->
-                "${message.role}: ${message.parts.asPlainText().take(160)}"
-            }
-            .ifBlank { "(none)" }
     }
 
     private suspend fun buildTimelineContext(assistantId: Uuid, excludeMomentId: Uuid): String {
@@ -408,6 +402,7 @@ class MomentsVM(
         messages: List<UIMessage>,
         inputTransformers: List<InputMessageTransformer> = emptyList(),
         conversationSystemPrompt: String?,
+        conversationContextSummary: String?,
         maxTokens: Int,
     ): String {
         var output = ""
@@ -418,6 +413,7 @@ class MomentsVM(
             inputTransformers = inputTransformers,
             assistant = assistant.copy(streamOutput = false),
             conversationSystemPrompt = conversationSystemPrompt,
+            conversationContextSummary = conversationContextSummary,
             memories = memories,
             tools = emptyList(),
             maxSteps = 1,

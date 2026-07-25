@@ -88,6 +88,7 @@ import me.rerere.rikkahub.data.model.AssistantAffectScope
 import me.rerere.rikkahub.data.model.AutoCompressConfig
 import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.data.model.momentScopeId
+import me.rerere.rikkahub.data.model.messagesForGeneration
 import me.rerere.rikkahub.data.model.personaScopeId
 import me.rerere.rikkahub.data.model.replaceRegexes
 import me.rerere.rikkahub.data.model.toMessageNode
@@ -597,32 +598,30 @@ class ChatService(
                         put("error", failureMessage)
                     }
                 }.toString()
-                val updatedNodes = conversation.messageNodes
-                    .take(targetNodeIndex + 1)
-                    .mapIndexed { nodeIndex, node ->
-                        if (nodeIndex != targetNodeIndex) {
-                            node
-                        } else {
-                            node.copy(
-                                messages = node.messages.mapIndexed { messageIndex, message ->
-                                    if (messageIndex != targetMessageIndex) {
-                                        message
-                                    } else {
-                                        message.copy(
-                                            parts = message.parts.map { part ->
-                                                if (part is UIMessagePart.Tool && part.toolCallId == toolCallId) {
-                                                    part.copy(output = listOf(UIMessagePart.Text(result)))
-                                                } else {
-                                                    part
-                                                }
+                val updatedNodes = conversation.messageNodes.mapIndexed { nodeIndex, node ->
+                    if (nodeIndex != targetNodeIndex) {
+                        node
+                    } else {
+                        node.copy(
+                            messages = node.messages.mapIndexed { messageIndex, message ->
+                                if (messageIndex != targetMessageIndex) {
+                                    message
+                                } else {
+                                    message.copy(
+                                        parts = message.parts.map { part ->
+                                            if (part is UIMessagePart.Tool && part.toolCallId == toolCallId) {
+                                                part.copy(output = listOf(UIMessagePart.Text(result)))
+                                            } else {
+                                                part
                                             }
-                                        )
-                                    }
-                                },
-                                selectIndex = targetMessageIndex,
-                            )
-                        }
+                                        }
+                                    )
+                                }
+                            },
+                            selectIndex = targetMessageIndex,
+                        )
                     }
+                }
                 saveConversation(
                     conversationId,
                     conversation.copy(messageNodes = updatedNodes),
@@ -1867,20 +1866,6 @@ private fun List<UIMessage>.sanitizeVoiceCallOutput(): List<UIMessage> {
                 }
             )
         }
-    }
-}
-
-private fun Conversation.messagesForGeneration(messageRange: ClosedRange<Int>? = null): List<UIMessage> {
-    val sourceNodes = if (messageRange != null) {
-        messageNodes.subList(messageRange.start, messageRange.endInclusive + 1)
-    } else {
-        messageNodes
-    }
-    val visibleMessages = sourceNodes
-        .filterNot { it.id in compressedMessageNodeIds }
-        .map { it.currentMessage }
-    return visibleMessages.ifEmpty {
-        sourceNodes.lastOrNull()?.currentMessage?.let(::listOf).orEmpty()
     }
 }
 

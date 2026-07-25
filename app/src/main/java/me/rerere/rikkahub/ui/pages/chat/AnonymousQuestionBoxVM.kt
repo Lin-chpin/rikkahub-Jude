@@ -7,7 +7,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -16,6 +15,7 @@ import me.rerere.rikkahub.data.ai.GenerationHandler
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.repository.AnonymousQuestion
 import me.rerere.rikkahub.data.repository.AnonymousQuestionAuthor
 import me.rerere.rikkahub.data.repository.AnonymousQuestionEntry
@@ -65,27 +65,37 @@ class AnonymousQuestionBoxVM(
         viewModelScope.launch { repository.addUserAnswer(question.id, content) }
     }
 
-    fun processDue(scopeId: Uuid, assistant: Assistant, conversationSystemPrompt: String?) {
+    fun processDue(
+        scopeId: Uuid,
+        assistant: Assistant,
+        conversation: Conversation,
+        conversationSystemPrompt: String?,
+    ) {
         viewModelScope.launch {
             if (_processing.value) return@launch
             _processing.value = true
             try {
                 val now = System.currentTimeMillis()
                 repository.getDueQuestions(scopeId, now, AnonymousQuestionRepository.MAX_PROCESSING_ITEMS)
-                    .forEach { processQuestion(it, assistant, conversationSystemPrompt) }
+                    .forEach { processQuestion(it, assistant, conversation, conversationSystemPrompt) }
                 repository.getDueAnswers(scopeId, now, AnonymousQuestionRepository.MAX_PROCESSING_ITEMS)
-                    .forEach { processAnswer(it, assistant, conversationSystemPrompt) }
+                    .forEach { processAnswer(it, assistant, conversation, conversationSystemPrompt) }
             } finally {
                 _processing.value = false
             }
         }
     }
 
-    private suspend fun processQuestion(question: AnonymousQuestion, assistant: Assistant, conversationSystemPrompt: String?) {
+    private suspend fun processQuestion(
+        question: AnonymousQuestion,
+        assistant: Assistant,
+        conversation: Conversation,
+        conversationSystemPrompt: String?,
+    ) {
         val key = "question:${question.id}"
         if (!processingIds.add(key)) return
         try {
-            val answer = generateAnonymousAnswer(question.content, assistant, conversationSystemPrompt) ?: return
+            val answer = generateAnonymousAnswer(question.content, assistant, conversation, conversationSystemPrompt) ?: return
             repository.addAssistantAnswer(question.id, answer)
             repository.updateQuestion(question.copy(replyStatus = AnonymousQuestionReplyStatus.DONE))
         } finally {
@@ -93,12 +103,17 @@ class AnonymousQuestionBoxVM(
         }
     }
 
-    private suspend fun processAnswer(reply: AnonymousQuestionReply, assistant: Assistant, conversationSystemPrompt: String?) {
+    private suspend fun processAnswer(
+        reply: AnonymousQuestionReply,
+        assistant: Assistant,
+        conversation: Conversation,
+        conversationSystemPrompt: String?,
+    ) {
         val key = "answer:${reply.id}"
         if (!processingIds.add(key)) return
         try {
             val question = repository.getQuestion(reply.questionId) ?: return
-            val comment = generateAnonymousComment(question.content, reply.content, assistant, conversationSystemPrompt) ?: return
+            val comment = generateAnonymousComment(question.content, reply.content, assistant, conversation, conversationSystemPrompt) ?: return
             repository.addAssistantComment(question.id, comment)
             repository.updateReply(reply.copy(replyStatus = AnonymousQuestionReplyStatus.DONE))
         } finally {
@@ -106,10 +121,17 @@ class AnonymousQuestionBoxVM(
         }
     }
 
-    private suspend fun generateAnonymousAnswer(question: String, assistant: Assistant, conversationSystemPrompt: String?): String? {
+    private suspend fun generateAnonymousAnswer(
+        question: String,
+        assistant: Assistant,
+        conversation: Conversation,
+        conversationSystemPrompt: String?,
+    ): String? {
         return generateText(
             assistant = assistant,
             conversationSystemPrompt = conversationSystemPrompt,
+            conversationContextSummary = conversation.compressedSummary,
+            messages = listOf(UIMessage.user(
             prompt = """
                 Answer an anonymous question in the assistant's anonymous question box.
                 You do not know who asked it. Do not infer, identify, name, or expose the asker.
@@ -119,14 +141,23 @@ class AnonymousQuestionBoxVM(
                 Anonymous question:
                 $question
             """.trimIndent(),
+            )),
             maxTokens = ANONYMOUS_RESPONSE_MAX_TOKENS,
         )
     }
 
-    private suspend fun generateAnonymousComment(question: String, answer: String, assistant: Assistant, conversationSystemPrompt: String?): String? {
+    private suspend fun generateAnonymousComment(
+        question: String,
+        answer: String,
+        assistant: Assistant,
+        conversation: Conversation,
+        conversationSystemPrompt: String?,
+    ): String? {
         return generateText(
             assistant = assistant,
             conversationSystemPrompt = conversationSystemPrompt,
+            conversationContextSummary = conversation.compressedSummary,
+            messages = listOf(UIMessage.user(
             prompt = """
                 Write a short natural comment on an anonymous question-box answer.
                 The question and answer are anonymous. Do not infer who wrote either one.
@@ -140,6 +171,7 @@ class AnonymousQuestionBoxVM(
                 Anonymous answer:
                 $answer
             """.trimIndent(),
+            )),
             maxTokens = ANONYMOUS_RESPONSE_MAX_TOKENS,
         )
     }
@@ -147,7 +179,8 @@ class AnonymousQuestionBoxVM(
     private suspend fun generateText(
         assistant: Assistant,
         conversationSystemPrompt: String?,
-        prompt: String,
+        conversationContextSummary: String?,
+        messages: List<UIMessage>,
         maxTokens: Int,
     ): String? {
         val settings = settingsStore.settingsFlow.value
@@ -161,10 +194,11 @@ class AnonymousQuestionBoxVM(
         generationHandler.generateText(
             settings = settings,
             model = model,
-            messages = listOf(UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text(prompt)))),
+            messages = messages,
             // The 200-character rule is expressed in the prompt; this budget is a provider token limit.
             assistant = assistant.forAnonymousQuestionGeneration(),
             conversationSystemPrompt = conversationSystemPrompt,
+            conversationContextSummary = conversationContextSummary,
             memories = memories,
             tools = emptyList(),
             maxSteps = 1,

@@ -145,6 +145,20 @@ data class AutoCompressConfig(
     val keepRecentMessages: Int = 32,
 )
 
+fun Conversation.messagesForGeneration(messageRange: ClosedRange<Int>? = null): List<UIMessage> {
+    val sourceNodes = if (messageRange != null) {
+        messageNodes.subList(messageRange.start, messageRange.endInclusive + 1)
+    } else {
+        messageNodes
+    }
+    val visibleMessages = sourceNodes
+        .filterNot { it.id in compressedMessageNodeIds }
+        .map { it.currentMessage }
+    return visibleMessages.ifEmpty {
+        sourceNodes.lastOrNull()?.currentMessage?.let(::listOf).orEmpty()
+    }
+}
+
 @Serializable
 data class MessageNode(
     val id: Uuid = Uuid.random(),

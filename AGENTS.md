@@ -22,6 +22,7 @@
 - When the user explicitly asks to commit, push the current branch to GitHub after a successful commit.
 - When the user explicitly asks to build/package/update an APK, default to the universal debug APK workflow unless they ask for another variant:
   `E:/rikkahub2.0/app/build/outputs/apk/debug/app-universal-debug.apk`
+- When the user asks to build/package/update an APK, do not run unit tests as a separate pre-step unless the user explicitly asks for tests in that same turn. The packaging build's own compilation checks are enough for a packaging request.
 - The universal packaging helper also creates a timestamped copy in the same folder:
   `RikkaHub-universal-debug-YYYYMMDD-HHMMSS.apk`
 - Avoid adding other APK outputs or build artifacts to git.

@@ -28,8 +28,10 @@ class UsageReminderBootReceiver : BroadcastReceiver() {
             runCatching {
                 val settingsStore = KoinJavaComponent.get<SettingsStore>(SettingsStore::class.java)
                 val settings = settingsStore.settingsFlowRaw.first()
-                val hasActiveLock = settings.usageReminderConfig.lockEnabled &&
-                    settings.usageReminderState.activeLock?.lockedUntilMillis?.let { it > System.currentTimeMillis() } == true
+                val hasActiveLock = settings.usageReminderState.activeLock
+                    ?.takeIf { it.source == "ai_tool" }
+                    ?.lockedUntilMillis
+                    ?.let { it > System.currentTimeMillis() } == true
                 if (settings.usageReminderConfig.rules.any { it.enabled } || hasActiveLock) {
                     UsageReminderService.sync(context.applicationContext, settings.usageReminderConfig)
                 }

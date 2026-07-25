@@ -2,16 +2,21 @@ package me.rerere.rikkahub.ui.pages.chat
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
@@ -38,6 +43,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -596,6 +602,7 @@ private fun ChatPageContent(
             visible = momentsVisible && momentsEnabled,
             assistantId = momentScopeId,
             assistant = assistant,
+            conversation = conversation,
             assistantName = momentAssistantName,
             conversationSystemPrompt = conversation.customSystemPrompt
                 ?.takeIf { assistant.allowConversationSystemPrompt && it.isNotBlank() },
@@ -609,6 +616,7 @@ private fun ChatPageContent(
             visible = anonymousQuestionBoxVisible && anonymousQuestionBoxEnabled,
             scopeId = anonymousQuestionScopeId,
             assistant = assistant,
+            conversation = conversation,
             settings = setting,
             conversationSystemPrompt = conversation.customSystemPrompt
                 ?.takeIf { assistant.allowConversationSystemPrompt && it.isNotBlank() },
@@ -644,6 +652,94 @@ private fun TopBar(
     val toaster = LocalToaster.current
     val titleState = useEditState<String> {
         onUpdateTitle(it)
+    }
+    val actionItems = buildList<@Composable () -> Unit> {
+        add {
+            IconButton(
+                onClick = onOpenVoiceCall
+            ) {
+                Icon(HugeIcons.Voice, "Voice call")
+            }
+        }
+        if (showMoments) {
+            add {
+                MomentsButton(
+                    hasUnread = momentsUnread,
+                    onClick = onOpenMoments,
+                )
+            }
+        }
+        if (showAnonymousQuestionBox) {
+            add {
+                AnonymousQuestionBoxButton(
+                    hasUnread = anonymousQuestionBoxUnread,
+                    onClick = onOpenAnonymousQuestionBox,
+                )
+            }
+        }
+
+        if (
+            conversation.hasCompressedMessages ||
+            conversation.compressedMessageNodeIds.isNotEmpty() ||
+            conversation.compressedSummary?.isNotBlank() == true
+        ) {
+            add {
+                IconButton(
+                    onClick = onToggleCompressedMessages
+                ) {
+                    Icon(
+                        imageVector = if (showCompressedMessages) HugeIcons.ViewOff else HugeIcons.View,
+                        contentDescription = if (showCompressedMessages) {
+                            "Hide compressed messages"
+                        } else {
+                            "Show compressed messages"
+                        }
+                    )
+                }
+            }
+        }
+
+        conversation.compressedSummary?.takeIf { it.isNotBlank() }?.let { summary ->
+            val autoCompressConfig = settings.getAssistantById(conversation.assistantId)
+                ?.let { assistant ->
+                    if (assistant.allowConversationSystemPrompt) {
+                        conversation.autoCompressConfig
+                    } else {
+                        assistant.autoCompressConfig
+                    }
+                }
+            add {
+                ConversationSummaryButton(
+                    summary = summary,
+                    autoCompressEnabled = autoCompressConfig?.enabled == true,
+                    onSummaryChange = onCompressedSummaryChange,
+                    onEditorVisibilityChange = onSummaryEditorVisibilityChange,
+                )
+            }
+        }
+
+        add {
+            IconButton(
+                onClick = onClickMenu
+            ) {
+                Icon(if (previewMode) HugeIcons.Cancel01 else HugeIcons.LeftToRightListBullet, "Chat Options")
+            }
+        }
+        add {
+            IconButton(
+                onClick = onNewChat
+            ) {
+                Icon(HugeIcons.MessageAdd01, "New Message")
+            }
+        }
+    }
+    val actionPages = actionItems.chunked(3)
+    val pagerState = rememberPagerState { actionPages.size }
+
+    LaunchedEffect(actionPages.size) {
+        if (pagerState.currentPage >= actionPages.size) {
+            pagerState.scrollToPage(actionPages.lastIndex)
+        }
     }
 
     TopAppBar(
@@ -696,80 +792,45 @@ private fun TopBar(
             }
         },
         actions = {
-            Box(
-                modifier = Modifier
-                    .widthIn(max = if (bigScreen) 336.dp else 176.dp)
-                    .horizontalScroll(rememberScrollState())
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Row {
-                    IconButton(
-                        onClick = onOpenVoiceCall
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier
+                        .width(144.dp)
+                        .height(48.dp),
+                ) { page ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
                     ) {
-                        Icon(HugeIcons.Voice, "Voice call")
+                        actionPages[page].forEach { action ->
+                            action()
+                        }
                     }
-                    if (showMoments) {
-                        MomentsButton(
-                            hasUnread = momentsUnread,
-                            onClick = onOpenMoments,
-                        )
-                    }
-                    if (showAnonymousQuestionBox) {
-                        AnonymousQuestionBoxButton(
-                            hasUnread = anonymousQuestionBoxUnread,
-                            onClick = onOpenAnonymousQuestionBox,
-                        )
-                    }
+                }
 
-                    if (
-                        conversation.hasCompressedMessages ||
-                        conversation.compressedMessageNodeIds.isNotEmpty() ||
-                        conversation.compressedSummary?.isNotBlank() == true
+                if (actionPages.size > 1) {
+                    Row(
+                        modifier = Modifier.height(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        IconButton(
-                            onClick = onToggleCompressedMessages
-                        ) {
-                            Icon(
-                                imageVector = if (showCompressedMessages) HugeIcons.ViewOff else HugeIcons.View,
-                                contentDescription = if (showCompressedMessages) {
-                                    "Hide compressed messages"
-                                } else {
-                                    "Show compressed messages"
-                                }
+                        repeat(actionPages.size) { page ->
+                            Box(
+                                modifier = Modifier
+                                    .size(if (page == pagerState.currentPage) 6.dp else 4.dp)
+                                    .background(
+                                        color = if (page == pagerState.currentPage) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                                        },
+                                        shape = CircleShape,
+                                    )
                             )
                         }
-                    }
-
-                    conversation.compressedSummary?.takeIf { it.isNotBlank() }?.let { summary ->
-                        val autoCompressConfig = settings.getAssistantById(conversation.assistantId)
-                            ?.let { assistant ->
-                                if (assistant.allowConversationSystemPrompt) {
-                                    conversation.autoCompressConfig
-                                } else {
-                                    assistant.autoCompressConfig
-                                }
-                            }
-                        ConversationSummaryButton(
-                            summary = summary,
-                            autoCompressEnabled = autoCompressConfig?.enabled == true,
-                            onSummaryChange = onCompressedSummaryChange,
-                            onEditorVisibilityChange = onSummaryEditorVisibilityChange,
-                        )
-                    }
-
-                    IconButton(
-                        onClick = {
-                            onClickMenu()
-                        }
-                    ) {
-                        Icon(if (previewMode) HugeIcons.Cancel01 else HugeIcons.LeftToRightListBullet, "Chat Options")
-                    }
-
-                    IconButton(
-                        onClick = {
-                            onNewChat()
-                        }
-                    ) {
-                        Icon(HugeIcons.MessageAdd01, "New Message")
                     }
                 }
             }

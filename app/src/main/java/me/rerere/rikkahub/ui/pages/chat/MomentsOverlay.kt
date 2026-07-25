@@ -77,6 +77,7 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Avatar
+import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.repository.Moment
 import me.rerere.rikkahub.data.repository.MomentAuthor
 import me.rerere.rikkahub.data.repository.MomentComment
@@ -93,6 +94,7 @@ fun MomentsOverlay(
     visible: Boolean,
     assistantId: Uuid,
     assistant: Assistant,
+    conversation: Conversation,
     assistantName: String,
     conversationSystemPrompt: String?,
     settings: Settings,
@@ -133,7 +135,7 @@ fun MomentsOverlay(
 
     LaunchedEffect(assistantId) {
         vm.markViewed(assistantId)
-        vm.processDue(assistantId, assistant, conversationSystemPrompt)
+        vm.processDue(assistantId, assistant, conversation, conversationSystemPrompt)
     }
 
     Dialog(
@@ -167,7 +169,7 @@ fun MomentsOverlay(
                             processing = processing,
                             onDismiss = onDismiss,
                             onRefresh = {
-                                vm.processDue(assistantId, assistant, conversationSystemPrompt, manual = true)
+                                vm.processDue(assistantId, assistant, conversation, conversationSystemPrompt, manual = true)
                                 vm.markViewed(assistantId)
                             },
                             onPost = {

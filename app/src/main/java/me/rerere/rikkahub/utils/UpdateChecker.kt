@@ -19,7 +19,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.Locale
 
-private const val API_URL = "https://api.github.com/repos/innna327-source/rikkahub-auto-compress/releases/latest"
+private const val API_URL = "https://api.github.com/repos/innna327-source/rikkahub-Jude/releases/latest"
 private val UPDATE_ASSET_NAMES = listOf(
     "app-universal-debug.apk",
     "app-arm64-v8a-debug.apk",

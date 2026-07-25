@@ -654,24 +654,29 @@ private fun TextInputRow(
     val activeLock = settings.usageReminderState.activeLock
     LaunchedEffect(
         settings.usageReminderConfig.lockEnabled,
+        activeLock?.source,
         activeLock?.targetPackageName,
         activeLock?.lockedUntilMillis,
     ) {
         lockNowMillis = System.currentTimeMillis()
-        if (
-            settings.usageReminderConfig.lockEnabled &&
-            activeLock?.targetPackageName == context.packageName &&
-            activeLock.lockedUntilMillis > lockNowMillis
-        ) {
-            while (lockNowMillis < activeLock.lockedUntilMillis) {
-                delay((activeLock.lockedUntilMillis - lockNowMillis).coerceIn(100L, 1_000L))
-                lockNowMillis = System.currentTimeMillis()
+        activeLock
+            ?.takeIf {
+                settings.usageReminderConfig.lockEnabled &&
+                    it.source == "ai_tool" &&
+                    it.targetPackageName == context.packageName &&
+                    it.lockedUntilMillis > lockNowMillis
             }
-        }
+            ?.let { lock ->
+                while (lockNowMillis < lock.lockedUntilMillis) {
+                    delay((lock.lockedUntilMillis - lockNowMillis).coerceIn(100L, 1_000L))
+                    lockNowMillis = System.currentTimeMillis()
+                }
+            }
     }
     val rikkahubLock = settings.usageReminderState.activeLock?.takeIf { lock ->
         settings.usageReminderConfig.lockEnabled &&
-            lock.lockedUntilMillis > lockNowMillis &&
+        lock.source == "ai_tool" &&
+        lock.lockedUntilMillis > lockNowMillis &&
             lock.targetPackageName == context.packageName
     }
     val lockNotice = rikkahubLock?.let { lock ->

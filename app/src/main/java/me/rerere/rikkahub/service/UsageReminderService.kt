@@ -51,8 +51,6 @@ import me.rerere.usagetracker.UsageStatsReader
 import me.rerere.usagetracker.todayKey
 import org.koin.android.ext.android.inject
 import java.text.DateFormat
-import java.time.LocalDate
-import java.time.ZoneId
 import java.util.Date
 import kotlin.math.absoluteValue
 
@@ -67,6 +65,8 @@ class UsageReminderService : Service() {
     private var scheduledUnlockAtMillis: Long = 0L
     private var lockOverlayView: View? = null
     private var lockOverlaySignature: String? = null
+    private var lockNoticeView: View? = null
+    private var lockNoticeSignature: String? = null
     private var lockNoticeJob: Job? = null
     private var lastLockNotificationSignature: String? = null
     private var lastTargetRedirectPackageName: String? = null
@@ -86,6 +86,11 @@ class UsageReminderService : Service() {
                 val targetPackageName = intent.getStringExtra(EXTRA_LOCK_TARGET_PACKAGE_NAME)
                 val targetLabel = intent.getStringExtra(EXTRA_LOCK_TARGET_LABEL).orEmpty()
                 scope.launch {
+                    val settings = settingsStore.settingsFlowRaw.first()
+                    if (!settings.usageReminderConfig.lockEnabled) {
+                        logUsageLock("lockUntil: AI lock tool disabled in usage settings")
+                        return@launch
+                    }
                     lockUntil(
                         lockedUntilMillis = lockedUntilMillis,
                         reason = reason,
@@ -112,19 +117,33 @@ class UsageReminderService : Service() {
 
             ACTION_STOP -> {
                 scope.launch {
-                    if (intent.getBooleanExtra(EXTRA_CLEAR_LOCK, false)) {
+                    val settings = settingsStore.settingsFlowRaw.first()
+                    if (!settings.usageReminderConfig.lockEnabled) {
                         clearLock()
                     }
-                    stopSelf()
+                    val activeLock = settingsStore.settingsFlowRaw.first().usageReminderState.activeLock
+                        ?.takeIf {
+                            settings.usageReminderConfig.lockEnabled &&
+                                it.source == "ai_tool" &&
+                                it.lockedUntilMillis > System.currentTimeMillis()
+                        }
+                    if (activeLock != null) {
+                        startMonitoring(restart = true)
+                    } else {
+                        stopSelf()
+                    }
                 }
                 return START_NOT_STICKY
             }
 
             else -> {
-                if (intent?.getBooleanExtra(EXTRA_CLEAR_LOCK, false) == true) {
-                    scope.launch { clearLock() }
+                scope.launch {
+                    val settings = settingsStore.settingsFlowRaw.first()
+                    if (!settings.usageReminderConfig.lockEnabled) {
+                        clearLock()
+                    }
+                    startMonitoring()
                 }
-                startMonitoring()
             }
         }
         return START_STICKY
@@ -135,8 +154,8 @@ class UsageReminderService : Service() {
     override fun onDestroy() {
         monitorJob?.cancel()
         lockJob?.cancel()
-        lockNoticeJob?.cancel()
         removeLockOverlay()
+        removeLockNotice()
         scope.cancel()
         super.onDestroy()
     }
@@ -184,11 +203,14 @@ class UsageReminderService : Service() {
     private suspend fun checkUsageRules(): Long {
         val settings = settingsStore.settingsFlowRaw.first()
         val now = System.currentTimeMillis()
-        val activeLock = settings.usageReminderState.activeLock
-        if (!settings.usageReminderConfig.lockEnabled && activeLock != null) {
+        val storedLock = settings.usageReminderState.activeLock
+        val activeLock = storedLock?.takeIf {
+            settings.usageReminderConfig.lockEnabled && it.source == "ai_tool"
+        }
+        if (storedLock != null && activeLock == null) {
             logUsageLock(
-                "checkUsageRules: lock disabled, clearing active lock target=${activeLock.targetPackageName} " +
-                    "until=${activeLock.lockedUntilMillis}"
+                "checkUsageRules: clearing disabled or non-AI lock source=${storedLock.source} " +
+                    "target=${storedLock.targetPackageName}"
             )
             clearLock()
         } else if (activeLock != null) {
@@ -211,8 +233,9 @@ class UsageReminderService : Service() {
         }
 
         val enabledRules = settings.usageReminderConfig.rules.filter { it.enabled }
-        val hasActiveLock = settings.usageReminderConfig.lockEnabled &&
-            settings.usageReminderState.activeLock?.lockedUntilMillis?.let { it > now } == true
+        val hasActiveLock = activeLock
+            ?.lockedUntilMillis
+            ?.let { it > now } == true
         if (enabledRules.isEmpty()) {
             if (!hasActiveLock) stopSelf()
             return CHECK_INTERVAL_MILLIS
@@ -224,6 +247,7 @@ class UsageReminderService : Service() {
 
         val today = todayKey()
         val state = settings.usageReminderState.takeIf { it.date == today }
+            ?.copy(activeLock = activeLock?.takeIf { it.lockedUntilMillis > now })
             ?: UsageReminderState(
                 date = today,
                 activeLock = activeLock?.takeIf { it.lockedUntilMillis > now },
@@ -276,22 +300,6 @@ class UsageReminderService : Service() {
                 reminderCount = remindedState.reminderCount,
                 reminderMessages = settings.usageReminderConfig.reminderMessages,
             )
-            if (settings.usageReminderConfig.lockEnabled) {
-                nextLock = UsageReminderLock(
-                    lockedUntilMillis = nextMidnightMillis(),
-                    reason = getString(
-                        R.string.usage_lock_auto_reason,
-                        rule.label,
-                        rule.thresholdMinutes,
-                    ),
-                    source = "usage_limit",
-                    targetPackageName = rule.packageName,
-                    targetLabel = rule.label,
-                )
-                sendLockNotification(nextLock)
-                syncLockOverlay(nextLock)
-                scheduleUnlock(nextLock.lockedUntilMillis)
-            }
             changed = true
         }
 
@@ -321,8 +329,6 @@ class UsageReminderService : Service() {
     ) {
         val now = System.currentTimeMillis()
         if (lockedUntilMillis <= now) return
-        val settings = settingsStore.settingsFlowRaw.first()
-        if (!settings.usageReminderConfig.lockEnabled) return
         if (!hasNotificationPermission(this)) return
         startForeground(NOTIFICATION_ID_MONITOR, buildMonitorNotification())
         val lock = UsageReminderLock(
@@ -356,6 +362,7 @@ class UsageReminderService : Service() {
         }
         scheduledUnlockAtMillis = 0L
         removeLockOverlay()
+        removeLockNotice()
         settingsStore.update { current ->
             current.copy(
                 usageReminderState = current.usageReminderState.copy(activeLock = null)
@@ -376,9 +383,9 @@ class UsageReminderService : Service() {
         }
         val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         val existing = lockOverlayView
-        val selfLock = lock.targetPackageName == packageName
+        val compactLock = lock.targetPackageName == packageName
         val signature = buildString {
-            append(if (selfLock) "compact" else "full")
+            append(if (compactLock) "compact" else "full")
             append('|')
             append(lock.targetPackageName.orEmpty())
             append('|')
@@ -396,13 +403,13 @@ class UsageReminderService : Service() {
             lockOverlaySignature = null
         }
 
-        if (selfLock) {
+        if (compactLock) {
             showCompactLockWindow(windowManager, lock)
         } else {
             showFrostedLockOverlay(windowManager, lock)
         }
         logUsageLock(
-            "showLockOverlay: overlay shown target=${lock.targetPackageName} full=${!selfLock} " +
+            "showLockOverlay: overlay shown target=${lock.targetPackageName} full=${!compactLock} " +
                 "until=${lock.lockedUntilMillis}"
         )
         lockOverlaySignature = signature
@@ -433,7 +440,10 @@ class UsageReminderService : Service() {
                 sendLockNotification(lock)
             }
             targetPackageName == packageName -> removeLockOverlay()
-            foregroundPackageName == targetPackageName -> redirectTargetToHome(lock)
+            foregroundPackageName == targetPackageName -> {
+                redirectTargetToHome(lock)
+                showCenterLockNotice(lock)
+            }
             else -> removeLockOverlay()
         }
     }
@@ -466,7 +476,6 @@ class UsageReminderService : Service() {
         }.onFailure {
             logUsageLock("redirectTargetToHome: HOME intent failed target=$targetPackageName", it)
         }
-        showCenterLockNotice(lock)
     }
 
     private fun showCenterLockNotice(lock: UsageReminderLock) {
@@ -492,11 +501,11 @@ class UsageReminderService : Service() {
             append('|')
             append(lock.reason)
         }
-        if (lockOverlayView != null && lockOverlaySignature == signature) {
+        if (lockNoticeView != null && lockNoticeSignature == signature) {
             logUsageLock("showCenterLockNotice: notice already shown signature=$signature")
             return
         }
-        removeLockOverlay()
+        removeLockNotice()
 
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -556,20 +565,31 @@ class UsageReminderService : Service() {
                 "showCenterLockNotice: notice added target=${lock.targetPackageName} " +
                     "until=${lock.lockedUntilMillis}"
             )
-            lockOverlayView = content
-            lockOverlaySignature = signature
+            lockNoticeView = content
+            lockNoticeSignature = signature
             lockNoticeJob?.cancel()
             lockNoticeJob = scope.launch {
                 delay(TARGET_REDIRECT_NOTICE_MILLIS)
-                if (lockOverlaySignature == signature) {
+                if (lockNoticeSignature == signature) {
                     logUsageLock("showCenterLockNotice: auto remove notice target=${lock.targetPackageName}")
-                    removeLockOverlay()
+                    removeLockNotice()
                 }
             }
         }.onFailure {
             logUsageLock("showCenterLockNotice: addView failed target=${lock.targetPackageName}", it)
             sendLockNotification(lock)
         }
+    }
+
+    private fun removeLockNotice() {
+        lockNoticeJob?.cancel()
+        lockNoticeJob = null
+        val view = lockNoticeView ?: return
+        runCatching {
+            (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(view)
+        }
+        lockNoticeView = null
+        lockNoticeSignature = null
     }
 
     private fun showFrostedLockOverlay(windowManager: WindowManager, lock: UsageReminderLock) {
@@ -725,8 +745,6 @@ class UsageReminderService : Service() {
         }
         lockOverlayView = null
         lockOverlaySignature = null
-        lockNoticeJob?.cancel()
-        lockNoticeJob = null
     }
 
     private fun scheduleUnlock(lockedUntilMillis: Long) {
@@ -924,7 +942,6 @@ class UsageReminderService : Service() {
         const val EXTRA_LOCK_SOURCE = "lockSource"
         const val EXTRA_LOCK_TARGET_PACKAGE_NAME = "lockTargetPackageName"
         const val EXTRA_LOCK_TARGET_LABEL = "lockTargetLabel"
-        private const val EXTRA_CLEAR_LOCK = "clearLock"
         private const val NOTIFICATION_ID_MONITOR = 200_100
         private const val NOTIFICATION_ID_LOCK = 200_101
         private const val REQUEST_OPEN_USAGE_TRACKER = 200_200
@@ -932,16 +949,15 @@ class UsageReminderService : Service() {
         private const val CHECK_INTERVAL_MILLIS = 1_000L
         private const val MIN_MONITOR_DELAY_MILLIS = 100L
         private const val ACTIVE_LOCK_TARGET_CHECK_INTERVAL_MILLIS = 1_000L
-        private const val TARGET_REDIRECT_NOTICE_MILLIS = 30_000L
+        private const val TARGET_REDIRECT_NOTICE_MILLIS = 10_000L
         private const val TARGET_REDIRECT_COOLDOWN_MILLIS = 800L
         private const val CHECK_LOOKBACK_MILLIS = 60_000L
         private const val IGNORE_ACTION_START_COUNT = 3
 
         fun sync(context: Context, config: UsageReminderConfig) {
-            val shouldStart = config.rules.any { it.enabled } || config.lockEnabled
+            val shouldStart = config.rules.any { it.enabled }
             val intent = Intent(context, UsageReminderService::class.java).apply {
                 action = if (shouldStart) ACTION_START else ACTION_STOP
-                putExtra(EXTRA_CLEAR_LOCK, !config.lockEnabled)
             }
             if (shouldStart && hasNotificationPermission(context)) {
                 ContextCompat.startForegroundService(context, intent)
@@ -1006,14 +1022,6 @@ class UsageReminderService : Service() {
             } else {
                 flags
             }
-        }
-
-        private fun nextMidnightMillis(): Long {
-            return LocalDate.now(ZoneId.systemDefault())
-                .plusDays(1)
-                .atStartOfDay(ZoneId.systemDefault())
-                .toInstant()
-                .toEpochMilli()
         }
 
         private fun notificationIdFor(packageName: String): Int {

@@ -45,6 +45,7 @@ import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.repository.AnonymousQuestionAuthor
 import me.rerere.rikkahub.data.repository.AnonymousQuestionEntry
 import me.rerere.rikkahub.data.repository.AnonymousQuestionReply
@@ -56,6 +57,7 @@ fun AnonymousQuestionBoxOverlay(
     visible: Boolean,
     scopeId: Uuid,
     assistant: Assistant,
+    conversation: Conversation,
     settings: Settings,
     conversationSystemPrompt: String?,
     vm: AnonymousQuestionBoxVM,
@@ -72,7 +74,7 @@ fun AnonymousQuestionBoxOverlay(
     val processing by vm.processing.collectAsStateWithLifecycle()
     var composerVisible by remember { mutableStateOf(false) }
     LaunchedEffect(scopeId) {
-        vm.processDue(scopeId, assistant, conversationSystemPrompt)
+        vm.processDue(scopeId, assistant, conversation, conversationSystemPrompt)
         vm.markViewed(scopeId)
     }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
@@ -92,7 +94,7 @@ fun AnonymousQuestionBoxOverlay(
                         contentDescription = stringResource(R.string.anonymous_question_box_refresh),
                         color = MaterialTheme.colorScheme.onSurface,
                         onRefresh = {
-                            vm.processDue(scopeId, assistant, conversationSystemPrompt)
+                            vm.processDue(scopeId, assistant, conversation, conversationSystemPrompt)
                             vm.markViewed(scopeId)
                         },
                     )

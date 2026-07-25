@@ -482,12 +482,12 @@ class LocalTools(
         Tool(
             name = "usage_lock_control",
             description = """
-                Lock or unlock the Android device with RikkaHub's usage lock overlay.
+                Lock or unlock a specific Android app with RikkaHub's AI usage lock tool.
                 Use only when the user asks to lock/unlock usage, enforce a break, or check lock status.
-                The global usage lock switch must be enabled in Usage Tracker settings.
+                This AI tool is available only when enabled in the usage time settings.
                 For action=lock, provide one of: duration_minutes, unlock_at_timestamp_ms, or unlock_at_iso.
                 For action=lock, provide target_package_name for the app being locked, or use RikkaHub's own package name for the current app.
-                If the target is RikkaHub itself, set target_package_name to ${context.packageName} so the app shows a compact floating window instead of a blocking full-screen overlay.
+                If the target is RikkaHub itself, set target_package_name to ${context.packageName}; only the chat input is disabled and no system overlay is shown.
             """.trimIndent().replace("\n", " "),
             parameters = {
                 InputSchema.Obj(
@@ -534,24 +534,18 @@ class LocalTools(
                 val settings = settingsStore.settingsFlowRaw.first()
                 val lockEnabled = settings.usageReminderConfig.lockEnabled
                 val activeLock = settings.usageReminderState.activeLock
-                    ?.takeIf { it.lockedUntilMillis > System.currentTimeMillis() }
+                    ?.takeIf {
+                        lockEnabled && it.source == "ai_tool" &&
+                            it.lockedUntilMillis > System.currentTimeMillis()
+                    }
                 val obj = params.jsonObject
                 val action = obj["action"]?.jsonPrimitive?.contentOrNull ?: error("action is required")
-                if (!lockEnabled) {
-                    listOf(
-                        UIMessagePart.Text(
-                            buildJsonObject {
-                                put("success", false)
-                                put("error", "Usage lock is disabled in settings.")
-                            }.toString()
-                        )
-                    )
-                } else when (action) {
+                when (action) {
                     "status" -> {
                         listOf(
                             UIMessagePart.Text(
                                 buildJsonObject {
-                                    put("enabled", true)
+                                    put("enabled", lockEnabled)
                                     put("locked", activeLock != null)
                                     activeLock?.let { lock ->
                                         put("locked_until_timestamp_ms", lock.lockedUntilMillis)
@@ -564,7 +558,16 @@ class LocalTools(
                     }
 
                     "lock" -> {
-                        if (!UsageReminderService.hasNotificationPermission(context)) {
+                        if (!lockEnabled) {
+                            listOf(
+                                UIMessagePart.Text(
+                                    buildJsonObject {
+                                        put("success", false)
+                                        put("error", "Enable the AI app lock tool in usage time settings first.")
+                                    }.toString()
+                                )
+                            )
+                        } else if (!UsageReminderService.hasNotificationPermission(context)) {
                             listOf(
                                 UIMessagePart.Text(
                                     buildJsonObject {
