@@ -138,6 +138,12 @@ private const val PROACTIVE_VOICE_CALL_SYSTEM_PROMPT = """
 如果用户拒接或未接，尊重结果，不要立刻再次发起，也不要责备或施压。
 """
 
+private const val VOICE_CALL_ENDED_SYSTEM_PROMPT = """
+用户刚刚结束了语音通话。
+这是一个新的通话结束事件，请确认通话已经结束，不要继续等待语音输入，也不要再次发起语音通话。
+如有必要，用一句简短、自然的话结束这次对话。
+"""
+
 private const val ANONYMOUS_QUESTION_SYSTEM_PROMPT = """
     Anonymous question-box rules:
     All questions and answers in the anonymous question box are anonymous.
@@ -626,7 +632,10 @@ class ChatService(
                     conversationId,
                     conversation.copy(messageNodes = updatedNodes),
                 )
-                handleMessageComplete(conversationId)
+                handleMessageComplete(
+                    conversationId = conversationId,
+                    additionalSystemPrompt = VOICE_CALL_ENDED_SYSTEM_PROMPT,
+                )
             } catch (e: Exception) {
                 addError(e, conversationId, title = context.getString(R.string.error_title_voice_call))
             }
@@ -640,6 +649,7 @@ class ChatService(
         conversationId: Uuid,
         messageRange: ClosedRange<Int>? = null,
         requestMode: ChatRequestMode = ChatRequestMode.Normal,
+        additionalSystemPrompt: String? = null,
     ) {
         val settings = settingsStore.settingsFlow.first()
         val initialConversation = getConversationFlow(conversationId).value
@@ -717,6 +727,7 @@ class ChatService(
                         requestMode == ChatRequestMode.Normal && assistant.anonymousQuestionBoxEnabled
                     },
                     anonymousQuestionContextPrompt,
+                    additionalSystemPrompt,
                 ).joinToString("\n\n").takeIf { it.isNotBlank() },
                 maxTokensOverride = when (requestMode) {
                     ChatRequestMode.Normal -> null
