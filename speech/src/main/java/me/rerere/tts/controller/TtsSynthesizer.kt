@@ -17,6 +17,16 @@ import java.io.ByteArrayOutputStream
 class TtsSynthesizer(
     private val ttsManager: TTSManager
 ) {
+    fun synthesizeStreaming(
+        setting: TTSProviderSetting,
+        chunk: TtsChunk,
+    ): Flow<AudioChunk> {
+        return ttsManager.generateStreamingSpeech(
+            setting,
+            TTSRequest(text = chunk.text),
+        )
+    }
+
     suspend fun synthesize(
         setting: TTSProviderSetting,
         chunk: TtsChunk

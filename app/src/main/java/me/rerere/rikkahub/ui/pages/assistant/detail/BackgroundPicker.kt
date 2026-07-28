@@ -36,6 +36,8 @@ fun BackgroundPicker(
     modifier: Modifier = Modifier,
     background: String?,
     backgroundOpacity: Float = 1.0f,
+    labelResId: Int = R.string.assistant_page_chat_background,
+    descriptionResId: Int = R.string.assistant_page_chat_background_desc,
     onUpdate: (String?) -> Unit
 ) {
     val filesManager: FilesManager = koinInject()
@@ -59,10 +61,10 @@ fun BackgroundPicker(
     FormItem(
         modifier = modifier,
         label = {
-            Text(stringResource(R.string.assistant_page_chat_background))
+            Text(stringResource(labelResId))
         },
         description = {
-            Text(stringResource(R.string.assistant_page_chat_background_desc))
+            Text(stringResource(descriptionResId))
         }
     ) {
         Button(

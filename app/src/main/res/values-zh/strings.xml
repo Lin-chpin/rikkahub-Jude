@@ -59,6 +59,9 @@
   <string name="assistant_page_chaotic">混乱 (危险)</string>
   <string name="assistant_page_chat_background">聊天背景</string>
   <string name="assistant_page_chat_background_desc">设置助手聊天页面的背景图片</string>
+  <string name="assistant_page_voice_call_background">语音通话背景</string>
+  <string name="assistant_page_voice_call_background_desc">设置语音通话界面的独立背景图片，不设置则使用默认通话背景</string>
+  <string name="assistant_page_voice_call_background_opacity_desc">调整语音通话背景图显示透明度</string>
   <string name="assistant_page_chat_model">聊天模型</string>
   <string name="assistant_page_chat_model_desc">设置助手的默认聊天模型，如果不设置，则使用全局默认聊天模型</string>
   <string name="assistant_page_clone">复制</string>

@@ -12,21 +12,37 @@ import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
+import me.rerere.rikkahub.data.model.Assistant
 
 @Composable
-fun AssistantBackground(setting: Settings, modifier: Modifier) {
-    val assistant = setting.getCurrentAssistant()
-    if (assistant.background != null) {
+fun AssistantBackground(
+    setting: Settings,
+    modifier: Modifier,
+    assistant: Assistant? = null,
+    useVoiceCallBackground: Boolean = false,
+) {
+    val targetAssistant = assistant ?: setting.getCurrentAssistant()
+    val background = if (useVoiceCallBackground) {
+        targetAssistant.voiceCallBackground
+    } else {
+        targetAssistant.background
+    }
+    val backgroundOpacity = if (useVoiceCallBackground) {
+        targetAssistant.voiceCallBackgroundOpacity
+    } else {
+        targetAssistant.backgroundOpacity
+    }
+    if (background != null) {
         val backgroundColor = MaterialTheme.colorScheme.background
-        val backgroundOpacity = assistant.backgroundOpacity.coerceIn(0f, 1f)
+        val previewOpacity = backgroundOpacity.coerceIn(0f, 1f)
         Box(modifier = modifier) {
             AsyncImage(
-                model = assistant.background,
+                model = background,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxSize()
-                    .alpha(backgroundOpacity)
+                    .alpha(previewOpacity)
             )
 
             // 全屏渐变遮罩

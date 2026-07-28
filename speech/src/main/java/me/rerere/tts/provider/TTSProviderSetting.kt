@@ -164,6 +164,43 @@ sealed class TTSProviderSetting {
     }
 
     @Serializable
+    @SerialName("elevenlabs")
+    data class ElevenLabs(
+        override var id: Uuid = Uuid.random(),
+        override var name: String = "ElevenLabs TTS",
+        val apiKey: String = "",
+        val baseUrl: String = "https://api.elevenlabs.io",
+        val model: String = "eleven_v3",
+        val voiceId: String = "",
+        val stability: Float = 0.5f,
+        val similarityBoost: Float = 0.75f,
+        val useSpeakerBoost: Boolean = true,
+        val style: Float = 0.0f,
+        val speed: Float = 1.0f,
+    ) : TTSProviderSetting() {
+        companion object {
+            const val MIN_STABILITY = 0.0f
+            const val MAX_STABILITY = 1.0f
+            const val MIN_SIMILARITY_BOOST = 0.0f
+            const val MAX_SIMILARITY_BOOST = 1.0f
+            const val MIN_STYLE = 0.0f
+            const val MAX_STYLE = 1.0f
+            const val MIN_SPEED = 0.7f
+            const val MAX_SPEED = 1.2f
+        }
+
+        override fun copyProvider(
+            id: Uuid,
+            name: String,
+        ): TTSProviderSetting {
+            return this.copy(
+                id = id,
+                name = name,
+            )
+        }
+    }
+
+    @Serializable
     @SerialName("mimo")
     // 默认值仅用于快捷起步 可在设置页任意修改
     data class MiMo(
@@ -195,8 +232,15 @@ sealed class TTSProviderSetting {
                 Qwen::class,
                 Groq::class,
                 XAI::class,
+                ElevenLabs::class,
                 MiMo::class,
             )
         }
     }
+}
+
+fun TTSProviderSetting.isElevenLabsV3(): Boolean {
+    if (this !is TTSProviderSetting.ElevenLabs) return false
+    return model.trim().equals("eleven_v3", ignoreCase = true) ||
+        model.trim().equals("eleven_multilingual_v3", ignoreCase = true)
 }

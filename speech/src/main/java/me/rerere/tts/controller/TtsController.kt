@@ -254,19 +254,15 @@ class TtsController(
                     // 预取下一窗口
                     prefetchFrom(chunk.index + 1)
 
-                    val response = try {
-                        awaitOrCreate(chunk, provider)
-                    } catch (e: Exception) {
-                        if (e is CancellationException) throw e
-                        Log.e(TAG, "Synthesis error", e)
-                        _error.update { e.message ?: "TTS synthesis error" }
-                        processedCount++
-                        continue
-                    }
+                    val shouldStream = ttsManager.supportsStreaming(provider)
 
                     // 播放
                     try {
-                        audio.play(response)
+                        if (shouldStream) {
+                            audio.play(synthesizer.synthesizeStreaming(provider, chunk))
+                        } else {
+                            audio.play(awaitOrCreate(chunk, provider))
+                        }
                     } catch (e: Exception) {
                         if (e is CancellationException) throw e
                         Log.e(TAG, "Playback error", e)
@@ -288,6 +284,7 @@ class TtsController(
 
     private fun prefetchFrom(startIndex: Int) {
         val provider = currentProvider ?: return
+        if (ttsManager.supportsStreaming(provider)) return
         val begin = startIndex.coerceAtLeast(lastPrefetchedIndex + 1)
         val endExclusive = (begin + prefetchCount).coerceAtMost(allChunks.size)
         if (begin >= endExclusive) return

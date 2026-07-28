@@ -513,6 +513,59 @@ internal fun AssistantBasicContent(
                     )
                 }
             }
+
+            HorizontalDivider()
+            BackgroundPicker(
+                modifier = Modifier.padding(8.dp),
+                background = assistant.voiceCallBackground,
+                backgroundOpacity = assistant.voiceCallBackgroundOpacity,
+                labelResId = R.string.assistant_page_voice_call_background,
+                descriptionResId = R.string.assistant_page_voice_call_background_desc,
+                onUpdate = { background ->
+                    onUpdate(
+                        assistant.copy(
+                            voiceCallBackground = background
+                        )
+                    )
+                }
+            )
+
+            if (assistant.voiceCallBackground != null) {
+                val backgroundOpacity = assistant.voiceCallBackgroundOpacity.coerceIn(0f, 1f)
+                HorizontalDivider()
+                FormItem(
+                    modifier = Modifier.padding(8.dp),
+                    label = {
+                        Text(stringResource(R.string.assistant_page_background_opacity))
+                    },
+                    description = {
+                        Text(stringResource(R.string.assistant_page_voice_call_background_opacity_desc))
+                    }
+                ) {
+                    Slider(
+                        value = backgroundOpacity,
+                        onValueChange = {
+                            onUpdate(
+                                assistant.copy(
+                                    voiceCallBackgroundOpacity = it.toFixed(2).toFloatOrNull()
+                                        ?.coerceIn(0f, 1f) ?: 1.0f
+                                )
+                            )
+                        },
+                        valueRange = 0f..1f,
+                        steps = 19,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        text = stringResource(
+                            R.string.assistant_page_background_opacity_value,
+                            (backgroundOpacity * 100).roundToInt()
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.75f),
+                    )
+                }
+            }
         }
     }
 }

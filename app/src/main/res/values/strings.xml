@@ -59,6 +59,9 @@
   <string name="assistant_page_chaotic">Chaotic (Dangerous)</string>
   <string name="assistant_page_chat_background">Chat Background</string>
   <string name="assistant_page_chat_background_desc">Set background image for assistant chat page</string>
+  <string name="assistant_page_voice_call_background">Voice Call Background</string>
+  <string name="assistant_page_voice_call_background_desc">Set a separate background image for the voice call interface. If not set, the default voice call background is used</string>
+  <string name="assistant_page_voice_call_background_opacity_desc">Adjust voice call background image visibility</string>
   <string name="assistant_page_chat_model">Chat Model</string>
   <string name="assistant_page_chat_model_desc">Set the default chat model for the assistant. If not set, the global default chat model will be used</string>
   <string name="assistant_page_clone">Clone</string>

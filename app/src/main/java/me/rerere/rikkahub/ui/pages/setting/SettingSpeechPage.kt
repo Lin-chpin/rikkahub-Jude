@@ -138,6 +138,9 @@ private fun describeTtsProvider(provider: TTSProviderSetting): String {
         is TTSProviderSetting.XAI ->
             "xAI(id=${provider.id}, baseUrl=${provider.baseUrl}, voice=${provider.voiceId}, language=${provider.language})"
 
+        is TTSProviderSetting.ElevenLabs ->
+            "ElevenLabs(id=${provider.id}, baseUrl=${provider.baseUrl}, model=${provider.model}, voiceId=${provider.voiceId})"
+
         is TTSProviderSetting.MiMo ->
             "MiMo(id=${provider.id}, baseUrl=${provider.baseUrl}, model=${provider.model}, voice=${provider.voice})"
 
@@ -878,6 +881,7 @@ private fun TTSProviderItem(
                             is TTSProviderSetting.Qwen -> "Qwen"
                             is TTSProviderSetting.Groq -> "Groq"
                             is TTSProviderSetting.XAI -> "xAI"
+                            is TTSProviderSetting.ElevenLabs -> "ElevenLabs"
                             is TTSProviderSetting.MiMo -> "MiMo"
                         },
                         style = MaterialTheme.typography.bodySmall,

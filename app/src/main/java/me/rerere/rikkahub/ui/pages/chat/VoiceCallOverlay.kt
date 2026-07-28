@@ -60,6 +60,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -78,20 +79,26 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Voice
 import me.rerere.rikkahub.RouteActivity
+import me.rerere.rikkahub.data.datastore.getAssistantById
+import me.rerere.rikkahub.data.datastore.getCurrentAssistant
+import me.rerere.rikkahub.data.datastore.getSelectedTTSProvider
 import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.voice.VOICE_CALL_UNAVAILABLE_MESSAGE
 import me.rerere.rikkahub.service.ChatRequestMode
 import me.rerere.rikkahub.service.sanitizeVoiceCallTextForSpeech
+import me.rerere.rikkahub.ui.components.richtext.appendElevenLabsAudioTagAwareText
 import me.rerere.rikkahub.ui.components.ui.KeepScreenOn
 import me.rerere.rikkahub.ui.components.ui.RabbitLoadingIndicator
 import me.rerere.rikkahub.ui.components.ui.UIAvatar
 import me.rerere.rikkahub.ui.components.ui.permission.PermissionManager
 import me.rerere.rikkahub.ui.components.ui.permission.PermissionRecordAudio
 import me.rerere.rikkahub.ui.components.ui.permission.rememberPermissionState
+import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.context.LocalTTSState
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.tts.model.PlaybackStatus
+import me.rerere.tts.provider.isElevenLabsV3
 
 @Composable
 fun VoiceCallOverlay(
@@ -125,6 +132,9 @@ fun VoiceCallOverlay(
     val keyboardFocusRequester = remember { FocusRequester() }
     val tts = LocalTTSState.current
     val toaster = LocalToaster.current
+    val settings = LocalSettings.current
+    val callAssistant = settings.getAssistantById(conversation.assistantId)
+        ?: settings.getCurrentAssistant()
     val ttsAvailable by tts.isAvailable.collectAsState()
     val ttsError by tts.error.collectAsState()
     val playbackState by tts.playbackState.collectAsState()
@@ -223,7 +233,7 @@ fun VoiceCallOverlay(
         keyboardController?.hide()
         tts.stop()
         voiceReplyPending = false
-        if (initialVoiceCallToolCallId != null && !voiceCallResultReported) {
+        if (!voiceCallResultReported) {
             voiceCallResultReported = true
             onVoiceCallClosed(failureMessage)
         }
@@ -555,6 +565,12 @@ fun VoiceCallOverlay(
             color = MaterialTheme.colorScheme.background,
             modifier = Modifier.fillMaxSize()
         ) {
+            AssistantBackground(
+                setting = settings,
+                modifier = Modifier.fillMaxSize(),
+                assistant = callAssistant,
+                useVoiceCallBackground = true,
+            )
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -869,6 +885,9 @@ private fun VoiceCallMessageBubble(
     item: VoiceCallDisplayItem,
 ) {
     val isUser = role == MessageRole.USER
+    val showElevenLabsAudioTagAnnotations =
+        LocalSettings.current.getSelectedTTSProvider()?.isElevenLabsV3() == true
+    val colorScheme = MaterialTheme.colorScheme
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
@@ -933,9 +952,15 @@ private fun VoiceCallMessageBubble(
                         }
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            text = item.text,
+                            text = buildAnnotatedString {
+                                if (showElevenLabsAudioTagAnnotations) {
+                                    appendElevenLabsAudioTagAwareText(item.text, colorScheme)
+                                } else {
+                                    append(item.text)
+                                }
+                            },
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = colorScheme.onSurfaceVariant,
                         )
                     }
                 }

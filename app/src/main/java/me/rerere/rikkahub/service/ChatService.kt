@@ -57,6 +57,7 @@ import me.rerere.rikkahub.RouteActivity
 import me.rerere.rikkahub.data.ai.GenerationChunk
 import me.rerere.rikkahub.data.ai.GenerationHandler
 import me.rerere.rikkahub.data.ai.mcp.McpManager
+import me.rerere.rikkahub.data.ai.prompts.ELEVEN_LABS_V3_AUDIO_TAG_PROMPT
 import me.rerere.rikkahub.data.ai.tools.LocalTools
 import me.rerere.rikkahub.data.ai.tools.LocalToolOption
 import me.rerere.rikkahub.data.ai.tools.REQUEST_VOICE_CALL_TOOL_NAME
@@ -80,6 +81,7 @@ import me.rerere.rikkahub.data.datastore.getAssistantById
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.data.datastore.getSelectedTTSProvider
+import me.rerere.tts.provider.isElevenLabsV3
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.Assistant
@@ -116,6 +118,10 @@ private const val MIN_COMPRESSION_CHUNK_TOKENS = 8000
 private const val COMPRESSION_CHUNK_TOKENS_PER_TARGET_TOKEN = 8
 private const val VOICE_CALL_SYSTEM_PROMPT = """
 你正在语音通话模式中回复用户。
+重要状态通知：语音通话已经接通，当前正在通话中，不是在等待接听，也不是通话邀请流程。
+请把接下来的用户消息直接当作当前电话中的实时发言，并在回复开头自然地确认你正在通话中。
+不要再次发起、邀请、请求或切换到另一通语音通话，也不要调用打电话工具。
+如果用户的表达暗示想打电话，只需在当前通话中继续回应，不要把它当成新的拨号请求。
 请像真实电话聊天一样自然、简短、连贯地说话。
 先用一句很短的话回应用户。
 每一句都尽量短，适合一句一句朗读。
@@ -127,8 +133,18 @@ private const val VOICE_CALL_SYSTEM_PROMPT = """
 不要使用任何表情、emoji 或颜文字。
 不要输出贴纸、表情包、颜文字、ASCII 表情或类似“(≧▽≦)”的符号组合。
 任何 emoji、颜文字、表情包文本都会被系统硬性删除。
-不要把语音标签、表演标签写进正文。
 """
+
+private val VOICE_CALL_ACTIVE_TOOL_STATUS = """
+    Voice-call state: ACTIVE. The call is connected and this is the only state in which ElevenLabs v3 audio tags are allowed.
+    For every subsequent spoken reply in this active call, every sentence MUST begin with exactly one English audio tag in square brackets. Every sentence must have one and only one tag; never omit a tag or let multiple sentences share one tag.
+    Keep the tags in the text sent to TTS. Do not use Chinese emotion labels. Use commas, ellipses, and [pause] only when they create a natural pause.
+""".trimIndent()
+
+private val VOICE_CALL_ENDED_TOOL_STATUS = """
+    Voice-call state: ENDED. The call has been disconnected. Do not generate a follow-up reply for this state and do not output any audio or emotion tags in later non-call replies.
+    Audio tags may be used again only after a new call is connected and its tool result reports ACTIVE.
+""".trimIndent()
 
 private const val PROACTIVE_VOICE_CALL_SYSTEM_PROMPT = """
 你可以使用 request_voice_call 工具主动邀请用户进行语音通话。
@@ -136,12 +152,6 @@ private const val PROACTIVE_VOICE_CALL_SYSTEM_PROMPT = """
 调用时给出一句简短、自然的来电理由，不要在正文里假装电话已经接通。
 如果用户接听，立即用一句简短自然的话开始通话，并继续遵守语音通话的简短口语风格。
 如果用户拒接或未接，尊重结果，不要立刻再次发起，也不要责备或施压。
-"""
-
-private const val VOICE_CALL_ENDED_SYSTEM_PROMPT = """
-用户刚刚结束了语音通话。
-这是一个新的通话结束事件，请确认通话已经结束，不要继续等待语音输入，也不要再次发起语音通话。
-如有必要，用一句简短、自然的话结束这次对话。
 """
 
 private const val ANONYMOUS_QUESTION_SYSTEM_PROMPT = """
@@ -519,6 +529,22 @@ class ChatService(
                     approved -> ToolApprovalState.Approved
                     else -> ToolApprovalState.Denied(reason)
                 }
+                val connectedVoiceCallOutput = if (acceptedVoiceCall) {
+                    listOf(
+                        UIMessagePart.Text(
+                            buildJsonObject {
+                                put("success", true)
+                                put("status", "connected")
+                                put(
+                                    "message",
+                                    VOICE_CALL_ACTIVE_TOOL_STATUS,
+                                )
+                            }.toString()
+                        )
+                    )
+                } else {
+                    null
+                }
 
                 // Update the tool approval state
                 val updatedNodes = conversation.messageNodes.map { node ->
@@ -528,7 +554,10 @@ class ChatService(
                                 parts = msg.parts.map { part ->
                                     when {
                                         part is UIMessagePart.Tool && part.toolCallId == toolCallId -> {
-                                            part.copy(approvalState = newApprovalState)
+                                            part.copy(
+                                                approvalState = newApprovalState,
+                                                output = connectedVoiceCallOutput ?: part.output,
+                                            )
                                         }
 
                                         else -> part
@@ -572,7 +601,7 @@ class ChatService(
 
     fun reportVoiceCallClosed(
         conversationId: Uuid,
-        toolCallId: String,
+        toolCallId: String? = null,
         failureMessage: String? = null,
     ) {
         val session = getOrCreateSession(conversationId)
@@ -584,58 +613,63 @@ class ChatService(
                 runCatching { previousJob?.join() }
 
                 val conversation = session.state.value
-                val target = conversation.messageNodes.mapIndexedNotNull { nodeIndex, node ->
-                    node.messages.mapIndexedNotNull { messageIndex, message ->
-                        messageIndex.takeIf {
-                            message.parts.any { part ->
-                                part is UIMessagePart.Tool &&
-                                    part.toolCallId == toolCallId &&
-                                    part.toolName == REQUEST_VOICE_CALL_TOOL_NAME
-                            }
-                        }?.let { messageIndex -> nodeIndex to messageIndex }
-                    }.firstOrNull()
-                }.firstOrNull() ?: return@launch
-
-                val (targetNodeIndex, targetMessageIndex) = target
-                val result = buildJsonObject {
-                    put("success", failureMessage == null)
-                    put("status", if (failureMessage == null) "ended" else "failed")
-                    if (failureMessage != null) {
-                        put("error", failureMessage)
-                    }
-                }.toString()
-                val updatedNodes = conversation.messageNodes.mapIndexed { nodeIndex, node ->
-                    if (nodeIndex != targetNodeIndex) {
-                        node
-                    } else {
-                        node.copy(
-                            messages = node.messages.mapIndexed { messageIndex, message ->
-                                if (messageIndex != targetMessageIndex) {
-                                    message
-                                } else {
-                                    message.copy(
-                                        parts = message.parts.map { part ->
-                                            if (part is UIMessagePart.Tool && part.toolCallId == toolCallId) {
-                                                part.copy(output = listOf(UIMessagePart.Text(result)))
-                                            } else {
-                                                part
-                                            }
-                                        }
-                                    )
+                if (toolCallId != null) {
+                    val target = conversation.messageNodes.mapIndexedNotNull { nodeIndex, node ->
+                        node.messages.mapIndexedNotNull { messageIndex, message ->
+                            messageIndex.takeIf {
+                                message.parts.any { part ->
+                                    part is UIMessagePart.Tool &&
+                                        part.toolCallId == toolCallId &&
+                                        part.toolName == REQUEST_VOICE_CALL_TOOL_NAME
                                 }
-                            },
-                            selectIndex = targetMessageIndex,
+                            }?.let { messageIndex -> nodeIndex to messageIndex }
+                        }.firstOrNull()
+                    }.firstOrNull()
+
+                    if (target != null) {
+                        val (targetNodeIndex, targetMessageIndex) = target
+                        val result = buildJsonObject {
+                            put("success", failureMessage == null)
+                            put("status", if (failureMessage == null) "ended" else "failed")
+                            put("message", VOICE_CALL_ENDED_TOOL_STATUS)
+                            if (failureMessage != null) {
+                                put("error", failureMessage)
+                            }
+                        }.toString()
+                        val updatedNodes = conversation.messageNodes.mapIndexed { nodeIndex, node ->
+                            if (nodeIndex != targetNodeIndex) {
+                                node
+                            } else {
+                                node.copy(
+                                    messages = node.messages.mapIndexed { messageIndex, message ->
+                                        if (messageIndex != targetMessageIndex) {
+                                            message
+                                        } else {
+                                            message.copy(
+                                                parts = message.parts.map { part ->
+                                                    if (part is UIMessagePart.Tool && part.toolCallId == toolCallId) {
+                                                        part.copy(output = listOf(UIMessagePart.Text(result)))
+                                                    } else {
+                                                        part
+                                                    }
+                                                }
+                                            )
+                                        }
+                                    },
+                                    selectIndex = targetMessageIndex,
+                                )
+                            }
+                        }
+                        saveConversation(
+                            conversationId,
+                            conversation.copy(messageNodes = updatedNodes),
                         )
                     }
                 }
-                saveConversation(
-                    conversationId,
-                    conversation.copy(messageNodes = updatedNodes),
-                )
-                handleMessageComplete(
-                    conversationId = conversationId,
-                    additionalSystemPrompt = VOICE_CALL_ENDED_SYSTEM_PROMPT,
-                )
+                // Ending a call is a state update, not a new user turn. Do not
+                // start a post-hangup model completion: its output would be
+                // saved into the conversation and could pollute the next call's
+                // context with non-voice or non-English labels.
             } catch (e: Exception) {
                 addError(e, conversationId, title = context.getString(R.string.error_title_voice_call))
             }
@@ -650,6 +684,7 @@ class ChatService(
         messageRange: ClosedRange<Int>? = null,
         requestMode: ChatRequestMode = ChatRequestMode.Normal,
         additionalSystemPrompt: String? = null,
+        allowElevenLabsV3AudioTags: Boolean = true,
     ) {
         val settings = settingsStore.settingsFlow.first()
         val initialConversation = getConversationFlow(conversationId).value
@@ -688,7 +723,17 @@ class ChatService(
             val generationMessages = conversation.messagesForGeneration(messageRange)
             val voiceCallToolEnabled = LocalToolOption.VoiceCall in assistant.localTools &&
                 requestMode == ChatRequestMode.Normal
+            val localToolOptions = assistant.localTools.filterNot {
+                requestMode == ChatRequestMode.VoiceCall && it == LocalToolOption.VoiceCall
+            }
             val voiceCallConfigured = settings.getSelectedTTSProvider() != null
+            val elevenLabsV3AudioTagPrompt = settings.getSelectedTTSProvider()
+                ?.takeIf {
+                    allowElevenLabsV3AudioTags &&
+                        requestMode == ChatRequestMode.VoiceCall &&
+                        it.isElevenLabsV3()
+                }
+                ?.let { ELEVEN_LABS_V3_AUDIO_TAG_PROMPT }
             val proactiveVoiceCallEnabled = requestMode == ChatRequestMode.Normal && voiceCallToolEnabled
             val momentScopeId = conversation.momentScopeId(assistant)
             val anonymousQuestionScopeId = conversation.personaScopeId(assistant)
@@ -727,12 +772,9 @@ class ChatService(
                         requestMode == ChatRequestMode.Normal && assistant.anonymousQuestionBoxEnabled
                     },
                     anonymousQuestionContextPrompt,
+                    elevenLabsV3AudioTagPrompt,
                     additionalSystemPrompt,
                 ).joinToString("\n\n").takeIf { it.isNotBlank() },
-                maxTokensOverride = when (requestMode) {
-                    ChatRequestMode.Normal -> null
-                    ChatRequestMode.VoiceCall -> minOf(assistant.maxTokens ?: 300, 300)
-                },
                 memories = if (assistant.useGlobalMemory) {
                     memoryRepository.getGlobalMemories()
                 } else {
@@ -749,7 +791,7 @@ class ChatService(
                     }
                     addAll(
                         localTools.getTools(
-                            options = assistant.localTools,
+                            options = localToolOptions,
                             usageLockEnabled = settings.usageReminderConfig.lockEnabled,
                             voiceCallConfigured = voiceCallConfigured,
                             momentAssistantId = when {

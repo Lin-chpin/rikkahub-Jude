@@ -30,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -84,6 +85,7 @@ import me.rerere.rikkahub.data.model.AssistantAffectScope
 import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.data.model.replaceRegexes
 import me.rerere.rikkahub.ui.components.richtext.MarkdownBlock
+import me.rerere.rikkahub.ui.components.richtext.LocalElevenLabsAudioTagAnnotations
 import me.rerere.rikkahub.ui.components.richtext.ZoomableAsyncImage
 import me.rerere.rikkahub.ui.components.richtext.buildMarkdownPreviewHtml
 import me.rerere.rikkahub.ui.components.ui.ChainOfThought
@@ -92,6 +94,7 @@ import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.modifier.shimmer
 import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.context.LocalTTSState
+import me.rerere.rikkahub.data.datastore.getSelectedTTSProvider
 import me.rerere.rikkahub.ui.theme.LocalChatFontFamily
 import me.rerere.rikkahub.ui.theme.rememberChatFontFamily
 import me.rerere.rikkahub.ui.theme.extendColors
@@ -102,6 +105,7 @@ import me.rerere.rikkahub.utils.keepEnglishOnlyForTts
 import me.rerere.rikkahub.utils.openUrl
 import me.rerere.rikkahub.utils.stripMarkdown
 import me.rerere.rikkahub.utils.urlDecode
+import me.rerere.tts.provider.isElevenLabsV3
 import java.util.Locale
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -127,7 +131,9 @@ fun ChatMessage(
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
 ) {
     val message = node.messages[node.selectIndex]
-    val settings = LocalSettings.current.displaySetting
+    val appSettings = LocalSettings.current
+    val settings = appSettings.displaySetting
+    val showElevenLabsAudioTagAnnotations = appSettings.getSelectedTTSProvider()?.isElevenLabsV3() == true
     val chatFontFamily = LocalChatFontFamily.current ?: rememberChatFontFamily(settings)
     val textStyle = LocalTextStyle.current.copy(
         fontSize = LocalTextStyle.current.fontSize * settings.fontSizeRatio,
@@ -173,6 +179,7 @@ fun ChatMessage(
                 parts = message.parts,
                 annotations = message.annotations,
                 loading = loading,
+                showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
                 model = model,
                 onToolApproval = onToolApproval,
                 onToolAnswer = onToolAnswer,
@@ -271,6 +278,7 @@ private fun MessagePartsBlock(
     parts: List<UIMessagePart>,
     annotations: List<UIMessageAnnotation>,
     loading: Boolean,
+    showElevenLabsAudioTagAnnotations: Boolean,
     onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
     onUserMessageClick: (() -> Unit)? = null,
@@ -356,30 +364,40 @@ private fun MessagePartsBlock(
                 when (val part = block.part) {
                     is UIMessagePart.Text -> {
                         if (role == MessageRole.USER) {
-                            val userTextContent = @Composable {
-                                Surface(
-                                    modifier = Modifier.animateContentSize(),
-                                    shape = RoundedCornerShape(16.dp),
-                                    color = MaterialTheme.colorScheme.primaryContainer,
-                                    onClick = { onUserMessageClick?.invoke() },
-                                ) {
-                                    Column(modifier = Modifier.padding(8.dp)) {
-                                        MarkdownBlock(
-                                            content = part.text.replaceRegexes(
-                                                assistant = assistant,
-                                                scope = AssistantAffectScope.USER,
-                                                visual = true,
-                                            ),
-                                            onClickCitation = handleClickCitation
-                                        )
+                            val userContent = part.text.replaceRegexes(
+                                assistant = assistant,
+                                scope = AssistantAffectScope.USER,
+                                visual = true,
+                            )
+                            if (assistant?.momentsChatStyle == true) {
+                                UserTextParagraphs(
+                                    content = userContent,
+                                    onClickCitation = handleClickCitation,
+                                    selectionEnabled = !loading,
+                                    onClick = onUserMessageClick,
+                                )
+                            } else {
+                                val userTextContent = @Composable {
+                                    Surface(
+                                        modifier = Modifier.animateContentSize(),
+                                        shape = RoundedCornerShape(16.dp),
+                                        color = MaterialTheme.colorScheme.primaryContainer,
+                                        onClick = { onUserMessageClick?.invoke() },
+                                    ) {
+                                        Column(modifier = Modifier.padding(8.dp)) {
+                                            MarkdownBlock(
+                                                content = userContent,
+                                                onClickCitation = handleClickCitation
+                                            )
+                                        }
                                     }
                                 }
-                            }
-                            if (loading) {
-                                userTextContent()
-                            } else {
-                                SelectionContainer {
+                                if (loading) {
                                     userTextContent()
+                                } else {
+                                    SelectionContainer {
+                                        userTextContent()
+                                    }
                                 }
                             }
                         } else {
@@ -394,6 +412,7 @@ private fun MessagePartsBlock(
                                     content = assistantContent,
                                     onClickCitation = handleClickCitation,
                                     selectionEnabled = !loading,
+                                    showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
                                     showParagraphTtsButtons = settings.displaySetting.showParagraphTtsButtons,
                                     paragraphBubbleMode = true,
                                     modifier = Modifier.animateContentSize(),
@@ -409,6 +428,7 @@ private fun MessagePartsBlock(
                                             content = assistantContent,
                                             onClickCitation = handleClickCitation,
                                             selectionEnabled = !loading,
+                                            showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
                                             showParagraphTtsButtons = settings.displaySetting.showParagraphTtsButtons,
                                             paragraphBubbleMode = false,
                                         )
@@ -419,6 +439,7 @@ private fun MessagePartsBlock(
                                     content = assistantContent,
                                     onClickCitation = handleClickCitation,
                                     selectionEnabled = !loading,
+                                    showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
                                     showParagraphTtsButtons = settings.displaySetting.showParagraphTtsButtons,
                                     paragraphBubbleMode = false,
                                     modifier = Modifier
@@ -635,10 +656,82 @@ private fun MessagePartsBlock(
 }
 
 @Composable
+private fun UserTextParagraphs(
+    content: String,
+    onClickCitation: (String) -> Unit,
+    selectionEnabled: Boolean,
+    onClick: (() -> Unit)?,
+) {
+    val segments = remember(content) {
+        content.splitAssistantTextSegments()
+    }
+
+    Column(
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        segments.fastForEach { segment ->
+            when (segment) {
+                AssistantTextSegment.Divider -> {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 4.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f),
+                    )
+                }
+
+                is AssistantTextSegment.Paragraph -> {
+                    Surface(
+                        modifier = Modifier.animateContentSize(),
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        onClick = { onClick?.invoke() },
+                    ) {
+                        val paragraphContent: @Composable () -> Unit = {
+                            Column(modifier = Modifier.padding(8.dp)) {
+                                MarkdownBlock(
+                                    content = segment.text,
+                                    onClickCitation = onClickCitation,
+                                )
+                            }
+                        }
+                        if (selectionEnabled) {
+                            SelectionContainer {
+                                paragraphContent()
+                            }
+                        } else {
+                            paragraphContent()
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AssistantMarkdownBlock(
+    content: String,
+    onClickCitation: (String) -> Unit,
+    showElevenLabsAudioTagAnnotations: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    CompositionLocalProvider(
+        LocalElevenLabsAudioTagAnnotations provides showElevenLabsAudioTagAnnotations,
+    ) {
+        MarkdownBlock(
+            content = content,
+            onClickCitation = onClickCitation,
+            modifier = modifier,
+        )
+    }
+}
+
+@Composable
 private fun AssistantTextContent(
     content: String,
     onClickCitation: (String) -> Unit,
     selectionEnabled: Boolean,
+    showElevenLabsAudioTagAnnotations: Boolean,
     showParagraphTtsButtons: Boolean,
     paragraphBubbleMode: Boolean,
     modifier: Modifier = Modifier,
@@ -649,6 +742,7 @@ private fun AssistantTextContent(
             onClickCitation = onClickCitation,
             modifier = modifier,
             selectionEnabled = selectionEnabled,
+            showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
             showParagraphTtsButtons = showParagraphTtsButtons,
             paragraphBubbleMode = true,
         )
@@ -658,21 +752,24 @@ private fun AssistantTextContent(
             onClickCitation = onClickCitation,
             modifier = modifier,
             selectionEnabled = selectionEnabled,
+            showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
             showParagraphTtsButtons = true,
             paragraphBubbleMode = false,
         )
     } else if (selectionEnabled) {
         SelectionContainer(modifier = modifier) {
-            MarkdownBlock(
+            AssistantMarkdownBlock(
                 content = content,
                 onClickCitation = onClickCitation,
+                showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
             )
         }
     } else {
-        MarkdownBlock(
+        AssistantMarkdownBlock(
             content = content,
             onClickCitation = onClickCitation,
             modifier = modifier,
+            showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
         )
     }
 }
@@ -683,6 +780,7 @@ private fun AssistantTextParagraphs(
     onClickCitation: (String) -> Unit,
     modifier: Modifier = Modifier,
     selectionEnabled: Boolean = true,
+    showElevenLabsAudioTagAnnotations: Boolean,
     showParagraphTtsButtons: Boolean,
     paragraphBubbleMode: Boolean,
 ) {
@@ -701,6 +799,7 @@ private fun AssistantTextParagraphs(
 
     Column(
         modifier = modifier,
+        horizontalAlignment = Alignment.Start,
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         segments.fastForEach { segment ->
@@ -733,15 +832,17 @@ private fun AssistantTextParagraphs(
                             Box(modifier = Modifier.weight(1f)) {
                                 if (selectionEnabled) {
                                     SelectionContainer {
-                                        MarkdownBlock(
+                                        AssistantMarkdownBlock(
                                             content = segment.text,
                                             onClickCitation = onClickCitation,
+                                            showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
                                         )
                                     }
                                 } else {
-                                    MarkdownBlock(
+                                    AssistantMarkdownBlock(
                                         content = segment.text,
                                         onClickCitation = onClickCitation,
+                                        showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
                                     )
                                 }
                             }

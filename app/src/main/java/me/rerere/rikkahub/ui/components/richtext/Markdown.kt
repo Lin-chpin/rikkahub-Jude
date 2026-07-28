@@ -35,6 +35,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -103,6 +104,30 @@ private val BLOCK_LATEX_REGEX = Regex("\\\\\\[(.+?)\\\\\\]", RegexOption.DOT_MAT
 val THINKING_REGEX = Regex("<think>([\\s\\S]*?)(?:</think>|$)", RegexOption.DOT_MATCHES_ALL)
 private val CODE_BLOCK_REGEX = Regex("```[\\s\\S]*?```|`[^`\n]*`", RegexOption.DOT_MATCHES_ALL)
 private val BREAK_LINE_REGEX = Regex("(?i)<br\\s*/?>")
+private val ELEVEN_LABS_AUDIO_TAG_REGEX = Regex("""\[[A-Za-z][A-Za-z0-9 ,.'!?-]{0,48}]""")
+
+val LocalElevenLabsAudioTagAnnotations = staticCompositionLocalOf { false }
+
+internal fun AnnotatedString.Builder.appendElevenLabsAudioTagAwareText(
+    text: String,
+    colorScheme: ColorScheme,
+) {
+    var cursor = 0
+    ELEVEN_LABS_AUDIO_TAG_REGEX.findAll(text).forEach { match ->
+        append(text.substring(cursor, match.range.first))
+        withStyle(
+            SpanStyle(
+                color = colorScheme.onPrimaryContainer,
+                background = colorScheme.primaryContainer.copy(alpha = 0.65f),
+                fontStyle = FontStyle.Italic,
+            )
+        ) {
+            append(match.value)
+        }
+        cursor = match.range.last + 1
+    }
+    append(text.substring(cursor))
+}
 
 // 预处理markdown内容
 private fun preProcess(content: String): String {
@@ -757,6 +782,7 @@ private fun Paragraph(
         node.findChildOfTypeRecursive(GFMElementTypes.INLINE_MATH) != null
     }
     val enableLatexRendering = LocalSettings.current.displaySetting.enableLatexRendering
+    val showElevenLabsAudioTagAnnotations = LocalElevenLabsAudioTagAnnotations.current
 
     val textStyle = LocalTextStyle.current
     val density = LocalDensity.current
@@ -766,7 +792,11 @@ private fun Paragraph(
             else Modifier
         )
     ) {
-        val annotatedString = remember(content, enableLatexRendering) {
+        val annotatedString = remember(
+            content,
+            enableLatexRendering,
+            showElevenLabsAudioTagAnnotations,
+        ) {
             buildAnnotatedString {
                 node.children.fastForEach { child ->
                     appendMarkdownNodeContent(
@@ -779,6 +809,7 @@ private fun Paragraph(
                         density = density,
                         trim = trim,
                         enableLatexRendering = enableLatexRendering,
+                        showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
                     )
                 }
             }
@@ -859,6 +890,7 @@ private fun AnnotatedString.Builder.appendMarkdownNodeContent(
     density: Density,
     style: TextStyle,
     enableLatexRendering: Boolean = true,
+    showElevenLabsAudioTagAnnotations: Boolean = false,
     onClickCitation: (String) -> Unit = {},
 ) {
     when {
@@ -881,9 +913,11 @@ private fun AnnotatedString.Builder.appendMarkdownNodeContent(
                     it
                 }.replace(BREAK_LINE_REGEX, "\n")
             }
-            append(
-                text = text,
-            )
+            if (showElevenLabsAudioTagAnnotations) {
+                appendElevenLabsAudioTagAwareText(text, colorScheme)
+            } else {
+                append(text)
+            }
         }
 
         node.type == MarkdownElementTypes.EMPH -> {
@@ -897,6 +931,7 @@ private fun AnnotatedString.Builder.appendMarkdownNodeContent(
                         density = density,
                         style = style,
                         enableLatexRendering = enableLatexRendering,
+                        showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
                         onClickCitation = onClickCitation
                     )
                 }
@@ -914,6 +949,7 @@ private fun AnnotatedString.Builder.appendMarkdownNodeContent(
                         density = density,
                         style = style,
                         enableLatexRendering = enableLatexRendering,
+                        showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
                         onClickCitation = onClickCitation
                     )
                 }
@@ -931,6 +967,7 @@ private fun AnnotatedString.Builder.appendMarkdownNodeContent(
                         density = density,
                         style = style,
                         enableLatexRendering = enableLatexRendering,
+                        showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
                         onClickCitation = onClickCitation
                     )
                 }
@@ -1065,6 +1102,7 @@ private fun AnnotatedString.Builder.appendMarkdownNodeContent(
                     density = density,
                     style = style,
                     enableLatexRendering = enableLatexRendering,
+                    showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
                     onClickCitation = onClickCitation
                 )
             }

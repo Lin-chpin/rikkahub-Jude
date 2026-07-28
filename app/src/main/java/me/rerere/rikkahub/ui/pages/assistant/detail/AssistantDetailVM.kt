@@ -200,18 +200,19 @@ class AssistantDetailVM(
     }
 
     fun checkBackgroundDelete(old: Assistant, new: Assistant) {
-        val oldBackground = old.background
-        val newBackground = new.background
-
-        if (oldBackground != null && oldBackground != newBackground) {
-            try {
-                val oldUri = oldBackground.toUri()
-                if (oldUri.scheme == "content" || oldUri.scheme == "file") {
-                    filesManager.deleteChatFiles(listOf(oldUri))
+        val oldBackgrounds = setOfNotNull(old.background, old.voiceCallBackground)
+        val newBackgrounds = setOfNotNull(new.background, new.voiceCallBackground)
+        oldBackgrounds
+            .filterNot { it in newBackgrounds }
+            .forEach { oldBackground ->
+                try {
+                    val oldUri = oldBackground.toUri()
+                    if (oldUri.scheme == "content" || oldUri.scheme == "file") {
+                        filesManager.deleteChatFiles(listOf(oldUri))
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to delete background file: $oldBackground", e)
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to delete background file: $oldBackground", e)
             }
-        }
     }
 }

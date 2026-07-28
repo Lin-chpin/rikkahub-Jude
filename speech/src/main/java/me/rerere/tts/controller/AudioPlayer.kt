@@ -7,9 +7,12 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
+import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.ByteArrayDataSource
+import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import kotlinx.coroutines.CoroutineScope
@@ -20,9 +23,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import me.rerere.tts.model.AudioChunk
 import me.rerere.tts.model.AudioFormat
 import me.rerere.tts.model.PlaybackState
 import me.rerere.tts.model.PlaybackStatus
@@ -52,7 +57,7 @@ class AudioPlayer(context: Context) {
     }
 
     @OptIn(UnstableApi::class)
-    suspend fun play(response: TTSResponse) = suspendCancellableCoroutine<Unit> { cont ->
+    suspend fun play(response: TTSResponse) {
         val bytes = if (response.format == AudioFormat.PCM) {
             pcmToWav(response.audioData, response.sampleRate ?: 24000)
         } else response.audioData
@@ -60,7 +65,21 @@ class AudioPlayer(context: Context) {
         val dataSourceFactory = DataSource.Factory { ByteArrayDataSource(bytes) }
         val mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory)
             .createMediaSource(MediaItem.fromUri(Uri.EMPTY))
+        playMediaSource(mediaSource, response.duration?.times(1000)?.toLong())
+    }
 
+    @OptIn(UnstableApi::class)
+    suspend fun play(stream: Flow<AudioChunk>) {
+        val dataSourceFactory = DataSource.Factory { FlowDataSource(stream) }
+        val mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory)
+            .createMediaSource(MediaItem.fromUri(Uri.EMPTY))
+        playMediaSource(mediaSource, null)
+    }
+
+    private suspend fun playMediaSource(
+        mediaSource: androidx.media3.exoplayer.source.MediaSource,
+        durationMs: Long?,
+    ) = suspendCancellableCoroutine<Unit> { cont ->
         player.setMediaSource(mediaSource)
         player.prepare()
         player.play()
@@ -69,7 +88,7 @@ class AudioPlayer(context: Context) {
             it.copy(
                 status = PlaybackStatus.Buffering,
                 positionMs = 0L,
-                durationMs = (response.duration?.times(1000))?.toLong() ?: it.durationMs
+                durationMs = durationMs ?: it.durationMs
             )
         }
 
@@ -129,6 +148,58 @@ class AudioPlayer(context: Context) {
             player.removeListener(listener)
             player.stop()
             stopPositionUpdates()
+        }
+    }
+
+    private class FlowDataSource(
+        private val audioFlow: Flow<AudioChunk>,
+    ) : DataSource {
+        private var input: java.io.PipedInputStream? = null
+        private var output: java.io.PipedOutputStream? = null
+        private var producerJob: Job? = null
+        private var producerError: Throwable? = null
+
+        override fun addTransferListener(transferListener: TransferListener) = Unit
+
+        override fun open(dataSpec: DataSpec): Long {
+            val pipeInput = java.io.PipedInputStream(64 * 1024)
+            val pipeOutput = java.io.PipedOutputStream(pipeInput)
+            input = pipeInput
+            output = pipeOutput
+            producerJob = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                try {
+                    audioFlow.collect { chunk ->
+                        pipeOutput.write(chunk.data)
+                        pipeOutput.flush()
+                    }
+                } catch (error: Throwable) {
+                    producerError = error
+                } finally {
+                    runCatching { pipeOutput.close() }
+                }
+            }
+            return C.LENGTH_UNSET.toLong()
+        }
+
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+            val pipeInput = input ?: error("Streaming audio data source is not open")
+            val bytesRead = pipeInput.read(buffer, offset, length)
+            if (bytesRead < 0) {
+                producerError?.let { throw java.io.IOException("TTS stream failed", it) }
+                return C.RESULT_END_OF_INPUT
+            }
+            return bytesRead
+        }
+
+        override fun getUri(): Uri? = null
+
+        override fun close() {
+            producerJob?.cancel()
+            producerJob = null
+            runCatching { output?.close() }
+            runCatching { input?.close() }
+            output = null
+            input = null
         }
     }
 

@@ -312,7 +312,11 @@ private fun ChatPageContent(
         color = MaterialTheme.colorScheme.background,
         modifier = Modifier.fillMaxSize()
     ) {
-        AssistantBackground(setting = setting, modifier = Modifier.hazeSource(hazeState))
+        AssistantBackground(
+            setting = setting,
+            assistant = assistant,
+            modifier = Modifier.hazeSource(hazeState),
+        )
         Scaffold(
             topBar = {
                 TopBar(
@@ -560,9 +564,7 @@ private fun ChatPageContent(
                 initialVoiceCallToolCallId = null
             },
             onVoiceCallClosed = { failureMessage ->
-                initialVoiceCallToolCallId?.let { toolCallId ->
-                    vm.reportVoiceCallClosed(toolCallId, failureMessage)
-                }
+                vm.reportVoiceCallClosed(initialVoiceCallToolCallId, failureMessage)
             },
             onMessageSubmitted = {
                 scope.launch {

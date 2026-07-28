@@ -73,9 +73,14 @@ class ConversationSession(
         _generationJob.value?.cancel()
         _generationJob.value = job
         job?.invokeOnCompletion {
-            _generationJob.value = null
-            if (refCount.get() <= 0) {
-                scheduleIdleCheck()
+            // A cancelled previous job can complete after a replacement job
+            // has already been installed. Only the current job may clear the
+            // session's generation state.
+            if (_generationJob.value === job) {
+                _generationJob.value = null
+                if (refCount.get() <= 0) {
+                    scheduleIdleCheck()
+                }
             }
         }
     }

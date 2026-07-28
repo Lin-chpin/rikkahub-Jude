@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -36,10 +37,27 @@ import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.ui.components.ui.FormItem
 import me.rerere.rikkahub.ui.components.ui.OutlinedNumberInput
+import me.rerere.rikkahub.ui.components.ui.Switch
 import me.rerere.tts.provider.TTSProviderSetting
 import java.util.Base64
 
 private const val MIMO_MAX_BASE64_AUDIO_SIZE = 10 * 1024 * 1024
+
+private data class ElevenLabsModelOption(
+    val id: String,
+    val name: String,
+)
+
+private val elevenLabsModelOptions = listOf(
+    ElevenLabsModelOption(
+        id = "eleven_multilingual_v2",
+        name = "Eleven Multilingual v2",
+    ),
+    ElevenLabsModelOption(
+        id = "eleven_v3",
+        name = "Eleven v3",
+    ),
+)
 
 private fun String.isMiMoVoiceDesignModel(): Boolean {
     return equals("mimo-v2.5-tts-voicedesign", ignoreCase = true)
@@ -119,6 +137,7 @@ fun TTSProviderConfigure(
                         is TTSProviderSetting.Qwen -> "Qwen"
                         is TTSProviderSetting.Groq -> "Groq"
                         is TTSProviderSetting.XAI -> "xAI"
+                        is TTSProviderSetting.ElevenLabs -> "ElevenLabs"
                         is TTSProviderSetting.MiMo -> "MiMo"
                     },
                     onValueChange = {},
@@ -146,6 +165,7 @@ fun TTSProviderConfigure(
                                         TTSProviderSetting.Qwen::class -> "Qwen"
                                         TTSProviderSetting.Groq::class -> "Groq"
                                         TTSProviderSetting.XAI::class -> "xAI"
+                                        TTSProviderSetting.ElevenLabs::class -> "ElevenLabs"
                                         TTSProviderSetting.MiMo::class -> "MiMo"
                                         else -> providerClass.simpleName ?: "Unknown"
                                     }
@@ -189,6 +209,11 @@ fun TTSProviderConfigure(
                                         name = "xAI TTS"
                                     )
 
+                                    TTSProviderSetting.ElevenLabs::class -> TTSProviderSetting.ElevenLabs(
+                                        id = setting.id,
+                                        name = "ElevenLabs TTS"
+                                    )
+
                                     TTSProviderSetting.MiMo::class -> TTSProviderSetting.MiMo(
                                         id = setting.id,
                                         name = "MiMo TTS"
@@ -228,6 +253,7 @@ fun TTSProviderConfigure(
             is TTSProviderSetting.Qwen -> QwenTTSConfiguration(setting, onValueChange)
             is TTSProviderSetting.Groq -> GroqTTSConfiguration(setting, onValueChange)
             is TTSProviderSetting.XAI -> XAITTSConfiguration(setting, onValueChange)
+            is TTSProviderSetting.ElevenLabs -> ElevenLabsTTSConfiguration(setting, onValueChange)
             is TTSProviderSetting.MiMo -> MiMoTTSConfiguration(setting, onValueChange)
         }
     }
@@ -337,6 +363,186 @@ private fun OpenAITTSConfiguration(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ElevenLabsTTSConfiguration(
+    setting: TTSProviderSetting.ElevenLabs,
+    onValueChange: (TTSProviderSetting) -> Unit
+) {
+    var modelMenuExpanded by remember { mutableStateOf(false) }
+
+    FormItem(
+        label = { Text(stringResource(R.string.setting_tts_page_api_key)) },
+        description = { Text("Required. Sent in the xi-api-key header") }
+    ) {
+        OutlinedTextField(
+            value = setting.apiKey,
+            onValueChange = { newApiKey ->
+                onValueChange(setting.copy(apiKey = newApiKey))
+            },
+            modifier = Modifier.fillMaxWidth(),
+            isError = setting.apiKey.isBlank(),
+            placeholder = { Text("xi-xxx") },
+        )
+    }
+
+    FormItem(
+        label = { Text(stringResource(R.string.setting_tts_page_base_url)) },
+        description = { Text("Optional. Defaults to the official ElevenLabs API") }
+    ) {
+        OutlinedTextField(
+            value = setting.baseUrl,
+            onValueChange = { newBaseUrl ->
+                onValueChange(setting.copy(baseUrl = newBaseUrl))
+            },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("https://api.elevenlabs.io") }
+        )
+    }
+
+    FormItem(
+        label = { Text(stringResource(R.string.setting_tts_page_voice_id)) },
+        description = { Text("Required. The ElevenLabs voice ID used in the request path") }
+    ) {
+        OutlinedTextField(
+            value = setting.voiceId,
+            onValueChange = { newVoiceId ->
+                onValueChange(setting.copy(voiceId = newVoiceId))
+            },
+            modifier = Modifier.fillMaxWidth(),
+            isError = setting.voiceId.isBlank(),
+            placeholder = { Text("21m00Tcm4TlvDq8ikWAM") },
+        )
+    }
+
+    FormItem(
+        label = { Text(stringResource(R.string.setting_tts_page_model)) },
+        description = { Text("Select an ElevenLabs text-to-speech model") }
+    ) {
+        val selectedModel = elevenLabsModelOptions.firstOrNull {
+            it.id.equals(setting.model, ignoreCase = true) ||
+                (it.id == "eleven_v3" && setting.model.equals("eleven_multilingual_v3", ignoreCase = true))
+        } ?: elevenLabsModelOptions.first()
+        ExposedDropdownMenuBox(
+            expanded = modelMenuExpanded,
+            onExpandedChange = {
+                modelMenuExpanded = !modelMenuExpanded
+            },
+        ) {
+            OutlinedTextField(
+                value = "${selectedModel.name} (${selectedModel.id})",
+                onValueChange = {},
+                readOnly = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                trailingIcon = {
+                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelMenuExpanded)
+                },
+            )
+            ExposedDropdownMenu(
+                expanded = modelMenuExpanded,
+                onDismissRequest = { modelMenuExpanded = false },
+            ) {
+                elevenLabsModelOptions.forEach { model ->
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(model.name)
+                                Text(
+                                    text = model.id,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        },
+                        onClick = {
+                            onValueChange(setting.copy(model = model.id))
+                            modelMenuExpanded = false
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    FormItem(
+        label = { Text("Stability") },
+        description = { Text("0.0–1.0. Lower values are more expressive; default is 0.5") }
+    ) {
+        OutlinedNumberInput(
+            value = setting.stability,
+            onValueChange = { newStability ->
+                if (newStability in TTSProviderSetting.ElevenLabs.MIN_STABILITY..TTSProviderSetting.ElevenLabs.MAX_STABILITY) {
+                    onValueChange(setting.copy(stability = newStability))
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            label = "Stability",
+        )
+    }
+
+    FormItem(
+        label = { Text("Similarity boost") },
+        description = { Text("0.0–1.0. Higher values follow the selected voice more closely; default is 0.75") }
+    ) {
+        OutlinedNumberInput(
+            value = setting.similarityBoost,
+            onValueChange = { newSimilarityBoost ->
+                if (newSimilarityBoost in TTSProviderSetting.ElevenLabs.MIN_SIMILARITY_BOOST..TTSProviderSetting.ElevenLabs.MAX_SIMILARITY_BOOST) {
+                    onValueChange(setting.copy(similarityBoost = newSimilarityBoost))
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            label = "Similarity boost",
+        )
+    }
+
+    FormItem(
+        label = { Text("Speaker boost") },
+        description = { Text("Boosts similarity to the original speaker; may increase latency") },
+        tail = {
+            Switch(
+                checked = setting.useSpeakerBoost,
+                onCheckedChange = { enabled ->
+                    onValueChange(setting.copy(useSpeakerBoost = enabled))
+                },
+            )
+        },
+    )
+
+    FormItem(
+        label = { Text("Style") },
+        description = { Text("0.0–1.0. Default is 0; high values can sound theatrical or unstable") }
+    ) {
+        OutlinedNumberInput(
+            value = setting.style,
+            onValueChange = { newStyle ->
+                if (newStyle in TTSProviderSetting.ElevenLabs.MIN_STYLE..TTSProviderSetting.ElevenLabs.MAX_STYLE) {
+                    onValueChange(setting.copy(style = newStyle))
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            label = "Style",
+        )
+    }
+
+    FormItem(
+        label = { Text("Speed") },
+        description = { Text("0.7–1.2. Default is 1.0; Eleven v3 may ignore this setting") }
+    ) {
+        OutlinedNumberInput(
+            value = setting.speed,
+            onValueChange = { newSpeed ->
+                if (newSpeed in TTSProviderSetting.ElevenLabs.MIN_SPEED..TTSProviderSetting.ElevenLabs.MAX_SPEED) {
+                    onValueChange(setting.copy(speed = newSpeed))
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            label = "Speed",
+        )
     }
 }
 

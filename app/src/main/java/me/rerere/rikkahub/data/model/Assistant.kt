@@ -41,6 +41,8 @@ data class Assistant(
     val localTools: List<LocalToolOption> = listOf(LocalToolOption.TimeInfo),
     val background: String? = null,
     val backgroundOpacity: Float = 1.0f,
+    val voiceCallBackground: String? = null,
+    val voiceCallBackgroundOpacity: Float = 1.0f,
     val modeInjectionIds: Set<Uuid> = emptySet(),      // 关联的模式注入 ID
     val lorebookIds: Set<Uuid> = emptySet(),            // 关联的 Lorebook ID
     val enabledSkills: Set<String> = emptySet(),        // 启用的 skill 名称列表
