@@ -105,6 +105,8 @@ val THINKING_REGEX = Regex("<think>([\\s\\S]*?)(?:</think>|$)", RegexOption.DOT_
 private val CODE_BLOCK_REGEX = Regex("```[\\s\\S]*?```|`[^`\n]*`", RegexOption.DOT_MATCHES_ALL)
 private val BREAK_LINE_REGEX = Regex("(?i)<br\\s*/?>")
 private val ELEVEN_LABS_AUDIO_TAG_REGEX = Regex("""\[[A-Za-z][A-Za-z0-9 ,.'!?-]{0,48}]""")
+private val VOICE_CALL_AUDIO_TAG_REGEX =
+    Regex("""(?:\[[A-Za-z][A-Za-z0-9 ,.'!?-]{0,48}]|\([A-Za-z][A-Za-z0-9 ,.'!?-]{0,48}\))""")
 
 val LocalElevenLabsAudioTagAnnotations = staticCompositionLocalOf { false }
 
@@ -114,6 +116,27 @@ internal fun AnnotatedString.Builder.appendElevenLabsAudioTagAwareText(
 ) {
     var cursor = 0
     ELEVEN_LABS_AUDIO_TAG_REGEX.findAll(text).forEach { match ->
+        append(text.substring(cursor, match.range.first))
+        withStyle(
+            SpanStyle(
+                color = colorScheme.onPrimaryContainer,
+                background = colorScheme.primaryContainer.copy(alpha = 0.65f),
+                fontStyle = FontStyle.Italic,
+            )
+        ) {
+            append(match.value)
+        }
+        cursor = match.range.last + 1
+    }
+    append(text.substring(cursor))
+}
+
+internal fun AnnotatedString.Builder.appendVoiceCallAudioTagAwareText(
+    text: String,
+    colorScheme: ColorScheme,
+) {
+    var cursor = 0
+    VOICE_CALL_AUDIO_TAG_REGEX.findAll(text).forEach { match ->
         append(text.substring(cursor, match.range.first))
         withStyle(
             SpanStyle(

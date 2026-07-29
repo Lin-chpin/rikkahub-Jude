@@ -50,8 +50,21 @@ class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
         providerSetting: TTSProviderSetting.MiniMax,
         request: TTSRequest
     ): Flow<AudioChunk> = flow {
+        val apiKey = providerSetting.apiKey.trim()
+        val baseUrl = providerSetting.baseUrl.trim().trimEnd('/')
+        val model = providerSetting.model.trim()
+        val voiceId = providerSetting.voiceId.trim()
+        require(apiKey.isNotEmpty()) { "MiniMax API key is required" }
+        require(baseUrl.isNotEmpty()) { "MiniMax base URL is required" }
+        require(model.isNotEmpty()) { "MiniMax model is required" }
+        require(request.text.isNotBlank()) { "MiniMax text is required" }
+        require(voiceId.isNotEmpty()) { "MiniMax voice ID is required" }
+        require(providerSetting.speed in TTSProviderSetting.MiniMax.MIN_SPEED..TTSProviderSetting.MiniMax.MAX_SPEED) {
+            "MiniMax speed must be between ${TTSProviderSetting.MiniMax.MIN_SPEED} and ${TTSProviderSetting.MiniMax.MAX_SPEED}"
+        }
+
         val requestBody = buildJsonObject {
-            put("model", providerSetting.model)
+            put("model", model)
             put("text", request.text)
             put("stream", true)
             put("output_format", "hex")
@@ -59,8 +72,7 @@ class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
                 put("exclude_aggregated_audio", true)
             })
             put("voice_setting", buildJsonObject {
-                put("voice_id", providerSetting.voiceId)
-                put("emotion", providerSetting.emotion)
+                put("voice_id", voiceId)
                 put("speed", providerSetting.speed)
             })
         }
@@ -68,8 +80,8 @@ class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
         Log.i(TAG, "generateSpeech: $requestBody")
 
         val httpRequest = Request.Builder()
-            .url("${providerSetting.baseUrl}/t2a_v2")
-            .addHeader("Authorization", "Bearer ${providerSetting.apiKey}")
+            .url("$baseUrl/t2a_v2")
+            .addHeader("Authorization", "Bearer $apiKey")
             .addHeader("Content-Type", "application/json")
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .build()
@@ -94,8 +106,8 @@ class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
                                 isLast = false, // Will be set to true on last chunk
                                 metadata = mapOf(
                                     "provider" to "minimax",
-                                    "model" to providerSetting.model,
-                                    "voice" to providerSetting.voiceId,
+                                    "model" to model,
+                                    "voice" to voiceId,
                                     "status" to data.data.status.toString(),
                                     "ced" to data.data.ced
                                 )

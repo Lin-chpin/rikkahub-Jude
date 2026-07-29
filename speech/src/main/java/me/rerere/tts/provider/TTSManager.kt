@@ -41,7 +41,11 @@ class TTSManager(private val context: Context) {
             is TTSProviderSetting.MiMo -> miMoProvider.generateSpeech(context, normalizedSetting, request)
             is TTSProviderSetting.Gemini -> geminiProvider.generateSpeech(context, normalizedSetting, request)
             is TTSProviderSetting.SystemTTS -> systemProvider.generateSpeech(context, normalizedSetting, request)
-            is TTSProviderSetting.MiniMax -> miniMaxProvider.generateSpeech(context, normalizedSetting, request)
+            is TTSProviderSetting.MiniMax -> miniMaxProvider.generateSpeech(
+                context,
+                normalizedSetting.normalizeLegacyDefaultModel(),
+                request
+            )
             is TTSProviderSetting.Qwen -> qwenProvider.generateSpeech(context, normalizedSetting, request)
             is TTSProviderSetting.Groq -> groqProvider.generateSpeech(context, normalizedSetting, request)
             is TTSProviderSetting.XAI -> xaiProvider.generateSpeech(context, normalizedSetting, request)
@@ -58,7 +62,11 @@ class TTSManager(private val context: Context) {
             is TTSProviderSetting.MiMo -> miMoProvider.generateStreamingSpeech(context, normalizedSetting, request)
             is TTSProviderSetting.Gemini -> geminiProvider.generateStreamingSpeech(context, normalizedSetting, request)
             is TTSProviderSetting.SystemTTS -> systemProvider.generateStreamingSpeech(context, normalizedSetting, request)
-            is TTSProviderSetting.MiniMax -> miniMaxProvider.generateStreamingSpeech(context, normalizedSetting, request)
+            is TTSProviderSetting.MiniMax -> miniMaxProvider.generateStreamingSpeech(
+                context,
+                normalizedSetting.normalizeLegacyDefaultModel(),
+                request
+            )
             is TTSProviderSetting.Qwen -> qwenProvider.generateStreamingSpeech(context, normalizedSetting, request)
             is TTSProviderSetting.Groq -> groqProvider.generateStreamingSpeech(context, normalizedSetting, request)
             is TTSProviderSetting.XAI -> xaiProvider.generateStreamingSpeech(context, normalizedSetting, request)

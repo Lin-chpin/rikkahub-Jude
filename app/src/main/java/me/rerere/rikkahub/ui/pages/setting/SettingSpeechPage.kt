@@ -88,6 +88,7 @@ import me.rerere.rikkahub.utils.plus
 import me.rerere.tts.controller.TtsController
 import me.rerere.tts.provider.TTSManager
 import me.rerere.tts.provider.TTSProviderSetting
+import me.rerere.tts.provider.normalizeLegacyDefaultModel
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import sh.calvin.reorderable.ReorderableItem
@@ -112,6 +113,8 @@ private fun TTSProviderSetting.normalizeKnownTtsProvider(): TTSProviderSetting {
                 this
             }
         }
+
+        is TTSProviderSetting.MiniMax -> this.normalizeLegacyDefaultModel()
 
         else -> this
     }

@@ -37,6 +37,7 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
+import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
@@ -57,7 +58,8 @@ import me.rerere.rikkahub.RouteActivity
 import me.rerere.rikkahub.data.ai.GenerationChunk
 import me.rerere.rikkahub.data.ai.GenerationHandler
 import me.rerere.rikkahub.data.ai.mcp.McpManager
-import me.rerere.rikkahub.data.ai.prompts.ELEVEN_LABS_V3_AUDIO_TAG_PROMPT
+import me.rerere.rikkahub.data.ai.prompts.buildVoiceCallAudioTagPrompt
+import me.rerere.rikkahub.data.ai.prompts.buildVoiceCallAudioTaggingRequest
 import me.rerere.rikkahub.data.ai.tools.LocalTools
 import me.rerere.rikkahub.data.ai.tools.LocalToolOption
 import me.rerere.rikkahub.data.ai.tools.REQUEST_VOICE_CALL_TOOL_NAME
@@ -74,6 +76,7 @@ import me.rerere.rikkahub.data.ai.transformers.TemplateTransformer
 import me.rerere.rikkahub.data.ai.transformers.ThinkTagTransformer
 import me.rerere.rikkahub.data.ai.transformers.TimeReminderTransformer
 import me.rerere.rikkahub.data.datastore.CompressOpenAIConfig
+import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.datastore.findProvider
@@ -81,11 +84,18 @@ import me.rerere.rikkahub.data.datastore.getAssistantById
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.data.datastore.getSelectedTTSProvider
-import me.rerere.tts.provider.isElevenLabsV3
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.voice.VOICE_CALL_UNAVAILABLE_MESSAGE
+import me.rerere.rikkahub.data.voice.VoiceCallAudioTagFormat
+import me.rerere.rikkahub.data.voice.VoiceCallAudioTagSelectionResult
+import me.rerere.rikkahub.data.voice.VoiceCallTaggingFallbackReason
+import me.rerere.rikkahub.data.voice.createVoiceCallAudioTagSelectionTool
+import me.rerere.rikkahub.data.voice.splitVoiceCallAudioTaggingSegments
+import me.rerere.rikkahub.data.voice.voiceCallAudioTagFormatOrNull
+import me.rerere.rikkahub.data.voice.withSelectedVoiceCallAudioTagIds
+import me.rerere.rikkahub.data.voice.withoutVoiceCallAudioTagsForNormalContext
 import me.rerere.rikkahub.data.model.AssistantAffectScope
 import me.rerere.rikkahub.data.model.AutoCompressConfig
 import me.rerere.rikkahub.data.model.MessageNode
@@ -684,7 +694,7 @@ class ChatService(
         messageRange: ClosedRange<Int>? = null,
         requestMode: ChatRequestMode = ChatRequestMode.Normal,
         additionalSystemPrompt: String? = null,
-        allowElevenLabsV3AudioTags: Boolean = true,
+        allowVoiceCallAudioTags: Boolean = true,
     ) {
         val settings = settingsStore.settingsFlow.first()
         val initialConversation = getConversationFlow(conversationId).value
@@ -720,20 +730,25 @@ class ChatService(
 
             // start generating
             val session = getOrCreateSession(conversationId)
-            val generationMessages = conversation.messagesForGeneration(messageRange)
+            val generationMessages = conversation.messagesForGeneration(messageRange).let { messages ->
+                when (requestMode) {
+                    ChatRequestMode.Normal ->
+                        messages.map(UIMessage::withoutVoiceCallAudioTagsForNormalContext)
+
+                    ChatRequestMode.VoiceCall -> messages
+                }
+            }
             val voiceCallToolEnabled = LocalToolOption.VoiceCall in assistant.localTools &&
                 requestMode == ChatRequestMode.Normal
             val localToolOptions = assistant.localTools.filterNot {
                 requestMode == ChatRequestMode.VoiceCall && it == LocalToolOption.VoiceCall
             }
             val voiceCallConfigured = settings.getSelectedTTSProvider() != null
-            val elevenLabsV3AudioTagPrompt = settings.getSelectedTTSProvider()
+            val voiceCallAudioTagFormat = settings.getSelectedTTSProvider()
+                ?.voiceCallAudioTagFormatOrNull()
                 ?.takeIf {
-                    allowElevenLabsV3AudioTags &&
-                        requestMode == ChatRequestMode.VoiceCall &&
-                        it.isElevenLabsV3()
+                    allowVoiceCallAudioTags && requestMode == ChatRequestMode.VoiceCall
                 }
-                ?.let { ELEVEN_LABS_V3_AUDIO_TAG_PROMPT }
             val proactiveVoiceCallEnabled = requestMode == ChatRequestMode.Normal && voiceCallToolEnabled
             val momentScopeId = conversation.momentScopeId(assistant)
             val anonymousQuestionScopeId = conversation.personaScopeId(assistant)
@@ -751,7 +766,7 @@ class ChatService(
                 else -> null
             }
             var voiceCallFailureReported = false
-            generationHandler.generateText(
+            val generationFlow = generationHandler.generateText(
                 settings = settings,
                 model = model,
                 processingStatus = session.processingStatus,
@@ -772,7 +787,6 @@ class ChatService(
                         requestMode == ChatRequestMode.Normal && assistant.anonymousQuestionBoxEnabled
                     },
                     anonymousQuestionContextPrompt,
-                    elevenLabsV3AudioTagPrompt,
                     additionalSystemPrompt,
                 ).joinToString("\n\n").takeIf { it.isNotBlank() },
                 memories = if (assistant.useGlobalMemory) {
@@ -827,7 +841,9 @@ class ChatService(
                         )
                     }
                 },
-            ).onCompletion {
+            )
+            var latestPrimaryMessages: List<UIMessage>? = null
+            generationFlow.onCompletion {
                 // 取消 Live Update 通知
                 cancelLiveUpdateNotification(conversationId)
 
@@ -847,10 +863,8 @@ class ChatService(
             }.collect { chunk ->
                 when (chunk) {
                     is GenerationChunk.Messages -> {
-                        val chunkMessages = when (requestMode) {
-                            ChatRequestMode.Normal -> chunk.messages
-                            ChatRequestMode.VoiceCall -> chunk.messages
-                        }
+                        val chunkMessages = chunk.messages
+                        latestPrimaryMessages = chunkMessages
                         val updatedConversation = getConversationFlow(conversationId).value
                             .updateCurrentMessages(chunkMessages)
                         updateConversation(conversationId, updatedConversation)
@@ -880,6 +894,22 @@ class ChatService(
                     }
                 }
             }
+
+            if (voiceCallAudioTagFormat != null) {
+                val primaryMessages = latestPrimaryMessages
+                    ?: getConversationFlow(conversationId).value.currentMessages
+                val taggedMessages = applySecondPassVoiceCallAudioTags(
+                    settings = settings,
+                    model = model,
+                    assistant = assistant,
+                    processingStatus = session.processingStatus,
+                    primaryMessages = primaryMessages,
+                    format = voiceCallAudioTagFormat,
+                )
+                val taggedConversation = getConversationFlow(conversationId).value
+                    .updateCurrentMessages(taggedMessages)
+                updateConversation(conversationId, taggedConversation)
+            }
         }.onFailure {
             // 取消 Live Update 通知
             cancelLiveUpdateNotification(conversationId)
@@ -901,6 +931,115 @@ class ChatService(
             }
             launchWithConversationReference(conversationId) {
                 generateSuggestion(conversationId, finalConversation)
+            }
+        }
+    }
+
+    private suspend fun applySecondPassVoiceCallAudioTags(
+        settings: Settings,
+        model: Model,
+        assistant: Assistant,
+        processingStatus: MutableStateFlow<String?>,
+        primaryMessages: List<UIMessage>,
+        format: VoiceCallAudioTagFormat,
+    ): List<UIMessage> {
+        val primaryReplyIndex = primaryMessages.indexOfLast { message ->
+            message.role == MessageRole.ASSISTANT && message.toText().isNotBlank()
+        }
+        if (primaryReplyIndex < 0) return primaryMessages
+
+        val primaryReply = primaryMessages[primaryReplyIndex]
+        val primaryReplyText = primaryReply.toText().trim()
+        val taggingSegments = splitVoiceCallAudioTaggingSegments(primaryReplyText)
+        val taggingContext = listOf(
+            UIMessage.user(
+                buildVoiceCallAudioTaggingRequest(taggingSegments)
+            )
+        )
+        val taggingAssistant = assistant.copy(
+            systemPrompt = "",
+            temperature = 0f,
+            topP = 1f,
+            contextMessageSize = 1,
+            streamOutput = false,
+            enableMemory = false,
+            useGlobalMemory = false,
+            enableRecentChatsReference = false,
+            reasoningLevel = ReasoningLevel.OFF,
+            localTools = emptyList(),
+            modeInjectionIds = emptySet(),
+            lorebookIds = emptySet(),
+            enabledSkills = emptySet(),
+            enableTimeReminder = false,
+            allowConversationSystemPrompt = false,
+            allowConversationPromptInjection = false,
+        )
+        var toolCallCount = 0
+        var selectionResult: VoiceCallAudioTagSelectionResult? = null
+        val tagSelectionTool = createVoiceCallAudioTagSelectionTool(
+            segmentCount = taggingSegments.size,
+            format = format,
+            onResult = { result ->
+                toolCallCount++
+                selectionResult = if (toolCallCount == 1) {
+                    result
+                } else {
+                    VoiceCallAudioTagSelectionResult.InvalidArguments
+                }
+            },
+        )
+        var requestFailureReason: VoiceCallTaggingFallbackReason? = null
+        Logging.log(
+            TAG,
+            "applySecondPassVoiceCallAudioTags: provider=${format.providerName}, " +
+                "segments=${taggingSegments.size}",
+        )
+        try {
+            generationHandler.generateText(
+                settings = settings,
+                model = model,
+                processingStatus = processingStatus,
+                messages = taggingContext,
+                assistant = taggingAssistant,
+                memories = emptyList(),
+                includeMemoriesInPrompt = false,
+                tools = listOf(tagSelectionTool),
+                maxSteps = 1,
+                extraSystemPrompt = buildVoiceCallAudioTagPrompt(format),
+                maxTokensOverride = 2048,
+            ).collect { }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            requestFailureReason = VoiceCallTaggingFallbackReason.REQUEST_ERROR
+            Logging.log(TAG, "applySecondPassVoiceCallAudioTags: $error")
+        }
+        if (requestFailureReason == null) {
+            requestFailureReason = when (selectionResult) {
+                null -> VoiceCallTaggingFallbackReason.MISSING_TOOL_CALL
+                VoiceCallAudioTagSelectionResult.InvalidArguments ->
+                    VoiceCallTaggingFallbackReason.INVALID_TOOL_ARGUMENTS
+
+                is VoiceCallAudioTagSelectionResult.Selected -> null
+            }
+        }
+        Logging.log(
+            TAG,
+            "applySecondPassVoiceCallAudioTags: completed toolCalls=$toolCallCount, " +
+                "selection=${selectionResult?.javaClass?.simpleName ?: "missing"}, " +
+                "failure=${requestFailureReason?.displayName ?: "none"}",
+        )
+
+        val selectedTagIds = (selectionResult as? VoiceCallAudioTagSelectionResult.Selected)?.tagIds
+        return primaryMessages.mapIndexed { index, message ->
+            if (index == primaryReplyIndex) {
+                message.withSelectedVoiceCallAudioTagIds(
+                    selectedTagIds = selectedTagIds,
+                    format = format,
+                    selectionFailureReason = requestFailureReason,
+                )
+            } else {
+                message
             }
         }
     }

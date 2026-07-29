@@ -84,6 +84,7 @@ import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.AssistantAffectScope
 import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.data.model.replaceRegexes
+import me.rerere.rikkahub.data.voice.withoutVoiceCallAudioTagsForChatDisplay
 import me.rerere.rikkahub.ui.components.richtext.MarkdownBlock
 import me.rerere.rikkahub.ui.components.richtext.LocalElevenLabsAudioTagAnnotations
 import me.rerere.rikkahub.ui.components.richtext.ZoomableAsyncImage
@@ -94,7 +95,6 @@ import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.modifier.shimmer
 import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.context.LocalTTSState
-import me.rerere.rikkahub.data.datastore.getSelectedTTSProvider
 import me.rerere.rikkahub.ui.theme.LocalChatFontFamily
 import me.rerere.rikkahub.ui.theme.rememberChatFontFamily
 import me.rerere.rikkahub.ui.theme.extendColors
@@ -105,7 +105,6 @@ import me.rerere.rikkahub.utils.keepEnglishOnlyForTts
 import me.rerere.rikkahub.utils.openUrl
 import me.rerere.rikkahub.utils.stripMarkdown
 import me.rerere.rikkahub.utils.urlDecode
-import me.rerere.tts.provider.isElevenLabsV3
 import java.util.Locale
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -133,7 +132,6 @@ fun ChatMessage(
     val message = node.messages[node.selectIndex]
     val appSettings = LocalSettings.current
     val settings = appSettings.displaySetting
-    val showElevenLabsAudioTagAnnotations = appSettings.getSelectedTTSProvider()?.isElevenLabsV3() == true
     val chatFontFamily = LocalChatFontFamily.current ?: rememberChatFontFamily(settings)
     val textStyle = LocalTextStyle.current.copy(
         fontSize = LocalTextStyle.current.fontSize * settings.fontSizeRatio,
@@ -176,10 +174,14 @@ fun ChatMessage(
             MessagePartsBlock(
                 assistant = assistant,
                 role = message.role,
-                parts = message.parts,
+                parts = if (message.role == MessageRole.ASSISTANT) {
+                    message.parts.withoutVoiceCallAudioTagsForChatDisplay()
+                } else {
+                    message.parts
+                },
                 annotations = message.annotations,
                 loading = loading,
-                showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
+                showElevenLabsAudioTagAnnotations = false,
                 model = model,
                 onToolApproval = onToolApproval,
                 onToolAnswer = onToolAnswer,

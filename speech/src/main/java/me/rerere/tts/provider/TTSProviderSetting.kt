@@ -83,11 +83,16 @@ sealed class TTSProviderSetting {
         override var name: String = "MiniMax TTS",
         val apiKey: String = "",
         val baseUrl: String = "https://api.minimaxi.com/v1",
-        val model: String = "speech-2.6-turbo",
+        val model: String = DEFAULT_MODEL,
         val voiceId: String = "female-shaonv",
-        val emotion: String = "calm",
         val speed: Float = 1.0f
     ) : TTSProviderSetting() {
+        companion object {
+            const val DEFAULT_MODEL = "speech-2.8-turbo"
+            const val MIN_SPEED = 0.5f
+            const val MAX_SPEED = 2.0f
+        }
+
         override fun copyProvider(
             id: Uuid,
             name: String,
@@ -236,6 +241,17 @@ sealed class TTSProviderSetting {
                 MiMo::class,
             )
         }
+    }
+}
+
+/**
+ * Upgrades only the previous MiniMax default model; explicitly chosen model IDs remain unchanged.
+ */
+fun TTSProviderSetting.MiniMax.normalizeLegacyDefaultModel(): TTSProviderSetting.MiniMax {
+    return if (model.trim().equals("speech-2.6-turbo", ignoreCase = true)) {
+        copy(model = TTSProviderSetting.MiniMax.DEFAULT_MODEL)
+    } else {
+        this
     }
 }
 

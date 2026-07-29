@@ -14,6 +14,7 @@ internal fun String.sanitizeVoiceCallTextForSpeech(): String {
         .replace(VOICE_CALL_WIDE_KAOMOJI_REGEX, "")
         .replace(VOICE_CALL_ASCII_EMOTICON_REGEX, "")
         .replace(VOICE_CALL_TEXT_FACE_REGEX, "")
+        .removeVoiceCallParenthesizedKaomoji()
         .removeLikelyMojibakeTail()
         .replace(Regex("[ \\t]{2,}"), " ")
         .replace(Regex(" *\\n{3,} *"), "\n\n")
@@ -24,6 +25,7 @@ internal fun String.sanitizeVoiceCallTextForSpeech(): String {
             .replace(VOICE_CALL_WIDE_KAOMOJI_REGEX, "")
             .replace(VOICE_CALL_ASCII_EMOTICON_REGEX, "")
             .replace(VOICE_CALL_TEXT_FACE_REGEX, "")
+            .removeVoiceCallParenthesizedKaomoji()
     }
 
     return text.trim()
@@ -75,6 +77,39 @@ private val VOICE_CALL_KAOMOJI_REGEX = Regex("""[（(【\[{<][^）)】\]}\n]{0,2
 private val VOICE_CALL_WIDE_KAOMOJI_REGEX = Regex("""(?<![\p{L}\p{N}])[\^TQxX;；=≧≦><][_\-oO.。﹏~～^TQxX;；=≧≦><]{1,8}[\^TQxX;；=≧≦><](?![\p{L}\p{N}])""")
 private val VOICE_CALL_ASCII_EMOTICON_REGEX = Regex("""(?:(?<=^)|(?<=\s))[:;=8xX][\-o*']?[\)\]\(\[dDpP/:\}{@|\\](?=\s|$|[，。！？,.!?])""")
 private val VOICE_CALL_TEXT_FACE_REGEX = Regex("""(?:(?<=^)|(?<=[\s，。！？,.!?]))(?:QAQ|QwQ|qwq|TAT|T_T|T-T|OTZ|orz|2333*)(?=$|[\s，。！？,.!?])""")
+private val VOICE_CALL_PARENTHESIZED_TOKEN_REGEX = Regex("""[（(][^）)\r\n]{1,80}[）)](?:[^\p{L}\p{N}\p{P}\r\n]{1,24})?""")
+private val VOICE_CALL_KAOMOJI_SYMBOL_TAIL_REGEX = Regex("""(?<![\p{L}\p{N}])[^\p{L}\p{N}\r\n]{1,24}(?![\p{L}\p{N}])""")
+
+private fun String.removeVoiceCallParenthesizedKaomoji(): String {
+    return replace(VOICE_CALL_PARENTHESIZED_TOKEN_REGEX) { match ->
+        val content = match.value.drop(1).dropLast(1)
+        val hasCjkText = content.any { character ->
+            when (Character.UnicodeScript.of(character.code)) {
+                Character.UnicodeScript.HAN,
+                Character.UnicodeScript.HIRAGANA,
+                Character.UnicodeScript.KATAKANA,
+                Character.UnicodeScript.HANGUL,
+                    -> true
+
+                else -> false
+            }
+        }
+        val letterCount = content.count { it.isLetter() }
+        val hasKaomojiMarker = content.any(Char::isVoiceCallKaomojiMarker)
+        if (!hasCjkText && letterCount <= 3 && hasKaomojiMarker) "" else match.value
+    }.replace(VOICE_CALL_KAOMOJI_SYMBOL_TAIL_REGEX) { match ->
+        if (match.value.any(Char::isVoiceCallKaomojiMarker)) {
+            match.value.filter { it.isWhitespace() || it in "。！？!?，,；;：:、." }
+        } else {
+            match.value
+        }
+    }
+}
+
+private fun Char.isVoiceCallKaomojiMarker(): Boolean {
+    return this in "_^~°▽Дд益ωಠ╯╰┻︵￣＿﹏﹋" ||
+        Character.getType(this) == Character.OTHER_SYMBOL.toInt()
+}
 
 private fun String.removeLikelyMojibakeTail(): String {
     val suspiciousStart = indexOfFirst { it == '�' || it.code in 0x0080..0x009F }

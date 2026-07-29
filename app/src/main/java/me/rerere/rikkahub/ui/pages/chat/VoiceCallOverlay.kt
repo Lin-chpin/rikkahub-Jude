@@ -85,9 +85,12 @@ import me.rerere.rikkahub.data.datastore.getSelectedTTSProvider
 import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.voice.VOICE_CALL_UNAVAILABLE_MESSAGE
+import me.rerere.rikkahub.data.voice.voiceCallAudioTagFormatOrNull
+import me.rerere.rikkahub.data.voice.voiceCallDisplayTextOrPlainText
+import me.rerere.rikkahub.data.voice.voiceCallSpeechTextOrPlainText
 import me.rerere.rikkahub.service.ChatRequestMode
 import me.rerere.rikkahub.service.sanitizeVoiceCallTextForSpeech
-import me.rerere.rikkahub.ui.components.richtext.appendElevenLabsAudioTagAwareText
+import me.rerere.rikkahub.ui.components.richtext.appendVoiceCallAudioTagAwareText
 import me.rerere.rikkahub.ui.components.ui.KeepScreenOn
 import me.rerere.rikkahub.ui.components.ui.RabbitLoadingIndicator
 import me.rerere.rikkahub.ui.components.ui.UIAvatar
@@ -98,7 +101,6 @@ import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.context.LocalTTSState
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.tts.model.PlaybackStatus
-import me.rerere.tts.provider.isElevenLabsV3
 
 @Composable
 fun VoiceCallOverlay(
@@ -185,7 +187,8 @@ fun VoiceCallOverlay(
             loadingJob != null || it.toText().isNotBlank()
         }
     val currentAssistantId = currentAssistantMessage?.id?.toString()
-    val currentAssistantText = currentAssistantMessage?.toText().orEmpty()
+    val currentAssistantText = currentAssistantMessage?.voiceCallDisplayTextOrPlainText().orEmpty()
+    val currentAssistantSpeechText = currentAssistantMessage?.voiceCallSpeechTextOrPlainText().orEmpty()
     val pendingUserInputText = keyboardInput.trim()
     val pendingBubbleText = pendingUserInputText.ifBlank { submittedKeyboardInput }
     val latestCurrentAssistantText by rememberUpdatedState(currentAssistantText)
@@ -433,6 +436,7 @@ fun VoiceCallOverlay(
         voiceReplyPending,
         currentAssistantId,
         currentAssistantText,
+        currentAssistantSpeechText,
         loadingJob,
         queuedTextLength,
     ) {
@@ -442,7 +446,9 @@ fun VoiceCallOverlay(
         }
         if (loadingJob != null) return@LaunchedEffect
 
-        val speakable = currentAssistantText.sanitizeVoiceCallTextForSpeech().trim()
+        val speakable = currentAssistantSpeechText
+            .sanitizeVoiceCallTextForSpeech()
+            .trim()
         if (speakable.isBlank()) return@LaunchedEffect
         if (queuedTextLength == currentAssistantText.length && queuedSpeechSegments.isNotEmpty()) {
             return@LaunchedEffect
@@ -477,7 +483,7 @@ fun VoiceCallOverlay(
             tts.speak(
                 text = segment.text.sanitizeVoiceCallTextForSpeech(),
                 flushCalled = true,
-                chunked = false,
+                chunked = true,
             )
 
             val startState = withTimeoutOrNull(20_000) {
@@ -493,6 +499,7 @@ fun VoiceCallOverlay(
 
             when (startState?.status) {
                 PlaybackStatus.Playing -> {
+                    if (spokenMessageId != messageId) return@LaunchedEffect
                     latestCurrentAssistantText.voiceCallDisplaySegments().forEach { displaySegment ->
                         if (spokenMessageId != messageId) return@LaunchedEffect
                         visibleTextLength = maxOf(visibleTextLength, displaySegment.endLength)
@@ -520,6 +527,8 @@ fun VoiceCallOverlay(
                         }
                         .first()
                 }
+                if (spokenMessageId != messageId) return@LaunchedEffect
+                visibleTextLength = maxOf(visibleTextLength, segment.endLength)
             }
 
             nextSpeechIndex++
@@ -885,8 +894,8 @@ private fun VoiceCallMessageBubble(
     item: VoiceCallDisplayItem,
 ) {
     val isUser = role == MessageRole.USER
-    val showElevenLabsAudioTagAnnotations =
-        LocalSettings.current.getSelectedTTSProvider()?.isElevenLabsV3() == true
+    val showVoiceCallAudioTagAnnotations =
+        LocalSettings.current.getSelectedTTSProvider()?.voiceCallAudioTagFormatOrNull() != null
     val colorScheme = MaterialTheme.colorScheme
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -953,8 +962,8 @@ private fun VoiceCallMessageBubble(
                         Spacer(Modifier.height(6.dp))
                         Text(
                             text = buildAnnotatedString {
-                                if (showElevenLabsAudioTagAnnotations) {
-                                    appendElevenLabsAudioTagAwareText(item.text, colorScheme)
+                                if (showVoiceCallAudioTagAnnotations) {
+                                    appendVoiceCallAudioTagAwareText(item.text, colorScheme)
                                 } else {
                                     append(item.text)
                                 }
@@ -1002,7 +1011,10 @@ private fun me.rerere.ai.ui.UIMessage.voiceCallDisplayItems(
     visibleTextLength: Int,
     visibleTextOverride: Int?,
 ): List<VoiceCallDisplayItem> {
-    val fullText = toText()
+    val fullText = when (role) {
+        MessageRole.ASSISTANT -> voiceCallDisplayTextOrPlainText()
+        else -> toText()
+    }
     val isCurrentAssistant = role == MessageRole.ASSISTANT && id.toString() == currentAssistantId
     if (isCurrentAssistant && (voiceReplyPending || visibleTextOverride != null)) {
         val visibleLength = if (voiceReplyPending) {
