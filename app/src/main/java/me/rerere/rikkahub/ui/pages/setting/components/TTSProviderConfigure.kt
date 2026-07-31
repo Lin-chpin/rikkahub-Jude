@@ -39,6 +39,7 @@ import me.rerere.rikkahub.ui.components.ui.FormItem
 import me.rerere.rikkahub.ui.components.ui.OutlinedNumberInput
 import me.rerere.rikkahub.ui.components.ui.Switch
 import me.rerere.tts.provider.TTSProviderSetting
+import me.rerere.tts.provider.isSpeech26Model
 import java.util.Base64
 
 private const val MIMO_MAX_BASE64_AUDIO_SIZE = 10 * 1024 * 1024
@@ -780,21 +781,107 @@ private fun MiniMaxTTSConfiguration(
     }
 
     // Model
+    var modelExpanded by remember { mutableStateOf(false) }
     FormItem(
         label = { Text(stringResource(R.string.setting_tts_page_model)) },
         description = { Text(stringResource(R.string.setting_tts_page_model_description)) }
     ) {
-        OutlinedTextField(
-            value = setting.model,
-            onValueChange = { newModel ->
-                onValueChange(setting.copy(model = newModel))
-            },
-            modifier = Modifier.fillMaxWidth(),
-            isError = setting.model.isBlank(),
-            placeholder = { Text(TTSProviderSetting.MiniMax.DEFAULT_MODEL) }
-        )
+        ExposedDropdownMenuBox(
+            expanded = modelExpanded,
+            onExpandedChange = { modelExpanded = !modelExpanded }
+        ) {
+            OutlinedTextField(
+                value = setting.model,
+                onValueChange = { newModel ->
+                    onValueChange(
+                        setting.copy(
+                            model = newModel,
+                            emotion = newModel.trim().lowercase()
+                                .takeIf { it in TTSProviderSetting.MiniMax.SPEECH_2_6_MODELS }
+                                ?.let { setting.emotion },
+                        )
+                    )
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(MenuAnchorType.PrimaryEditable),
+                isError = setting.model.isBlank(),
+                placeholder = { Text(TTSProviderSetting.MiniMax.DEFAULT_MODEL) },
+                trailingIcon = {
+                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelExpanded)
+                }
+            )
+            ExposedDropdownMenu(
+                expanded = modelExpanded,
+                onDismissRequest = { modelExpanded = false }
+            ) {
+                TTSProviderSetting.MiniMax.MODEL_OPTIONS.forEach { model ->
+                    DropdownMenuItem(
+                        text = { Text(model) },
+                        onClick = {
+                            modelExpanded = false
+                            onValueChange(
+                                setting.copy(
+                                    model = model,
+                                    emotion = setting.emotion.takeIf {
+                                        model in TTSProviderSetting.MiniMax.SPEECH_2_6_MODELS
+                                    },
+                                )
+                            )
+                        }
+                    )
+                }
+            }
+        }
     }
 
+    if (setting.isSpeech26Model()) {
+        var emotionExpanded by remember { mutableStateOf(false) }
+        FormItem(
+            label = { Text("Global emotion") },
+            description = { Text("MiniMax Speech 2.6 的全局情绪参数；不会作为逐句语气标签处理") }
+        ) {
+            ExposedDropdownMenuBox(
+                expanded = emotionExpanded,
+                onExpandedChange = { emotionExpanded = !emotionExpanded }
+            ) {
+                OutlinedTextField(
+                    value = setting.emotion.orEmpty(),
+                    onValueChange = { newEmotion ->
+                        onValueChange(setting.copy(emotion = newEmotion.takeIf { it.isNotBlank() }))
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor(MenuAnchorType.PrimaryEditable),
+                    placeholder = { Text("不指定") },
+                    trailingIcon = {
+                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = emotionExpanded)
+                    }
+                )
+                ExposedDropdownMenu(
+                    expanded = emotionExpanded,
+                    onDismissRequest = { emotionExpanded = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("不指定") },
+                        onClick = {
+                            emotionExpanded = false
+                            onValueChange(setting.copy(emotion = null))
+                        }
+                    )
+                    TTSProviderSetting.MiniMax.GLOBAL_EMOTION_OPTIONS.forEach { emotion ->
+                        DropdownMenuItem(
+                            text = { Text(emotion) },
+                            onClick = {
+                                emotionExpanded = false
+                                onValueChange(setting.copy(emotion = emotion))
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
     // Voice ID
     FormItem(
         label = { Text(stringResource(R.string.setting_tts_page_voice_id)) },

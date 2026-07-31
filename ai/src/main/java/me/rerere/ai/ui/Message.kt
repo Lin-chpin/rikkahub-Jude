@@ -773,7 +773,24 @@ sealed class UIMessageAnnotation {
         val title: String,
         val url: String
     ) : UIMessageAnnotation()
+
+    @Serializable
+    @SerialName("voice_call_record")
+    data class VoiceCallRecord(
+        val callId: String,
+        val durationSeconds: Int,
+        val cardAnchor: Boolean = false,
+        val audioSegments: List<VoiceCallAudioSegment> = emptyList(),
+    ) : UIMessageAnnotation()
 }
+
+@Serializable
+data class VoiceCallAudioSegment(
+    val text: String,
+    val audioUri: String,
+    val format: String,
+    val sampleRate: Int? = null,
+)
 
 @Serializable
 data class MessageChunk(

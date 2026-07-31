@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -23,6 +24,7 @@ import me.rerere.tts.model.TTSResponse
 import me.rerere.tts.provider.TTSManager
 import me.rerere.tts.provider.TTSProviderSetting
 import java.util.UUID
+import java.io.ByteArrayOutputStream
 
 private const val TAG = "TtsController"
 
@@ -52,6 +54,7 @@ class TtsController(
     private val queue: java.util.concurrent.ConcurrentLinkedQueue<TtsChunk> = java.util.concurrent.ConcurrentLinkedQueue()
     private val allChunks: MutableList<TtsChunk> = mutableListOf()
     private val cache = java.util.concurrent.ConcurrentHashMap<UUID, kotlinx.coroutines.Deferred<TTSResponse>>()
+    private val audioReadyCallbacks = java.util.concurrent.ConcurrentHashMap<UUID, suspend (TTSResponse) -> Unit>()
     private var lastPrefetchedIndex: Int = -1
 
     // 行为参数
@@ -105,7 +108,12 @@ class TtsController(
      * - flush=true: 清空当前进度并重新开始
      * - flush=false: 继续队列，追加朗读
      */
-    fun speak(text: String, flush: Boolean = true, chunked: Boolean = true) {
+    fun speak(
+        text: String,
+        flush: Boolean = true,
+        chunked: Boolean = true,
+        onAudioReady: (suspend (TTSResponse) -> Unit)? = null,
+    ) {
         if (text.isBlank()) return
         val provider = currentProvider
         if (provider == null) {
@@ -170,6 +178,23 @@ class TtsController(
         isPaused = true
         audio.pause()
         _playbackState.update { it.copy(status = PlaybackStatus.Paused) }
+    }
+
+    fun playCachedAudio(response: TTSResponse) {
+        stop()
+        workerJob = scope.launch {
+            _isSpeaking.update { true }
+            try {
+                audio.play(response)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Cached playback error", e)
+                _error.update { e.message ?: "Audio playback error" }
+            } finally {
+                _isSpeaking.update { false }
+            }
+        }
     }
 
     /** 恢复播放 */
@@ -259,9 +284,26 @@ class TtsController(
                     // 播放
                     try {
                         if (shouldStream) {
-                            audio.play(synthesizer.synthesizeStreaming(provider, chunk))
+                            var format: me.rerere.tts.model.AudioFormat? = null
+                            var sampleRate: Int? = null
+                            val captured = ByteArrayOutputStream()
+                            val capturedFlow = synthesizer.synthesizeStreaming(provider, chunk).onEach { audioChunk ->
+                                if (format == null) format = audioChunk.format
+                                if (sampleRate == null) sampleRate = audioChunk.sampleRate
+                                captured.write(audioChunk.data)
+                            }
+                            audio.play(capturedFlow)
+                            audioReadyCallbacks.remove(chunk.id)?.invoke(
+                                TTSResponse(
+                                    audioData = captured.toByteArray(),
+                                    format = format ?: me.rerere.tts.model.AudioFormat.MP3,
+                                    sampleRate = sampleRate,
+                                )
+                            )
                         } else {
-                            audio.play(awaitOrCreate(chunk, provider))
+                            val response = awaitOrCreate(chunk, provider)
+                            audioReadyCallbacks.remove(chunk.id)?.invoke(response)
+                            audio.play(response)
                         }
                     } catch (e: Exception) {
                         if (e is CancellationException) throw e

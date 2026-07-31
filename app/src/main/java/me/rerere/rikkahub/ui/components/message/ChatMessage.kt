@@ -72,12 +72,14 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.rikkahub.data.voice.voiceCallRecord
 import me.rerere.ai.ui.isEmptyUIMessage
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.File02
 import me.rerere.hugeicons.stroke.MusicNote03
 import me.rerere.hugeicons.stroke.Video01
 import me.rerere.hugeicons.stroke.VolumeHigh
+import me.rerere.hugeicons.stroke.Voice
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.data.model.Assistant
@@ -128,8 +130,31 @@ fun ChatMessage(
     onClearTranslation: (UIMessage) -> Unit = {},
     onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
+    onOpenVoiceCallRecord: ((String) -> Unit)? = null,
 ) {
     val message = node.messages[node.selectIndex]
+    val voiceCallRecord = message.voiceCallRecord()
+    if (voiceCallRecord != null) {
+        if (voiceCallRecord.cardAnchor) {
+            Surface(
+                onClick = { onOpenVoiceCallRecord?.invoke(voiceCallRecord.callId) },
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                modifier = modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Icon(HugeIcons.Voice, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("通话记录", modifier = Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+                    Text(formatVoiceCallDuration(voiceCallRecord.durationSeconds), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        return
+    }
     val appSettings = LocalSettings.current
     val settings = appSettings.displaySetting
     val chatFontFamily = LocalChatFontFamily.current ?: rememberChatFontFamily(settings)
@@ -626,6 +651,7 @@ private fun MessagePartsBlock(
                     ) {
                         annotations.fastForEachIndexed { index, annotation ->
                             when (annotation) {
+                                is UIMessageAnnotation.VoiceCallRecord -> Unit
                                 is UIMessageAnnotation.UrlCitation -> {
                                     Row(
                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -831,7 +857,13 @@ private fun AssistantTextParagraphs(
                             verticalAlignment = Alignment.Top,
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            Box(modifier = Modifier.weight(1f)) {
+                            Box(
+                                modifier = if (showParagraphTtsButtons) {
+                                    Modifier.weight(1f)
+                                } else {
+                                    Modifier
+                                }
+                            ) {
                                 if (selectionEnabled) {
                                     SelectionContainer {
                                         AssistantMarkdownBlock(
@@ -871,7 +903,6 @@ private fun AssistantTextParagraphs(
                     if (paragraphBubbleMode) {
                         Surface(
                             modifier = Modifier
-                                .fillMaxWidth()
                                 .animateContentSize(),
                             shape = RoundedCornerShape(8.dp),
                             color = paragraphBubbleColor,
@@ -879,7 +910,6 @@ private fun AssistantTextParagraphs(
                         ) {
                             paragraphContent(
                                 Modifier
-                                    .fillMaxWidth()
                                     .padding(horizontal = 12.dp, vertical = 10.dp)
                             )
                         }
@@ -936,6 +966,15 @@ private fun String.splitAssistantTextSegments(): List<AssistantTextSegment> {
     flushParagraph()
 
     return segments.ifEmpty { listOf(AssistantTextSegment.Paragraph(this)) }
+}
+
+private fun formatVoiceCallDuration(totalSeconds: Int): String {
+    val seconds = totalSeconds.coerceAtLeast(0)
+    return if (seconds >= 3600) {
+        "%d:%02d:%02d".format(seconds / 3600, (seconds % 3600) / 60, seconds % 60)
+    } else {
+        "%02d:%02d".format(seconds / 60, seconds % 60)
+    }
 }
 
 private fun String.toAssistantTtsText(

@@ -29,6 +29,7 @@ import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.getAssistantById
 import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.data.files.FilesManager
+import me.rerere.rikkahub.data.voice.VoiceCallCompletion
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.AutoCompressConfig
 import me.rerere.rikkahub.data.model.Avatar
@@ -311,8 +312,8 @@ class ChatVM(
         chatService.handleToolApproval(_conversationId, toolCallId, approved = true, answer = answer)
     }
 
-    fun reportVoiceCallClosed(toolCallId: String?, failureMessage: String? = null) {
-        chatService.reportVoiceCallClosed(_conversationId, toolCallId, failureMessage)
+    fun reportVoiceCallClosed(toolCallId: String?, failureMessage: String? = null, voiceCallCompletion: VoiceCallCompletion? = null) {
+        chatService.reportVoiceCallClosed(_conversationId, toolCallId, failureMessage, voiceCallCompletion)
     }
 
     fun stopGeneration() {

@@ -29,11 +29,24 @@ class VoiceCallAudioTagPromptTest {
     }
 
     @Test
-    fun marksCommonAudibleTagsAndAllowsMiniMaxNone() {
+    fun instructsMiniMaxToReplaceLeadingInterjectionsWithAudibleTags() {
         val prompt = buildVoiceCallAudioTagPrompt(VoiceCallAudioTagFormat.MINIMAX_SPEECH_2_8)
 
+        assertTrue(prompt.contains("嘿嘿/哈哈/嘻嘻，我好开心"))
+        assertTrue(prompt.contains("LAUGHS;"))
+        assertTrue(prompt.contains("SIGHS is an actual audible sigh"))
+        assertTrue(prompt.contains("replacementText"))
+        assertTrue(prompt.contains("exact leading text"))
+        assertTrue(prompt.contains("original reply remains unchanged for display"))
+    }
+    @Test
+    fun prefersOneMiniMaxTagPerSegmentButKeepsNoneAsFallback() {
+        val prompt = buildVoiceCallAudioTagPrompt(VoiceCallAudioTagFormat.MINIMAX_SPEECH_2_8)
+
+        assertTrue(prompt.contains("choose one tag for every segment whenever"))
+        assertTrue(prompt.contains("including segments with no leading interjection"))
+        assertTrue(prompt.contains("do not fall back to NONE merely because there is no word to replace"))
+        assertTrue(prompt.contains("only when no supported tag is natural"))
         assertTrue(prompt.contains("LAUGHS, CHUCKLE, BREATH, SIGHS"))
-        assertTrue(prompt.contains("Use NONE"))
-        assertTrue(prompt.contains("Do not force a tag"))
     }
 }

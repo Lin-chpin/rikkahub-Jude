@@ -76,6 +76,7 @@ internal data class ParsedVoiceCallSegment(
     val text: String,
     val selectionSource: VoiceCallTagSelectionSource,
     val fallbackReason: VoiceCallTaggingFallbackReason? = null,
+    val replacementText: String? = null,
 )
 
 internal enum class VoiceCallTagSelectionSource {
@@ -160,9 +161,19 @@ private fun buildParsedVoiceCallResponse(
     return ParsedVoiceCallResponse(
         visibleText = segments.joinToString("\n") { it.text },
         speechText = segments.joinToString("\n") { segment ->
-            segment.tag?.let { "${format.render(it.word)} ${segment.text}" } ?: segment.text
+            val speechSegmentText = segment.text.removeLeadingVoiceCallInterjection(
+                tag = segment.tag,
+                format = format,
+                replacementText = segment.replacementText,
+            )
+            segment.tag?.let { "${format.renderForSpeech(it.word)}$speechSegmentText" } ?: speechSegmentText
         },
         displayText = segments.joinToString("\n") { segment ->
+            val displaySegmentText = segment.text.removeLeadingVoiceCallInterjection(
+                tag = segment.tag,
+                format = format,
+                replacementText = segment.replacementText,
+            )
             val label = when (segment.selectionSource) {
                 VoiceCallTagSelectionSource.STRUCTURED,
                 VoiceCallTagSelectionSource.LEGACY,
@@ -177,12 +188,62 @@ private fun buildParsedVoiceCallResponse(
                     }
                 }
             }
-            label?.let { "${format.render(it)} ${segment.text}" } ?: segment.text
+            label?.let { "${format.renderForSpeech(it)}$displaySegmentText" } ?: displaySegmentText
         },
         segments = segments,
     )
 }
 
+private fun String.removeLeadingVoiceCallInterjection(
+    tag: VoiceCallAudioTag?,
+    format: VoiceCallAudioTagFormat,
+    replacementText: String? = null,
+): String {
+    if (format != VoiceCallAudioTagFormat.MINIMAX_SPEECH_2_8) return this
+
+    if (!replacementText.isNullOrBlank()) {
+        removeExactLeadingVoiceCallInterjection(replacementText)?.let { return it }
+    }
+
+    val aliases = tag?.leadingInterjections.orEmpty()
+    if (aliases.isEmpty()) return this
+
+    val aliasPattern = aliases
+        .sortedByDescending(String::length)
+        .joinToString("|") { Regex.escape(it) }
+    val leadingInterjectionRegex = Regex(
+        """^\s*(?:$aliasPattern)(?=$|[\s，,、。！？!?…~～.])[\s，,、。！？!?…~～.]*"""
+    )
+    return replaceFirst(leadingInterjectionRegex, "").trimStart()
+}
+
+private fun String.removeExactLeadingVoiceCallInterjection(
+    replacementText: String,
+): String? {
+    val candidate = trimStart()
+    if (!candidate.startsWith(replacementText)) return null
+
+    val remainingText = candidate.removePrefix(replacementText)
+    if (remainingText.isBlank()) return null
+    val replacementEndsWithSeparator =
+        replacementText.lastOrNull()?.isVoiceCallInterjectionSeparator() == true
+    if (!replacementEndsWithSeparator &&
+        !remainingText.first().isVoiceCallInterjectionSeparator()
+    ) {
+        return null
+    }
+
+    return remainingText.trimStart { character ->
+        character.isWhitespace() || character.isVoiceCallInterjectionSeparator()
+    }
+}
+
+private fun Char.isVoiceCallInterjectionSeparator(): Boolean {
+    return isWhitespace() || this in setOf(
+        '\uFF0C', ',', '\u3002', '.', '!', '\uFF01', '?', '\uFF1F',
+        ';', '\uFF1B', ':', '\uFF1A', '\u3001', '\u2026', '~', '\uFF5E',
+    )
+}
 internal fun UIMessage.toVoiceCallAudioTagPresentation(
     format: VoiceCallAudioTagFormat = VoiceCallAudioTagFormat.ELEVEN_LABS_V3,
 ): UIMessage {
@@ -223,6 +284,18 @@ internal fun UIMessage.withSelectedVoiceCallAudioTagIds(
     format: VoiceCallAudioTagFormat,
     selectionFailureReason: VoiceCallTaggingFallbackReason? = null,
 ): UIMessage {
+    return withSelectedVoiceCallAudioTagAssignments(
+        selectedAssignments = selectedTagIds?.map { VoiceCallAudioTagAssignment(it) },
+        format = format,
+        selectionFailureReason = selectionFailureReason,
+    )
+}
+
+internal fun UIMessage.withSelectedVoiceCallAudioTagAssignments(
+    selectedAssignments: List<VoiceCallAudioTagAssignment>?,
+    format: VoiceCallAudioTagFormat,
+    selectionFailureReason: VoiceCallTaggingFallbackReason? = null,
+): UIMessage {
     val originalText = parts.filterIsInstance<UIMessagePart.Text>()
         .joinToString("\n") { it.text }
         .trim()
@@ -232,9 +305,9 @@ internal fun UIMessage.withSelectedVoiceCallAudioTagIds(
     val acceptedTagging = if (selectionFailureReason != null) {
         fallbackVoiceCallResponse(originalText, selectionFailureReason, format)
     } else {
-        buildVoiceCallResponseFromSelectedTagIds(
+        buildVoiceCallResponseFromSelectedAssignments(
             originalSegments = originalSegments,
-            selectedTagIds = selectedTagIds,
+            selectedAssignments = selectedAssignments,
             format = format,
         ) ?: fallbackVoiceCallResponse(
             originalText,
@@ -389,6 +462,10 @@ internal fun splitVoiceCallAudioTaggingSegments(text: String): List<String> {
     var start = 0
     var index = 0
     while (index < text.length) {
+        if (text[index] == '.' && text.getOrNull(index + 1) == '.') {
+            while (index < text.length && text[index] == '.') index++
+            continue
+        }
         if (text[index].isVoiceCallAudioTagSegmentBoundary()) {
             var endExclusive = index + 1
             while (endExclusive < text.length && text[endExclusive].isVoiceCallAudioTagSegmentBoundary()) {
@@ -410,20 +487,22 @@ private fun Char.isVoiceCallAudioTagSegmentBoundary(): Boolean {
         this == '；' || this == ';' || this == '\n'
 }
 
-private fun buildVoiceCallResponseFromSelectedTagIds(
+private fun buildVoiceCallResponseFromSelectedAssignments(
     originalSegments: List<String>,
-    selectedTagIds: List<String?>?,
+    selectedAssignments: List<VoiceCallAudioTagAssignment>?,
     format: VoiceCallAudioTagFormat,
 ): ParsedVoiceCallResponse? {
-    if (selectedTagIds == null || selectedTagIds.size != originalSegments.size) return null
+    if (selectedAssignments == null || selectedAssignments.size != originalSegments.size) return null
 
     return buildParsedVoiceCallResponse(
         originalSegments.mapIndexed { index, text ->
-            val selectedTag = selectedTagIds[index]?.let { VoiceCallAudioTag.fromId(it) ?: return null }
+            val assignment = selectedAssignments[index]
+            val selectedTag = assignment.tagId?.let { VoiceCallAudioTag.fromId(it) ?: return null }
             ParsedVoiceCallSegment(
                 tag = selectedTag,
                 text = text,
                 selectionSource = VoiceCallTagSelectionSource.STRUCTURED,
+                replacementText = assignment.replacementText,
             )
         },
         format,
@@ -490,7 +569,7 @@ private fun String.stripKnownVoiceCallAudioTags(): String {
         VoiceCallAudioTagFormat.entries.forEach { format ->
             result = result.replace(
                 Regex(
-                    Regex.escape(format.render(tag.word)) + """[ \t]*""",
+                    Regex.escape(format.render(tag.word)) + """[ \t]*(?:[，,][ \t]*)?""",
                     RegexOption.IGNORE_CASE,
                 ),
                 "",

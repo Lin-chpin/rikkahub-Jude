@@ -19,9 +19,17 @@ internal const val VOICE_CALL_AUDIO_TAG_SELECTION_TOOL_NAME =
     "select_voice_call_audio_tags"
 
 internal sealed interface VoiceCallAudioTagSelectionResult {
-    data class Selected(val tagIds: List<String?>) : VoiceCallAudioTagSelectionResult
+    data class Selected(
+        val assignments: List<VoiceCallAudioTagAssignment>,
+    ) : VoiceCallAudioTagSelectionResult
+
     data object InvalidArguments : VoiceCallAudioTagSelectionResult
 }
+
+internal data class VoiceCallAudioTagAssignment(
+    val tagId: String?,
+    val replacementText: String? = null,
+)
 
 /**
  * Creates the only model-facing path that can select live-call audio tags.
@@ -36,6 +44,8 @@ internal fun createVoiceCallAudioTagSelectionTool(
     onResult: (VoiceCallAudioTagSelectionResult) -> Unit,
 ): Tool {
     require(segmentCount > 0)
+    val allowsLeadingInterjectionReplacement =
+        format == VoiceCallAudioTagFormat.MINIMAX_SPEECH_2_8
 
     return Tool(
         name = VOICE_CALL_AUDIO_TAG_SELECTION_TOOL_NAME,
@@ -81,6 +91,18 @@ internal fun createVoiceCallAudioTagSelectionTool(
                                                     )
                                                 }
                                             )
+                                            if (allowsLeadingInterjectionReplacement) {
+                                                put(
+                                                    "replacementText",
+                                                    buildJsonObject {
+                                                        put("type", "string")
+                                                        put(
+                                                            "description",
+                                                            "Exact leading spoken interjection to remove from the speech copy; use an empty string when none.",
+                                                        )
+                                                    },
+                                                )
+                                            }
                                         }
                                     )
                                     put(
@@ -88,6 +110,9 @@ internal fun createVoiceCallAudioTagSelectionTool(
                                         buildJsonArray {
                                             add(JsonPrimitive("segmentIndex"))
                                             add(JsonPrimitive("tagId"))
+                                            if (allowsLeadingInterjectionReplacement) {
+                                                add(JsonPrimitive("replacementText"))
+                                            }
                                         }
                                     )
                                     put("additionalProperties", false)
@@ -101,16 +126,16 @@ internal fun createVoiceCallAudioTagSelectionTool(
         },
         needsApproval = false,
         execute = { arguments ->
-            val selectedTagIds = validateVoiceCallAudioTagAssignments(
+            val selectedAssignments = validateVoiceCallAudioTagAssignmentsWithReplacements(
                 arguments = arguments,
                 segmentCount = segmentCount,
                 format = format,
             )
-            if (selectedTagIds == null) {
+            if (selectedAssignments == null) {
                 onResult(VoiceCallAudioTagSelectionResult.InvalidArguments)
                 listOf(UIMessagePart.Text("""{"accepted":false}"""))
             } else {
-                onResult(VoiceCallAudioTagSelectionResult.Selected(selectedTagIds))
+                onResult(VoiceCallAudioTagSelectionResult.Selected(selectedAssignments))
                 listOf(UIMessagePart.Text("""{"accepted":true}"""))
             }
         },
@@ -122,18 +147,37 @@ internal fun validateVoiceCallAudioTagAssignments(
     segmentCount: Int,
     format: VoiceCallAudioTagFormat,
 ): List<String?>? {
+    return validateVoiceCallAudioTagAssignmentsWithReplacements(
+        arguments = arguments,
+        segmentCount = segmentCount,
+        format = format,
+    )?.map(VoiceCallAudioTagAssignment::tagId)
+}
+
+internal fun validateVoiceCallAudioTagAssignmentsWithReplacements(
+    arguments: JsonElement,
+    segmentCount: Int,
+    format: VoiceCallAudioTagFormat,
+): List<VoiceCallAudioTagAssignment>? {
     if (segmentCount <= 0) return null
     val rootObject = runCatching { arguments.jsonObject }.getOrNull() ?: return null
     if (rootObject.keys != setOf("assignments")) return null
     val assignments = runCatching { rootObject["assignments"]?.jsonArray }.getOrNull() ?: return null
     if (assignments.size != segmentCount) return null
+    val allowsLeadingInterjectionReplacement =
+        format == VoiceCallAudioTagFormat.MINIMAX_SPEECH_2_8
 
     val assignedIndices = BooleanArray(segmentCount)
-    val tagsByIndex = arrayOfNulls<String>(segmentCount)
+    val assignmentsByIndex = arrayOfNulls<VoiceCallAudioTagAssignment>(segmentCount)
     assignments.forEach { assignment ->
         val assignmentObject: JsonObject = runCatching { assignment.jsonObject }.getOrNull()
             ?: return null
-        if (assignmentObject.keys != setOf("segmentIndex", "tagId")) return null
+        val expectedKeys = if (allowsLeadingInterjectionReplacement) {
+            setOf("segmentIndex", "tagId", "replacementText")
+        } else {
+            setOf("segmentIndex", "tagId")
+        }
+        if (assignmentObject.keys != expectedKeys) return null
         val segmentIndex = assignmentObject["segmentIndex"]
             ?.jsonPrimitive
             ?.intOrNull
@@ -142,7 +186,17 @@ internal fun validateVoiceCallAudioTagAssignments(
             ?.jsonPrimitive
             ?.contentOrNull
             ?: return null
-        if (segmentIndex !in tagsByIndex.indices || assignedIndices[segmentIndex]) return null
+        if (segmentIndex !in assignmentsByIndex.indices || assignedIndices[segmentIndex]) return null
+
+        val replacementText = if (allowsLeadingInterjectionReplacement) {
+            assignmentObject["replacementText"]
+                ?.jsonPrimitive
+                ?.contentOrNull
+                ?.takeIf { it.length <= 120 && !it.contains('\n') && !it.contains('\r') }
+                ?: return null
+        } else {
+            null
+        }
 
         val acceptedTagId = when {
             format.allowsNoTag && tagId == NO_VOICE_CALL_AUDIO_TAG_ID -> null
@@ -152,9 +206,12 @@ internal fun validateVoiceCallAudioTagAssignments(
                 ?: return null
         }
         assignedIndices[segmentIndex] = true
-        tagsByIndex[segmentIndex] = acceptedTagId
+        assignmentsByIndex[segmentIndex] = VoiceCallAudioTagAssignment(
+            tagId = acceptedTagId,
+            replacementText = replacementText?.takeIf { it.isNotBlank() },
+        )
     }
 
     if (!assignedIndices.all { it }) return null
-    return tagsByIndex.toList()
+    return assignmentsByIndex.map { it ?: return null }
 }

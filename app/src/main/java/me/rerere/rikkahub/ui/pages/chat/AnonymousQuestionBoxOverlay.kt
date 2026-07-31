@@ -16,6 +16,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.imePadding
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoView
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -34,11 +38,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.Cancel01
@@ -103,7 +109,7 @@ fun AnonymousQuestionBoxOverlay(
                 if (questions.isEmpty()) {
                     Text(stringResource(R.string.anonymous_question_box_empty), modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 80.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
-                    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(12.dp)) {
+                    LazyColumn(Modifier.fillMaxWidth().weight(1f).imePadding(), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(12.dp)) {
                         items(questions, key = { it.question.id.toString() }) { entry -> AnonymousQuestionCard(entry, assistant, settings, vm) }
                     }
                 }
@@ -119,6 +125,14 @@ fun AnonymousQuestionBoxOverlay(
 @Composable
 private fun AnonymousQuestionCard(entry: AnonymousQuestionEntry, assistant: Assistant, settings: Settings, vm: AnonymousQuestionBoxVM) {
     var expanded by remember(entry.question.id) { mutableStateOf(false) }
+    var answerFocused by remember(entry.question.id) { mutableStateOf(false) }
+    val answerBringIntoViewRequester = remember { BringIntoViewRequester() }
+    LaunchedEffect(answerFocused) {
+        if (answerFocused) {
+            delay(250)
+            answerBringIntoViewRequester.bringIntoView()
+        }
+    }
     var answer by remember(entry.question.id) { mutableStateOf("") }
     val isAssistantQuestion = entry.question.author == AnonymousQuestionAuthor.ASSISTANT
     val avatar = if (isAssistantQuestion) assistant.avatar else settings.displaySetting.userAvatar
@@ -174,7 +188,10 @@ private fun AnonymousQuestionCard(entry: AnonymousQuestionEntry, assistant: Assi
                         OutlinedTextField(
                             value = answer,
                             onValueChange = { answer = it },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .bringIntoViewRequester(answerBringIntoViewRequester)
+                                .onFocusChanged { answerFocused = it.isFocused },
                             placeholder = { Text(stringResource(R.string.anonymous_question_box_answer)) },
                         )
                         Button(

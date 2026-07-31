@@ -85,12 +85,34 @@ sealed class TTSProviderSetting {
         val baseUrl: String = "https://api.minimaxi.com/v1",
         val model: String = DEFAULT_MODEL,
         val voiceId: String = "female-shaonv",
-        val speed: Float = 1.0f
+        val speed: Float = 1.0f,
+        val emotion: String? = null,
     ) : TTSProviderSetting() {
         companion object {
             const val DEFAULT_MODEL = "speech-2.8-turbo"
             const val MIN_SPEED = 0.5f
             const val MAX_SPEED = 2.0f
+            val MODEL_OPTIONS = listOf(
+                "speech-2.8-hd",
+                "speech-2.8-turbo",
+                "speech-2.6-hd",
+                "speech-2.6-turbo",
+            )
+            val SPEECH_2_6_MODELS = setOf(
+                "speech-2.6-hd",
+                "speech-2.6-turbo",
+            )
+            val GLOBAL_EMOTION_OPTIONS = listOf(
+                "happy",
+                "sad",
+                "angry",
+                "fearful",
+                "disgusted",
+                "surprised",
+                "calm",
+                "fluent",
+                "whipser",
+            )
         }
 
         override fun copyProvider(
@@ -244,15 +266,8 @@ sealed class TTSProviderSetting {
     }
 }
 
-/**
- * Upgrades only the previous MiniMax default model; explicitly chosen model IDs remain unchanged.
- */
-fun TTSProviderSetting.MiniMax.normalizeLegacyDefaultModel(): TTSProviderSetting.MiniMax {
-    return if (model.trim().equals("speech-2.6-turbo", ignoreCase = true)) {
-        copy(model = TTSProviderSetting.MiniMax.DEFAULT_MODEL)
-    } else {
-        this
-    }
+fun TTSProviderSetting.MiniMax.isSpeech26Model(): Boolean {
+    return model.trim().lowercase() in TTSProviderSetting.MiniMax.SPEECH_2_6_MODELS
 }
 
 fun TTSProviderSetting.isElevenLabsV3(): Boolean {

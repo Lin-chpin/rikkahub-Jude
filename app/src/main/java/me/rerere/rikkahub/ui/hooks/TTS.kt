@@ -1,6 +1,7 @@
 package me.rerere.rikkahub.ui.hooks
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.runtime.Composable
@@ -20,6 +21,7 @@ import me.rerere.rikkahub.data.datastore.getSelectedTTSProvider
 import me.rerere.rikkahub.utils.keepEnglishOnlyForTts
 import me.rerere.rikkahub.utils.stripMarkdown
 import me.rerere.tts.model.TTSResponse
+import me.rerere.tts.model.AudioFormat
 import me.rerere.tts.provider.TTSManager
 import me.rerere.tts.provider.TTSProviderSetting
 import me.rerere.tts.controller.TtsController
@@ -89,10 +91,11 @@ interface CustomTtsState {
      * Speaks the given text using the selected TTS provider.
      * Long texts will be automatically chunked and queued unless [chunked] is false.
      */
-    fun speak(text: String, flushCalled: Boolean = true, chunked: Boolean = true)
+    fun speak(text: String, flushCalled: Boolean = true, chunked: Boolean = true, onAudioReady: (suspend (TTSResponse) -> Unit)? = null)
 
     /** Stops the current speech and clears the queue. */
     fun stop()
+    fun playCachedAudio(audioUri: String, format: String, sampleRate: Int? = null)
 
     /** Pauses the current playback. */
     fun pause()
@@ -138,7 +141,7 @@ private class CustomTtsStateImpl(
         controller.setProvider(provider)
     }
 
-    override fun speak(text: String, flushCalled: Boolean, chunked: Boolean) {
+    override fun speak(text: String, flushCalled: Boolean, chunked: Boolean, onAudioReady: (suspend (TTSResponse) -> Unit)?) {
         val settings = settingsStore.settingsFlow.value
         val processed = text.stripMarkdown().let {
             if (settings.displaySetting.ttsEnglishOnly) {
@@ -147,11 +150,30 @@ private class CustomTtsStateImpl(
                 it
             }
         }
-        controller.speak(processed, flushCalled, chunked)
+        controller.speak(processed, flushCalled, chunked, onAudioReady)
     }
 
     override fun stop() {
         controller.stop()
+    }
+
+    override fun playCachedAudio(audioUri: String, format: String, sampleRate: Int?) {
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                val uri = Uri.parse(audioUri)
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: return@runCatching
+                controller.playCachedAudio(
+                    TTSResponse(
+                        audioData = bytes,
+                        format = AudioFormat.valueOf(format),
+                        sampleRate = sampleRate,
+                    )
+                )
+            }.onFailure { error ->
+                Log.e(TAG, error.toString())
+            }
+        }
     }
 
     override fun pause() {

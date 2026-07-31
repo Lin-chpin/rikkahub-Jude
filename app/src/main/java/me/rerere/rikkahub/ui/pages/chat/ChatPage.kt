@@ -271,6 +271,7 @@ private fun ChatPageContent(
     var showCompressedMessages by rememberSaveable(conversation.id) { mutableStateOf(false) }
     var summaryEditorVisible by rememberSaveable(conversation.id) { mutableStateOf(false) }
     var voiceCallVisible by rememberSaveable(conversation.id) { mutableStateOf(false) }
+    var voiceCallHistoryId by rememberSaveable(conversation.id) { mutableStateOf<String?>(null) }
     var awaitInitialVoiceCallReply by rememberSaveable(conversation.id) { mutableStateOf(false) }
     var initialVoiceCallAssistantMessageId by rememberSaveable(conversation.id) { mutableStateOf<String?>(null) }
     var initialVoiceCallToolCallId by rememberSaveable(conversation.id) { mutableStateOf<String?>(null) }
@@ -343,6 +344,7 @@ private fun ChatPageContent(
                         summaryEditorVisible = it
                     },
                     onOpenVoiceCall = {
+                        voiceCallHistoryId = null
                         awaitInitialVoiceCallReply = false
                         initialVoiceCallAssistantMessageId = null
                         initialVoiceCallToolCallId = null
@@ -538,6 +540,10 @@ private fun ChatPageContent(
                 onToggleFavorite = { node ->
                     vm.toggleMessageFavorite(node)
                 },
+                onOpenVoiceCallRecord = { callId ->
+                    voiceCallHistoryId = callId
+                    voiceCallVisible = true
+                },
                 onConversationSystemPromptChange = { newPrompt ->
                     vm.updateConversation(conversation.copy(customSystemPrompt = newPrompt))
                     vm.saveConversationAsync()
@@ -546,6 +552,7 @@ private fun ChatPageContent(
         }
         VoiceCallOverlay(
             visible = voiceCallVisible,
+            historyCallId = voiceCallHistoryId,
             awaitInitialAssistantReply = awaitInitialVoiceCallReply,
             initialAssistantMessageId = initialVoiceCallAssistantMessageId,
             initialVoiceCallToolCallId = initialVoiceCallToolCallId,
@@ -559,12 +566,13 @@ private fun ChatPageContent(
             vm = vm,
             onDismiss = {
                 voiceCallVisible = false
+                voiceCallHistoryId = null
                 awaitInitialVoiceCallReply = false
                 initialVoiceCallAssistantMessageId = null
                 initialVoiceCallToolCallId = null
             },
-            onVoiceCallClosed = { failureMessage ->
-                vm.reportVoiceCallClosed(initialVoiceCallToolCallId, failureMessage)
+            onVoiceCallClosed = { failureMessage, completion ->
+                vm.reportVoiceCallClosed(initialVoiceCallToolCallId, failureMessage, completion)
             },
             onMessageSubmitted = {
                 scope.launch {

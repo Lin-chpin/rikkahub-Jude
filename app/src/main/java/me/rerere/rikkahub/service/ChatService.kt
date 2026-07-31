@@ -45,6 +45,7 @@ import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.canResumeToolExecution
 import me.rerere.ai.ui.finishPendingTools
 import me.rerere.ai.ui.finishReasoning
@@ -88,13 +89,15 @@ import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.voice.VOICE_CALL_UNAVAILABLE_MESSAGE
+import me.rerere.rikkahub.data.voice.VoiceCallCompletion
+import me.rerere.rikkahub.data.voice.withVoiceCallRecord
 import me.rerere.rikkahub.data.voice.VoiceCallAudioTagFormat
 import me.rerere.rikkahub.data.voice.VoiceCallAudioTagSelectionResult
 import me.rerere.rikkahub.data.voice.VoiceCallTaggingFallbackReason
 import me.rerere.rikkahub.data.voice.createVoiceCallAudioTagSelectionTool
 import me.rerere.rikkahub.data.voice.splitVoiceCallAudioTaggingSegments
 import me.rerere.rikkahub.data.voice.voiceCallAudioTagFormatOrNull
-import me.rerere.rikkahub.data.voice.withSelectedVoiceCallAudioTagIds
+import me.rerere.rikkahub.data.voice.withSelectedVoiceCallAudioTagAssignments
 import me.rerere.rikkahub.data.voice.withoutVoiceCallAudioTagsForNormalContext
 import me.rerere.rikkahub.data.model.AssistantAffectScope
 import me.rerere.rikkahub.data.model.AutoCompressConfig
@@ -128,15 +131,12 @@ private const val MIN_COMPRESSION_CHUNK_TOKENS = 8000
 private const val COMPRESSION_CHUNK_TOKENS_PER_TARGET_TOKEN = 8
 private const val VOICE_CALL_SYSTEM_PROMPT = """
 你正在语音通话模式中回复用户。
-重要状态通知：语音通话已经接通，当前正在通话中，不是在等待接听，也不是通话邀请流程。
-请把接下来的用户消息直接当作当前电话中的实时发言，并在回复开头自然地确认你正在通话中。
 不要再次发起、邀请、请求或切换到另一通语音通话，也不要调用打电话工具。
 如果用户的表达暗示想打电话，只需在当前通话中继续回应，不要把它当成新的拨号请求。
 请像真实电话聊天一样自然、简短、连贯地说话。
-先用一句很短的话回应用户。
 每一句都尽量短，适合一句一句朗读。
 每一句都必须用句号、问号或感叹号结束。
-每段最多 1 到 2 句话，一次通常控制在 2 到 4 个短段内。
+只回答当前最需要回应的内容，通常使用一个短段落；内容已经完整时立即结束，不要为了凑长度继续展开。
 不使用 Markdown 表格，不写长列表。
 如果需要解释复杂问题，分成几个容易朗读的小块。
 一次最多问用户一个问题。
@@ -613,6 +613,7 @@ class ChatService(
         conversationId: Uuid,
         toolCallId: String? = null,
         failureMessage: String? = null,
+        voiceCallCompletion: VoiceCallCompletion? = null,
     ) {
         val session = getOrCreateSession(conversationId)
         val previousJob = session.getJob()
@@ -622,7 +623,40 @@ class ChatService(
             try {
                 runCatching { previousJob?.join() }
 
-                val conversation = session.state.value
+                // Audio tags are call-only speech metadata. Preserve the primary text while
+                // removing the selected branch's tags before it returns to normal chat.
+                var conversation = session.state.value.let { current ->
+                    current.updateCurrentMessages(
+                        current.currentMessages.map(UIMessage::withoutVoiceCallAudioTagsForNormalContext)
+                    )
+                }
+                voiceCallCompletion?.let { completion ->
+                    val hasAiContent = conversation.currentMessages.any { message ->
+                        message.id.toString() in completion.messageIds &&
+                            message.role == MessageRole.ASSISTANT &&
+                            message.toText().isNotBlank()
+                    }
+                    conversation = conversation.copy(
+                        messageNodes = conversation.messageNodes.map { node ->
+                            node.copy(
+                                messages = node.messages.map { message ->
+                                    if (message.id.toString() in completion.messageIds) {
+                                        message.withVoiceCallRecord(
+                                            UIMessageAnnotation.VoiceCallRecord(
+                                                callId = completion.callId,
+                                                durationSeconds = completion.durationSeconds,
+                                                cardAnchor = hasAiContent && message.id.toString() == completion.cardAnchorMessageId,
+                                                audioSegments = completion.audioSegmentsByMessageId[message.id.toString()].orEmpty(),
+                                            )
+                                        )
+                                    } else {
+                                        message
+                                    }
+                                }
+                            )
+                        }
+                    )
+                }
                 if (toolCallId != null) {
                     val target = conversation.messageNodes.mapIndexedNotNull { nodeIndex, node ->
                         node.messages.mapIndexedNotNull { messageIndex, message ->
@@ -670,12 +704,10 @@ class ChatService(
                                 )
                             }
                         }
-                        saveConversation(
-                            conversationId,
-                            conversation.copy(messageNodes = updatedNodes),
-                        )
+                        conversation = conversation.copy(messageNodes = updatedNodes)
                     }
                 }
+                saveConversation(conversationId, conversation)
                 // Ending a call is a state update, not a new user turn. Do not
                 // start a post-hangup model completion: its output would be
                 // saved into the conversation and could pollute the next call's
@@ -776,6 +808,7 @@ class ChatService(
                 conversationContextSummary = conversation.compressedSummary,
                 conversationModeInjectionIds = conversation.modeInjectionIds,
                 conversationLorebookIds = conversation.lorebookIds,
+                runtimeStateSystemPrompt = buildVoiceCallRuntimeStatePrompt(requestMode),
                 extraSystemPrompt = listOfNotNull(
                     when (requestMode) {
                         ChatRequestMode.Normal -> null
@@ -1030,11 +1063,11 @@ class ChatService(
                 "failure=${requestFailureReason?.displayName ?: "none"}",
         )
 
-        val selectedTagIds = (selectionResult as? VoiceCallAudioTagSelectionResult.Selected)?.tagIds
+        val selectedAssignments = (selectionResult as? VoiceCallAudioTagSelectionResult.Selected)?.assignments
         return primaryMessages.mapIndexed { index, message ->
             if (index == primaryReplyIndex) {
-                message.withSelectedVoiceCallAudioTagIds(
-                    selectedTagIds = selectedTagIds,
+                message.withSelectedVoiceCallAudioTagAssignments(
+                    selectedAssignments = selectedAssignments,
                     format = format,
                     selectionFailureReason = requestFailureReason,
                 )

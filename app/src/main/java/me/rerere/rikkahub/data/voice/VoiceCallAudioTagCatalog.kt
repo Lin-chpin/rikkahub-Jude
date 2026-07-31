@@ -16,10 +16,20 @@ internal enum class VoiceCallAudioTag(
     val id: String,
     val word: String,
     val isCommon: Boolean = false,
+    val leadingInterjections: Set<String> = emptySet(),
 ) {
-    LAUGHS("LAUGHS", "laughs", isCommon = true),
+    LAUGHS(
+        "LAUGHS",
+        "laughs",
+        isCommon = true,
+        leadingInterjections = setOf("嘿嘿", "嘿嘿嘿", "哈哈", "哈哈哈", "嘻嘻", "嘻嘻嘻"),
+    ),
     CHUCKLE("CHUCKLE", "chuckle", isCommon = true),
-    COUGHS("COUGHS", "coughs"),
+    COUGHS(
+        "COUGHS",
+        "coughs",
+        leadingInterjections = setOf("咳", "咳咳"),
+    ),
     CLEAR_THROAT("CLEAR_THROAT", "clear-throat"),
     GROANS("GROANS", "groans"),
     BREATH("BREATH", "breath", isCommon = true),
@@ -28,13 +38,22 @@ internal enum class VoiceCallAudioTag(
     EXHALE("EXHALE", "exhale"),
     GASPS("GASPS", "gasps"),
     SNIFFS("SNIFFS", "sniffs"),
-    SIGHS("SIGHS", "sighs", isCommon = true),
+    SIGHS(
+        "SIGHS",
+        "sighs",
+        isCommon = true,
+        leadingInterjections = setOf("唉", "哎", "啊", "唉唉", "哎哎", "啊啊"),
+    ),
     SNORTS("SNORTS", "snorts"),
     BURPS("BURPS", "burps"),
     LIP_SMACKING("LIP_SMACKING", "lip-smacking"),
     HUMMING("HUMMING", "humming"),
     HISSING("HISSING", "hissing"),
-    EMM("EMM", "emm"),
+    EMM(
+        "EMM",
+        "emm",
+        leadingInterjections = setOf("嗯", "嗯嗯", "嗯哼", "呃", "emm"),
+    ),
     SNEEZES("SNEEZES", "sneezes");
 
     companion object {
@@ -52,21 +71,26 @@ internal enum class VoiceCallAudioTagFormat(
     private val openingDelimiter: String,
     private val closingDelimiter: String,
     val allowsNoTag: Boolean,
+    private val speechSeparator: String,
 ) {
     ELEVEN_LABS_V3(
         providerName = "ElevenLabs v3",
         openingDelimiter = "[",
         closingDelimiter = "]",
         allowsNoTag = false,
+        speechSeparator = " ",
     ),
     MINIMAX_SPEECH_2_8(
         providerName = "MiniMax Speech 2.8",
         openingDelimiter = "(",
         closingDelimiter = ")",
         allowsNoTag = true,
+        speechSeparator = "，",
     );
 
     fun render(word: String): String = "$openingDelimiter$word$closingDelimiter"
+
+    fun renderForSpeech(word: String): String = render(word) + speechSeparator
 }
 
 internal fun TTSProviderSetting.voiceCallAudioTagFormatOrNull(): VoiceCallAudioTagFormat? {

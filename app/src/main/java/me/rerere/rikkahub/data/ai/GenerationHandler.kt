@@ -85,6 +85,7 @@ class GenerationHandler(
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         conversationLorebookIds: Set<Uuid> = emptySet(),
         extraSystemPrompt: String? = null,
+        runtimeStateSystemPrompt: String? = null,
         maxTokensOverride: Int? = null,
     ): Flow<GenerationChunk> = flow {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
@@ -166,6 +167,7 @@ class GenerationHandler(
                     conversationModeInjectionIds = conversationModeInjectionIds,
                     conversationLorebookIds = conversationLorebookIds,
                     extraSystemPrompt = extraSystemPrompt,
+                    runtimeStateSystemPrompt = runtimeStateSystemPrompt,
                     maxTokensOverride = maxTokensOverride,
                 )
                 messages = messages.visualTransforms(
@@ -362,6 +364,7 @@ class GenerationHandler(
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         conversationLorebookIds: Set<Uuid> = emptySet(),
         extraSystemPrompt: String? = null,
+        runtimeStateSystemPrompt: String? = null,
         maxTokensOverride: Int? = null,
     ) {
         val internalMessages = buildList {
@@ -405,6 +408,11 @@ class GenerationHandler(
                 tools.forEach { tool ->
                     appendLine()
                     append(tool.systemPrompt(model, messages))
+                }
+                if (!runtimeStateSystemPrompt.isNullOrBlank()) {
+                    appendLine()
+                    appendLine()
+                    append(runtimeStateSystemPrompt)
                 }
             }
             if (system.isNotBlank()) add(UIMessage.system(prompt = system))

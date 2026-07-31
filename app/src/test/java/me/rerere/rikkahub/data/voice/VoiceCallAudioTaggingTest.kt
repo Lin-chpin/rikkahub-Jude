@@ -140,11 +140,51 @@ class VoiceCallAudioTaggingTest {
         )
 
         assertEquals(
-            "(laughs) 别这样说嘛。\n(chuckle) 你突然这么认真，我都不知道怎么接了。\n继续聊。",
+            "(laughs)，别这样说嘛。\n(chuckle)，你突然这么认真，我都不知道怎么接了。\n继续聊。",
             taggedReply.voiceCallSpeechTextOrPlainText(),
         )
         assertTrue(VoiceCallAudioTag.LAUGHS.isCommon)
         assertTrue(VoiceCallAudioTag.CHUCKLE.isCommon)
+    }
+
+    @Test
+    fun replacesMiniMaxLeadingInterjectionsInSpeechAndKeepsPrimaryReply() {
+        val primaryReply = assistantMessage("嘿嘿，我好开心。啊.....这样啊")
+
+        val taggedReply = primaryReply.withSelectedVoiceCallAudioTagIds(
+            selectedTagIds = listOf("LAUGHS", "SIGHS"),
+            format = VoiceCallAudioTagFormat.MINIMAX_SPEECH_2_8,
+        )
+
+        assertEquals("嘿嘿，我好开心。啊.....这样啊", taggedReply.toText())
+        assertEquals(
+            "(laughs)，我好开心。\n(sighs)，这样啊",
+            taggedReply.voiceCallSpeechTextOrPlainText(),
+        )
+        assertEquals(
+            "(laughs)，我好开心。\n(sighs)，这样啊",
+            taggedReply.voiceCallDisplayTextOrPlainText(),
+        )
+    }
+    @Test
+    fun appliesExactModelProvidedReplacementWithoutChangingPrimaryReply() {
+        val primaryReply = assistantMessage("\u554a\u554a\uff0c\u8fd9\u6837\u554a")
+
+        val taggedReply = primaryReply.withSelectedVoiceCallAudioTagAssignments(
+            selectedAssignments = listOf(
+                VoiceCallAudioTagAssignment(
+                    tagId = "SIGHS",
+                    replacementText = "\u554a\u554a",
+                )
+            ),
+            format = VoiceCallAudioTagFormat.MINIMAX_SPEECH_2_8,
+        )
+
+        assertEquals("\u554a\u554a\uff0c\u8fd9\u6837\u554a", taggedReply.toText())
+        assertEquals(
+            "(sighs)\uff0c\u8fd9\u6837\u554a",
+            taggedReply.voiceCallSpeechTextOrPlainText(),
+        )
     }
 
     @Test
@@ -159,6 +199,16 @@ class VoiceCallAudioTaggingTest {
         )
     }
 
+    @Test
+    fun preservesMiniMaxSpeechTwoPointSixModelAndGlobalEmotionSetting() {
+        val setting = TTSProviderSetting.MiniMax(
+            model = "speech-2.6-hd",
+            emotion = "calm",
+        )
+
+        assertEquals("speech-2.6-hd", setting.model)
+        assertEquals("calm", setting.emotion)
+    }
     @Test
     fun reportsInvalidToolArgumentsWhenTagIdCountDoesNotMatchClientSegments() {
         val primaryReply = assistantMessage("第一句。第二句？")
@@ -237,14 +287,22 @@ class VoiceCallAudioTaggingTest {
             VoiceCallAudioTag.entries.map { it.id } + NO_VOICE_CALL_AUDIO_TAG_ID,
             allowedIds,
         )
+        val assignmentProperties = schema.properties
+            .getValue("assignments")
+            .jsonObject
+            .getValue("items")
+            .jsonObject
+            .getValue("properties")
+            .jsonObject
+        assertTrue(assignmentProperties.containsKey("replacementText"))
 
         val selectedTagIds = validateVoiceCallAudioTagAssignments(
             arguments = Json.parseToJsonElement(
                 """
                 {
                   "assignments": [
-                    {"segmentIndex":0,"tagId":"LAUGHS"},
-                    {"segmentIndex":1,"tagId":"NONE"}
+                    {"segmentIndex":0,"tagId":"LAUGHS","replacementText":"\u563f\u563f"},
+                    {"segmentIndex":1,"tagId":"NONE","replacementText":""}
                   ]
                 }
                 """.trimIndent()

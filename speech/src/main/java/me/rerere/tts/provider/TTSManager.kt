@@ -43,7 +43,7 @@ class TTSManager(private val context: Context) {
             is TTSProviderSetting.SystemTTS -> systemProvider.generateSpeech(context, normalizedSetting, request)
             is TTSProviderSetting.MiniMax -> miniMaxProvider.generateSpeech(
                 context,
-                normalizedSetting.normalizeLegacyDefaultModel(),
+                normalizedSetting,
                 request
             )
             is TTSProviderSetting.Qwen -> qwenProvider.generateSpeech(context, normalizedSetting, request)
@@ -64,7 +64,7 @@ class TTSManager(private val context: Context) {
             is TTSProviderSetting.SystemTTS -> systemProvider.generateStreamingSpeech(context, normalizedSetting, request)
             is TTSProviderSetting.MiniMax -> miniMaxProvider.generateStreamingSpeech(
                 context,
-                normalizedSetting.normalizeLegacyDefaultModel(),
+                normalizedSetting,
                 request
             )
             is TTSProviderSetting.Qwen -> qwenProvider.generateStreamingSpeech(context, normalizedSetting, request)
