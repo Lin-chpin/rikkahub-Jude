@@ -379,7 +379,7 @@ class MomentsVM(
             messages = listOf(UIMessage.user(prompt)),
             conversationSystemPrompt = conversationSystemPrompt,
             conversationContextSummary = conversation.compressedSummary,
-            maxTokens = 180,
+            maxTokens = 360,
         ).trim()
         return text.takeIf { it.isNotBlank() }
             ?.let(CommentGenerationResult::Ready)

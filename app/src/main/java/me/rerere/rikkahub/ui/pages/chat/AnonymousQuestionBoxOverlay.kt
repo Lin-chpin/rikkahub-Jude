@@ -82,9 +82,9 @@ fun AnonymousQuestionBoxOverlay(
         vm.processDue(scopeId, assistant, conversation, conversationSystemPrompt)
         vm.markViewed(scopeId)
     }
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = true)) {
         Surface(Modifier.fillMaxSize(), color = questionBoxBackground) {
-            Column(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize().imePadding()) {
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -108,7 +108,7 @@ fun AnonymousQuestionBoxOverlay(
                 if (questions.isEmpty()) {
                     Text(stringResource(R.string.anonymous_question_box_empty), modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 80.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
-                    LazyColumn(Modifier.fillMaxWidth().weight(1f).imePadding(), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(12.dp)) {
+                    LazyColumn(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(12.dp)) {
                         items(questions, key = { it.question.id.toString() }) { entry -> AnonymousQuestionCard(entry, assistant, settings, vm) }
                     }
                 }

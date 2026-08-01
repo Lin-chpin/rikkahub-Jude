@@ -140,6 +140,12 @@ class TtsController(
             allChunks.addAll(remapped)
             queue.addAll(remapped)
         }
+
+        onAudioReady?.let { callback ->
+            newChunks.forEach { chunk ->
+                audioReadyCallbacks[chunk.id] = callback
+            }
+        }
         _totalChunks.update { queue.size }
         _error.update { null }
 
@@ -165,6 +171,7 @@ class TtsController(
         allChunks.clear()
         cache.values.forEach { it.cancel(CancellationException("Reset")) }
         cache.clear()
+        audioReadyCallbacks.clear()
         lastPrefetchedIndex = -1
         _isSpeaking.update { false }
         _currentChunk.update { 0 }
@@ -232,6 +239,7 @@ class TtsController(
         allChunks.clear()
         cache.values.forEach { it.cancel(CancellationException("Stopped")) }
         cache.clear()
+        audioReadyCallbacks.clear()
         lastPrefetchedIndex = -1
         _isSpeaking.update { false }
         _currentChunk.update { 0 }

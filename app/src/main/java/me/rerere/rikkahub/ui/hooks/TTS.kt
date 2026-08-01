@@ -13,6 +13,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import me.rerere.tts.model.PlaybackState
@@ -158,20 +159,36 @@ private class CustomTtsStateImpl(
     }
 
     override fun playCachedAudio(audioUri: String, format: String, sampleRate: Int?) {
-        scope.launch(Dispatchers.IO) {
-            runCatching {
-                val uri = Uri.parse(audioUri)
-                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                    ?: return@runCatching
-                controller.playCachedAudio(
+        Log.i(TAG, "Cached audio playback requested: uri=" + audioUri + ", format=" + format + ", sampleRate=" + sampleRate)
+        scope.launch {
+            val response = withContext(Dispatchers.IO) {
+                runCatching {
+                    val uri = Uri.parse(audioUri)
+                    Log.i(TAG, "Reading cached audio: scheme=" + uri.scheme + ", path=" + uri.path)
+                    val bytes = when (uri.scheme?.lowercase()) {
+                        "file" -> uri.path?.let { java.io.File(it).readBytes() }
+                        else -> context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    } ?: error("Cached audio input stream is unavailable")
+                    val audioFormat = AudioFormat.valueOf(format)
+                    Log.i(TAG, "Cached audio read succeeded: bytes=" + bytes.size + ", format=" + audioFormat + ", sampleRate=" + sampleRate)
                     TTSResponse(
                         audioData = bytes,
-                        format = AudioFormat.valueOf(format),
+                        format = audioFormat,
                         sampleRate = sampleRate,
                     )
-                )
+                }.onFailure { error ->
+                    Log.e(TAG, "Cached audio read failed: uri=" + audioUri, error)
+                }.getOrNull()
+            }
+            if (response == null) return@launch
+
+            runCatching {
+                Log.i(TAG, "Starting cached audio player")
+                // ExoPlayer is main-looper bound; only cached-file I/O runs on IO.
+                controller.playCachedAudio(response)
+                Log.i(TAG, "Cached audio player started")
             }.onFailure { error ->
-                Log.e(TAG, error.toString())
+                Log.e(TAG, "Cached audio player start failed", error)
             }
         }
     }

@@ -2,6 +2,7 @@ package me.rerere.tts.controller
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -37,6 +38,10 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 class AudioPlayer(context: Context) {
+    private companion object {
+        const val TAG = "AudioPlayer"
+    }
+
     private val player = ExoPlayer.Builder(context).build()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -61,6 +66,7 @@ class AudioPlayer(context: Context) {
         val bytes = if (response.format == AudioFormat.PCM) {
             pcmToWav(response.audioData, response.sampleRate ?: 24000)
         } else response.audioData
+        Log.i(TAG, "Preparing audio: bytes=" + bytes.size + ", format=" + response.format + ", sampleRate=" + response.sampleRate)
 
         val dataSourceFactory = DataSource.Factory { ByteArrayDataSource(bytes) }
         val mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory)
@@ -80,6 +86,7 @@ class AudioPlayer(context: Context) {
         mediaSource: androidx.media3.exoplayer.source.MediaSource,
         durationMs: Long?,
     ) = suspendCancellableCoroutine<Unit> { cont ->
+        Log.i(TAG, "Preparing ExoPlayer media source: durationMs=" + durationMs)
         player.setMediaSource(mediaSource)
         player.prepare()
         player.play()
@@ -109,6 +116,7 @@ class AudioPlayer(context: Context) {
                                 positionMs = player.currentPosition
                             )
                         }
+                        Log.i(TAG, "Audio playback ready: isPlaying=" + isPlaying + ", volume=" + player.volume + ", durationMs=" + duration)
                         if (isPlaying) startPositionUpdates() else stopPositionUpdates()
                     }
                     Player.STATE_ENDED -> {
@@ -120,6 +128,7 @@ class AudioPlayer(context: Context) {
                                 durationMs = if (player.duration > 0) player.duration else it.durationMs
                             )
                         }
+                        Log.i(TAG, "Audio playback ended")
                         player.removeListener(this)
                         if (cont.isActive) cont.resume(Unit)
                     }
@@ -131,6 +140,7 @@ class AudioPlayer(context: Context) {
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                Log.e(TAG, "Audio playback error: code=" + error.errorCode + ", message=" + error.message, error)
                 player.removeListener(this)
                 stopPositionUpdates()
                 _playbackState.update { it.copy(status = PlaybackStatus.Error, errorMessage = error.message) }

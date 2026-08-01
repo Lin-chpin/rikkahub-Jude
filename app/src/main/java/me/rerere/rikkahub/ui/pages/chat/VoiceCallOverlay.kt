@@ -1,5 +1,7 @@
 package me.rerere.rikkahub.ui.pages.chat
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import androidx.core.net.toUri
 import android.view.inputmethod.InputMethodManager
@@ -169,9 +171,8 @@ fun VoiceCallOverlay(
     var keyboardInput by remember { mutableStateOf("") }
     var submittedKeyboardInput by remember { mutableStateOf("") }
     var voiceCallResultReported by remember(initialVoiceCallToolCallId) { mutableStateOf(false) }
-    // Keep this dormant troubleshooting dialog code nearby. It was useful for
-    // diagnosing IME voice-input lifecycle issues and may be re-enabled later.
-    // var showVoiceCallFlowDialog by remember { mutableStateOf(true) }
+    var showVoiceCallFlowDialog by remember { mutableStateOf(false) }
+    val voiceCallFlowSteps = remember { mutableStateListOf<String>() }
     val callStartedAt = remember { System.currentTimeMillis() }
     val callId = remember { UUID.randomUUID().toString() }
     val callStartMessageIds = remember { conversation.currentMessages.map { it.id.toString() }.toSet() }
@@ -179,6 +180,17 @@ fun VoiceCallOverlay(
     var callElapsedMillis by remember { mutableStateOf(0L) }
     val callStartMessageCount = remember { conversation.currentMessages.size }
     var voiceRequestStartMessageCount by remember { mutableStateOf(conversation.currentMessages.size) }
+    val clipboardManager = remember(context) {
+        context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+    }
+
+    fun recordVoiceCallFlow(step: String) {
+        val elapsedMillis = (System.currentTimeMillis() - callStartedAt).coerceAtLeast(0L)
+        voiceCallFlowSteps += "[+" + elapsedMillis + "ms] " + step
+        if (voiceCallFlowSteps.size > 300) {
+            voiceCallFlowSteps.removeAt(0)
+        }
+    }
 
     val initialAssistantMessage = initialAssistantMessageId?.let { messageId ->
         conversation.currentMessages.firstOrNull {
@@ -244,6 +256,44 @@ fun VoiceCallOverlay(
     }
 
     LaunchedEffect(Unit) {
+        recordVoiceCallFlow(
+            "通话页打开 history=" + isHistory + ", ttsAvailable=" + ttsAvailable +
+                ", initialAssistant=" + (initialAssistantMessageId != null)
+        )
+        if (isHistory) {
+            val savedSegments = visibleMessages.flatMap { it.voiceCallRecord()?.audioSegments.orEmpty() }
+            recordVoiceCallFlow(
+                "打开通话记录 messages=" + visibleMessages.size +
+                    ", savedAudioSegments=" + savedSegments.size
+            )
+            savedSegments.forEachIndexed { index, segment ->
+                recordVoiceCallFlow(
+                    "历史音频[" + index + "] uri=" + segment.audioUri +
+                        ", format=" + segment.format + ", bytes=unknown"
+                )
+            }
+        }
+    }
+
+    LaunchedEffect(ttsAvailable) {
+        recordVoiceCallFlow("TTS可用状态=" + ttsAvailable)
+    }
+
+    LaunchedEffect(playbackState.status, playbackState.currentChunkIndex, playbackState.totalChunks) {
+        recordVoiceCallFlow(
+            "TTS播放状态 status=" + playbackState.status +
+                ", chunk=" + playbackState.currentChunkIndex + "/" + playbackState.totalChunks
+        )
+    }
+
+    LaunchedEffect(currentAssistantId, voiceReplyPending, loadingJob) {
+        recordVoiceCallFlow(
+            "回复状态 messageId=" + (currentAssistantId ?: "none") +
+                ", pending=" + voiceReplyPending + ", loading=" + (loadingJob != null)
+        )
+    }
+
+    LaunchedEffect(Unit) {
         if (isHistory) return@LaunchedEffect
         while (true) {
             callElapsedMillis = System.currentTimeMillis() - callStartedAt
@@ -252,6 +302,10 @@ fun VoiceCallOverlay(
     }
 
     fun hangUp(failureMessage: String? = null) {
+        recordVoiceCallFlow(
+            "挂断开始 failure=" + (failureMessage ?: "none") +
+                ", audioSegments=" + audioSegmentsByMessageId.values.sumOf { it.size }
+        )
         keyboardCaptureActive = false
         keyboardInput = ""
         submittedKeyboardInput = ""
@@ -274,6 +328,10 @@ fun VoiceCallOverlay(
                 messageIds = callMessages.map { it.id.toString() }.toSet(),
                 cardAnchorMessageId = aiMessages.firstOrNull()?.id?.toString(),
                 audioSegmentsByMessageId = audioSegmentsByMessageId.toMap(),
+            )
+            recordVoiceCallFlow(
+                "通话记录完成 messages=" + completion.messageIds.size +
+                    ", audioSegments=" + completion.audioSegmentsByMessageId.values.sumOf { it.size }
             )
             onVoiceCallClosed(failureMessage, completion)
         }
@@ -522,21 +580,45 @@ fun VoiceCallOverlay(
                 flushCalled = true,
                 chunked = false,
                 onAudioReady = { response ->
-                    val file = filesManager.saveManagedFromBytes(
-                        folder = FileFolders.UPLOAD,
-                        bytes = response.audioData,
-                        displayName = "voice-call-audio",
-                        mimeType = "audio/*",
+                    recordVoiceCallFlow(
+                        "收到TTS音频回调 messageId=" + messageId +
+                            ", bytes=" + response.audioData.size +
+                            ", format=" + response.format +
+                            ", sampleRate=" + response.sampleRate
                     )
-                    val audioSegment = VoiceCallAudioSegment(
-                        text = segment.text,
-                        audioUri = filesManager.getFile(file).toUri().toString(),
-                        format = response.format.name,
-                        sampleRate = response.sampleRate,
-                    )
-                    audioSegmentsByMessageId[messageId] =
-                        audioSegmentsByMessageId[messageId].orEmpty() + audioSegment
+                    runCatching {
+                        val file = filesManager.saveManagedFromBytes(
+                            folder = FileFolders.UPLOAD,
+                            bytes = response.audioData,
+                            displayName = "voice-call-audio",
+                            mimeType = "audio/*",
+                        )
+                        val audioUri = filesManager.getFile(file).toUri().toString()
+                        val audioSegment = VoiceCallAudioSegment(
+                            text = segment.text,
+                            audioUri = audioUri,
+                            format = response.format.name,
+                            sampleRate = response.sampleRate,
+                        )
+                        audioSegmentsByMessageId[messageId] =
+                            audioSegmentsByMessageId[messageId].orEmpty() + audioSegment
+                        recordVoiceCallFlow(
+                            "音频文件保存成功 messageId=" + messageId +
+                                ", uri=" + audioUri +
+                                ", segmentCount=" + audioSegmentsByMessageId[messageId].orEmpty().size
+                        )
+                    }.onFailure { error ->
+                        recordVoiceCallFlow(
+                            "音频文件保存失败 messageId=" + messageId +
+                                ", error=" + (error.message ?: error::class.simpleName)
+                        )
+                    }
                 }
+            )
+            recordVoiceCallFlow(
+                "调用tts.speak messageId=" + messageId +
+                    ", textLength=" + segment.text.length +
+                    ", text=" + segment.text.take(80)
             )
 
             val startState = withTimeoutOrNull(20_000) {
@@ -552,6 +634,7 @@ fun VoiceCallOverlay(
 
             when (startState?.status) {
                 PlaybackStatus.Playing -> {
+                    recordVoiceCallFlow("TTS开始播放 messageId=" + messageId)
                     if (spokenMessageId != messageId) return@LaunchedEffect
                     latestCurrentAssistantText.voiceCallDisplaySegments().forEach { displaySegment ->
                         if (spokenMessageId != messageId) return@LaunchedEffect
@@ -564,6 +647,7 @@ fun VoiceCallOverlay(
                 PlaybackStatus.Idle,
                 PlaybackStatus.Error,
                 null -> {
+                    recordVoiceCallFlow("TTS未进入播放态 status=" + (startState?.status ?: "timeout"))
                     visibleTextLength = maxOf(visibleTextLength, segment.endLength)
                 }
 
@@ -580,6 +664,7 @@ fun VoiceCallOverlay(
                         }
                         .first()
                 }
+                recordVoiceCallFlow("TTS播放等待结束 messageId=" + messageId + ", status=" + tts.playbackState.value.status)
                 if (spokenMessageId != messageId) return@LaunchedEffect
                 visibleTextLength = maxOf(visibleTextLength, segment.endLength)
             }
@@ -662,6 +747,12 @@ fun VoiceCallOverlay(
                     )
                 }
 
+                TextButton(
+                    onClick = { showVoiceCallFlowDialog = true },
+                    modifier = Modifier.align(Alignment.TopStart),
+                ) {
+                    Text("排查流程")
+                }
                 IconButton(
                     onClick = { if (isHistory) onDismiss() else hangUp() },
                     modifier = Modifier.align(Alignment.TopEnd)
@@ -836,10 +927,21 @@ fun VoiceCallOverlay(
         }
     }
 
-    // VoiceCallTroubleshootingDialog(
-    //     show = showVoiceCallFlowDialog,
-    //     onDismiss = { showVoiceCallFlowDialog = false },
-    // )
+    VoiceCallDiagnosticsDialog(
+        visible = showVoiceCallFlowDialog,
+        steps = voiceCallFlowSteps,
+        onCopy = {
+            clipboardManager?.setPrimaryClip(
+                ClipData.newPlainText(
+                    "语音通话排查流程",
+                    voiceCallFlowSteps.joinToString("\n"),
+                )
+            )
+            toaster.show("已复制排查流程")
+        },
+        onClear = { voiceCallFlowSteps.clear() },
+        onDismiss = { showVoiceCallFlowDialog = false },
+    )
 }
 
 /*
@@ -1120,8 +1222,36 @@ private fun String.splitVoiceCallDisplayItems(
     asVoice: Boolean,
     audioSegments: List<VoiceCallAudioSegment> = emptyList(),
 ): List<VoiceCallDisplayItem> {
-    return voiceCallDisplaySegments()
-        .map { segment -> segment.text.toVoiceCallDisplayItem(asVoice, audioSegments.firstOrNull { it.text == segment.text }) }
+    val displaySegments = voiceCallDisplaySegments()
+    val usedAudioSegmentIndexes = mutableSetOf<Int>()
+
+    // The normal-chat cleanup removes voice-call tag metadata after hang-up, while
+    // the saved audio segment still carries the exact text sent to TTS. Match by
+    // tag-stripped text before using positional compatibility for equal-sized lists.
+    return displaySegments.mapIndexed { displayIndex, segment ->
+        val audioSegmentIndex = audioSegments.indices.firstOrNull { audioIndex ->
+            audioIndex !in usedAudioSegmentIndexes &&
+                audioSegments[audioIndex].text.matchesVoiceCallDisplayText(segment.text)
+        } ?: when {
+            displayIndex == 0 && audioSegments.size == 1 -> 0
+            audioSegments.size == displaySegments.size && displayIndex !in usedAudioSegmentIndexes -> displayIndex
+            else -> null
+        }
+        val audioSegment = audioSegmentIndex?.let { index ->
+            usedAudioSegmentIndexes += index
+            audioSegments[index]
+        }
+        segment.text.toVoiceCallDisplayItem(asVoice, audioSegment)
+    }
+}
+
+private val voiceCallAudioAnnotationPrefixRegex =
+    Regex("""^\s*(?:\[[^\]\r\n]{1,80}]|\([^\)\r\n]{1,80}\))\s*""")
+
+private fun String.matchesVoiceCallDisplayText(displayText: String): Boolean {
+    return this == displayText ||
+        replace(voiceCallAudioAnnotationPrefixRegex, "").trim() ==
+        displayText.replace(voiceCallAudioAnnotationPrefixRegex, "").trim()
 }
 
 private fun String.voiceCallDisplaySegments(): List<VoiceCallSpeechSegment> {
