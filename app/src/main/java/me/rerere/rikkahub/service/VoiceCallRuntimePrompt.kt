@@ -59,13 +59,24 @@ internal fun buildVoiceCallRuntimeContext(state: VoiceCallRuntimeState): VoiceCa
     }
 }
 
-internal fun UIMessage.withVoiceCallEndedEventForRequest(): UIMessage {
+internal fun UIMessage.withVoiceCallRuntimeEventForRequest(
+    state: VoiceCallRuntimeState,
+): UIMessage {
     if (role != MessageRole.USER) return this
 
+    val eventDescription = when (state) {
+        VoiceCallRuntimeState.ACTIVE ->
+            "The voice call is connected. The following is the user's first spoken message after connection, regardless of who initiated the call."
+
+        VoiceCallRuntimeState.ENDED ->
+            "The voice call has ended. The following is the user's first normal text message after hangup."
+
+        VoiceCallRuntimeState.INACTIVE -> return this
+    }
     val eventPrefix = """
         [VOICE_CALL_RUNTIME_EVENT]
-        state=ENDED
-        The voice call has ended. The following is the user's first normal text message after hangup.
+        state=${state.name}
+        $eventDescription
 
         [USER_MESSAGE]
     """.trimIndent()

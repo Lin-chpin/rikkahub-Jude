@@ -35,7 +35,7 @@ class VoiceCallRuntimePromptTest {
     fun `ended state decorates the first post-hangup user message only for request context`() {
         val context = buildVoiceCallRuntimeContext(VoiceCallRuntimeState.ENDED)
         val originalMessage = UIMessage.user("Are you still there?")
-        val requestMessage = originalMessage.withVoiceCallEndedEventForRequest()
+        val requestMessage = originalMessage.withVoiceCallRuntimeEventForRequest(VoiceCallRuntimeState.ENDED)
 
         assertTrue(context.systemPrompt.contains("state=ENDED"))
         assertTrue(context.systemPrompt.contains("first normal text message after hangup"))
@@ -44,6 +44,22 @@ class VoiceCallRuntimePromptTest {
         assertTrue(requestMessage.toText().contains("state=ENDED"))
         assertTrue(requestMessage.toText().contains("[USER_MESSAGE]"))
         assertTrue(requestMessage.toText().endsWith("Are you still there?"))
+    }
+
+    @Test
+    fun `active event decorates only the provider-facing first user message`() {
+        val originalMessage = UIMessage.user("Can you hear me?")
+        val requestMessage = originalMessage.withVoiceCallRuntimeEventForRequest(VoiceCallRuntimeState.ACTIVE)
+
+        assertEquals("Can you hear me?", originalMessage.toText())
+        assertTrue(requestMessage.toText().contains("state=ACTIVE"))
+        assertTrue(requestMessage.toText().contains("first spoken message after connection"))
+        assertTrue(requestMessage.toText().contains("regardless of who initiated the call"))
+        assertTrue(requestMessage.toText().endsWith("Can you hear me?"))
+        assertEquals(
+            originalMessage,
+            originalMessage.withVoiceCallRuntimeEventForRequest(VoiceCallRuntimeState.INACTIVE),
+        )
     }
 
     @Test

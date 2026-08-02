@@ -193,11 +193,18 @@ class ChatVM(
         content: List<UIMessagePart>,
         answer: Boolean = true,
         requestMode: ChatRequestMode = ChatRequestMode.Normal,
+        includeVoiceCallConnectedEvent: Boolean = false,
     ) {
         if (content.isEmptyInputMessage()) return
         analytics.logEvent("ai_send_message", null)
 
-        chatService.sendMessage(_conversationId, content, answer, requestMode)
+        chatService.sendMessage(
+            conversationId = _conversationId,
+            content = content,
+            answer = answer,
+            requestMode = requestMode,
+            includeVoiceCallConnectedEvent = includeVoiceCallConnectedEvent,
+        )
     }
 
     fun handleMessageEdit(parts: List<UIMessagePart>, messageId: Uuid) {

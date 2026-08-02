@@ -163,6 +163,7 @@ fun VoiceCallOverlay(
     val voiceCallFlowSteps = remember { mutableStateListOf<String>() }
     val callStartedAt = remember { System.currentTimeMillis() }
     val callId = remember { UUID.randomUUID().toString() }
+    var hasSubmittedUserMessage by remember(callId) { mutableStateOf(false) }
     val callStartMessageIds = remember { conversation.currentMessages.map { it.id.toString() }.toSet() }
     var callElapsedMillis by remember { mutableStateOf(0L) }
     val callStartMessageCount = remember { conversation.currentMessages.size }
@@ -370,10 +371,13 @@ fun VoiceCallOverlay(
         voiceRequestStartMessageCount = conversation.currentMessages.size
         speechPlayback.beginReply()
         submittedKeyboardInput = contentText
+        val includeConnectedEvent = !hasSubmittedUserMessage
         vm.handleMessageSend(
             content = listOf(UIMessagePart.Text(contentText)),
             requestMode = ChatRequestMode.VoiceCall,
+            includeVoiceCallConnectedEvent = includeConnectedEvent,
         )
+        hasSubmittedUserMessage = true
         onMessageSubmitted()
         return true
     }

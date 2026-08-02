@@ -396,6 +396,7 @@ class ChatService(
         content: List<UIMessagePart>,
         answer: Boolean = true,
         requestMode: ChatRequestMode = ChatRequestMode.Normal,
+        includeVoiceCallConnectedEvent: Boolean = false,
     ) {
         if (content.isEmptyInputMessage()) return
 
@@ -433,14 +434,23 @@ class ChatService(
                         conversationId = conversationId,
                         conversation = getConversationFlow(conversationId).value
                     )
+                    val voiceCallRuntimeState = if (endedEventConsumption?.shouldNotifyModel == true) {
+                        VoiceCallRuntimeState.ENDED
+                    } else {
+                        requestMode.defaultVoiceCallRuntimeState()
+                    }
+                    val voiceCallUserEventState = when {
+                        endedEventConsumption?.shouldNotifyModel == true -> VoiceCallRuntimeState.ENDED
+                        includeVoiceCallConnectedEvent && requestMode == ChatRequestMode.VoiceCall ->
+                            VoiceCallRuntimeState.ACTIVE
+
+                        else -> null
+                    }
                     handleMessageComplete(
                         conversationId = conversationId,
                         requestMode = requestMode,
-                        voiceCallRuntimeState = if (endedEventConsumption?.shouldNotifyModel == true) {
-                            VoiceCallRuntimeState.ENDED
-                        } else {
-                            requestMode.defaultVoiceCallRuntimeState()
-                        },
+                        voiceCallRuntimeState = voiceCallRuntimeState,
+                        voiceCallUserEventState = voiceCallUserEventState,
                     )
                 }
 
@@ -746,6 +756,7 @@ class ChatService(
         messageRange: ClosedRange<Int>? = null,
         requestMode: ChatRequestMode = ChatRequestMode.Normal,
         voiceCallRuntimeState: VoiceCallRuntimeState = requestMode.defaultVoiceCallRuntimeState(),
+        voiceCallUserEventState: VoiceCallRuntimeState? = null,
         additionalSystemPrompt: String? = null,
         allowVoiceCallAudioTags: Boolean = true,
     ) {
@@ -792,11 +803,11 @@ class ChatService(
                     ChatRequestMode.VoiceCall -> messages
                 }
             }
-            val transientLastContextMessage = generationMessages.lastOrNull()
-                ?.takeIf {
-                    voiceCallRuntimeState == VoiceCallRuntimeState.ENDED && it.role == MessageRole.USER
-                }
-                ?.withVoiceCallEndedEventForRequest()
+            val transientLastContextMessage = voiceCallUserEventState?.let { eventState ->
+                generationMessages.lastOrNull()
+                    ?.takeIf { it.role == MessageRole.USER }
+                    ?.withVoiceCallRuntimeEventForRequest(eventState)
+            }
             val voiceCallToolEnabled = LocalToolOption.VoiceCall in assistant.localTools &&
                 voiceCallRuntimeState == VoiceCallRuntimeState.INACTIVE
             val localToolOptions = assistant.localTools.filterNot {
