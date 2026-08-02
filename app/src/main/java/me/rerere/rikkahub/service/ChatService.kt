@@ -632,40 +632,47 @@ class ChatService(
                     )
                 }
                 voiceCallCompletion?.let { completion ->
-                    conversation = conversation.copy(
-                        messageNodes = conversation.messageNodes.map { node ->
-                            node.copy(
-                                messages = node.messages.map { message ->
-                                    if (message.id.toString() in completion.messageIds) {
-                                        message.withVoiceCallRecord(
-                                            UIMessageAnnotation.VoiceCallRecord(
-                                                callId = completion.callId,
-                                                durationSeconds = completion.durationSeconds,
-                                                audioSegments = completion.audioSegmentsByMessageId[message.id.toString()].orEmpty(),
+                    val hasAiContent = conversation.currentMessages.any { message ->
+                        message.id.toString() in completion.messageIds &&
+                            message.role == MessageRole.ASSISTANT &&
+                            message.toText().isNotBlank()
+                    }
+                    if (hasAiContent) {
+                        conversation = conversation.copy(
+                            messageNodes = conversation.messageNodes.map { node ->
+                                node.copy(
+                                    messages = node.messages.map { message ->
+                                        if (message.id.toString() in completion.messageIds) {
+                                            message.withVoiceCallRecord(
+                                                UIMessageAnnotation.VoiceCallRecord(
+                                                    callId = completion.callId,
+                                                    durationSeconds = completion.durationSeconds,
+                                                    audioSegments = completion.audioSegmentsByMessageId[message.id.toString()].orEmpty(),
+                                                )
                                             )
-                                        )
-                                    } else {
-                                        message
+                                        } else {
+                                            message
+                                        }
                                     }
-                                }
-                            )
-                        }
-                    )
-                    val recordNode = UIMessage(
-                        role = MessageRole.ASSISTANT,
-                        parts = emptyList(),
-                        annotations = listOf(
-                            UIMessageAnnotation.VoiceCallRecord(
-                                callId = completion.callId,
-                                durationSeconds = completion.durationSeconds,
-                                cardAnchor = true,
-                                standalone = true,
-                            )
-                        ),
-                    ).toMessageNode()
-                    conversation = conversation.copy(
-                        messageNodes = conversation.messageNodes + recordNode
-                    )
+                                )
+                            }
+                        )
+                        val recordNode = UIMessage(
+                            role = MessageRole.ASSISTANT,
+                            parts = emptyList(),
+                            annotations = listOf(
+                                UIMessageAnnotation.VoiceCallRecord(
+                                    callId = completion.callId,
+                                    durationSeconds = completion.durationSeconds,
+                                    cardAnchor = true,
+                                    standalone = true,
+                                )
+                            ),
+                        ).toMessageNode()
+                        conversation = conversation.copy(
+                            messageNodes = conversation.messageNodes + recordNode
+                        )
+                    }
                 }
                 if (toolCallId != null) {
                     val target = conversation.messageNodes.mapIndexedNotNull { nodeIndex, node ->

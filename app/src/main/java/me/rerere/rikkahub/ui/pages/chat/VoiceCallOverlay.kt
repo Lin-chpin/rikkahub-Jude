@@ -229,6 +229,7 @@ fun VoiceCallOverlay(
     val pendingUserInputText = keyboardInput.trim()
     val pendingBubbleText = pendingUserInputText.ifBlank { submittedKeyboardInput }
     val latestCurrentAssistantText by rememberUpdatedState(currentAssistantText)
+    val latestCurrentAssistantSpeechText by rememberUpdatedState(currentAssistantSpeechText)
     val latestLoadingJob by rememberUpdatedState(loadingJob)
     val ttsPlaybackActive = playbackState.status == PlaybackStatus.Playing ||
         playbackState.status == PlaybackStatus.Buffering ||
@@ -588,9 +589,13 @@ fun VoiceCallOverlay(
             }
 
             val ttsText = if (useWholeReplyTts) {
-                currentAssistantSpeechText.sanitizeVoiceCallTextForSpeech()
+                latestCurrentAssistantSpeechText.sanitizeVoiceCallTextForSpeech()
             } else {
                 segment.text.sanitizeVoiceCallTextForSpeech()
+            }
+            if (ttsText.isBlank()) {
+                delay(60)
+                continue
             }
             tts.speak(
                 text = ttsText,
