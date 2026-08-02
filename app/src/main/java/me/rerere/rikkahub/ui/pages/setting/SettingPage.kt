@@ -48,7 +48,6 @@ import me.rerere.hugeicons.stroke.Brain02
 import me.rerere.hugeicons.stroke.Clapping01
 import me.rerere.hugeicons.stroke.Cloud
 import me.rerere.hugeicons.stroke.Database02
-import me.rerere.hugeicons.stroke.Developer
 import me.rerere.hugeicons.stroke.GlobalSearch
 import me.rerere.hugeicons.stroke.ImageUpload
 import me.rerere.hugeicons.stroke.InLove
@@ -124,17 +123,6 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
                     BackButton()
                 },
                 scrollBehavior = scrollBehavior,
-                actions = {
-                    if(settings.developerMode) {
-                        IconButton(
-                            onClick = {
-                                navController.navigate(Screen.Developer)
-                            }
-                        ) {
-                            Icon(HugeIcons.Developer, "Developer")
-                        }
-                    }
-                },
                 colors = CustomColors.topBarColors
             )
         },
