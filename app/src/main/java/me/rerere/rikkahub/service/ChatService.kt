@@ -91,12 +91,14 @@ import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.voice.VOICE_CALL_UNAVAILABLE_MESSAGE
 import me.rerere.rikkahub.data.voice.VoiceCallCompletion
 import me.rerere.rikkahub.data.voice.isStandaloneVoiceCallRecord
-import me.rerere.rikkahub.data.voice.withVoiceCallRecord
+import me.rerere.rikkahub.data.voice.voiceCallRecord
 import me.rerere.rikkahub.data.voice.VoiceCallAudioTagFormat
 import me.rerere.rikkahub.data.voice.VoiceCallAudioTagSelectionResult
 import me.rerere.rikkahub.data.voice.VoiceCallTaggingFallbackReason
+import me.rerere.rikkahub.data.voice.consumePendingVoiceCallEndedEvent
 import me.rerere.rikkahub.data.voice.createVoiceCallAudioTagSelectionTool
 import me.rerere.rikkahub.data.voice.splitVoiceCallAudioTaggingSegments
+import me.rerere.rikkahub.data.voice.selectVoiceCallAudioTaggingSegmentIndexes
 import me.rerere.rikkahub.data.voice.voiceCallAudioTagFormatOrNull
 import me.rerere.rikkahub.data.voice.withSelectedVoiceCallAudioTagAssignments
 import me.rerere.rikkahub.data.voice.withoutVoiceCallAudioTagsForNormalContext
@@ -153,7 +155,7 @@ private val VOICE_CALL_ACTIVE_TOOL_STATUS = """
 """.trimIndent()
 
 private val VOICE_CALL_ENDED_TOOL_STATUS = """
-    Voice-call state: ENDED. The call has been disconnected. Do not generate a follow-up reply for this state and do not output any audio or emotion tags in later non-call replies.
+    Voice-call state: ENDED. The call has been disconnected. Do not output any audio or emotion tags in later non-call replies.
     Audio tags may be used again only after a new call is connected and its tool result reports ACTIVE.
 """.trimIndent()
 
@@ -403,14 +405,22 @@ class ChatService(
         val job = appScope.launch {
             try {
                 val currentConversation = session.state.value
+                val endedEventConsumption = if (
+                    answer && requestMode == ChatRequestMode.Normal
+                ) {
+                    currentConversation.consumePendingVoiceCallEndedEvent()
+                } else {
+                    null
+                }
+                val conversationBeforeSend = endedEventConsumption?.conversation ?: currentConversation
                 val settings = settingsStore.settingsFlow.first()
-                val assistant = settings.getAssistantById(currentConversation.assistantId)
+                val assistant = settings.getAssistantById(conversationBeforeSend.assistantId)
                     ?: settings.getCurrentAssistant()
                 val processedContent = preprocessUserInputParts(content, assistant)
 
                 // 添加消息到列表
-                val newConversation = currentConversation.copy(
-                    messageNodes = currentConversation.messageNodes + UIMessage(
+                val newConversation = conversationBeforeSend.copy(
+                    messageNodes = conversationBeforeSend.messageNodes + UIMessage(
                         role = MessageRole.USER,
                         parts = processedContent,
                     ).toMessageNode(),
@@ -423,7 +433,15 @@ class ChatService(
                         conversationId = conversationId,
                         conversation = getConversationFlow(conversationId).value
                     )
-                    handleMessageComplete(conversationId, requestMode = requestMode)
+                    handleMessageComplete(
+                        conversationId = conversationId,
+                        requestMode = requestMode,
+                        voiceCallRuntimeState = if (endedEventConsumption?.shouldNotifyModel == true) {
+                            VoiceCallRuntimeState.ENDED
+                        } else {
+                            requestMode.defaultVoiceCallRuntimeState()
+                        },
+                    )
                 }
 
                 _generationDoneFlow.emit(
@@ -631,32 +649,18 @@ class ChatService(
                         current.currentMessages.map(UIMessage::withoutVoiceCallAudioTagsForNormalContext)
                     )
                 }
-                voiceCallCompletion?.let { completion ->
-                    val hasAiContent = conversation.currentMessages.any { message ->
+                val completedCallMessages = voiceCallCompletion?.let { completion ->
+                    conversation.currentMessages.filter { message ->
                         message.id.toString() in completion.messageIds &&
-                            message.role == MessageRole.ASSISTANT &&
-                            message.toText().isNotBlank()
+                            (message.role == MessageRole.USER || message.role == MessageRole.ASSISTANT)
+                    }
+                }.orEmpty()
+                val hasVoiceCallConversation = completedCallMessages.any { it.toText().isNotBlank() }
+                voiceCallCompletion?.let { completion ->
+                    val hasAiContent = completedCallMessages.any { message ->
+                        message.role == MessageRole.ASSISTANT && message.toText().isNotBlank()
                     }
                     if (hasAiContent) {
-                        conversation = conversation.copy(
-                            messageNodes = conversation.messageNodes.map { node ->
-                                node.copy(
-                                    messages = node.messages.map { message ->
-                                        if (message.id.toString() in completion.messageIds) {
-                                            message.withVoiceCallRecord(
-                                                UIMessageAnnotation.VoiceCallRecord(
-                                                    callId = completion.callId,
-                                                    durationSeconds = completion.durationSeconds,
-                                                    audioSegments = completion.audioSegmentsByMessageId[message.id.toString()].orEmpty(),
-                                                )
-                                            )
-                                        } else {
-                                            message
-                                        }
-                                    }
-                                )
-                            }
-                        )
                         val recordNode = UIMessage(
                             role = MessageRole.ASSISTANT,
                             parts = emptyList(),
@@ -666,6 +670,9 @@ class ChatService(
                                     durationSeconds = completion.durationSeconds,
                                     cardAnchor = true,
                                     standalone = true,
+                                    messageIds = completion.messageIds,
+                                    audioSegmentsByMessageId = completion.audioSegmentsByMessageId,
+                                    pendingEndedEvent = hasVoiceCallConversation,
                                 )
                             ),
                         ).toMessageNode()
@@ -725,10 +732,6 @@ class ChatService(
                     }
                 }
                 saveConversation(conversationId, conversation)
-                // Ending a call is a state update, not a new user turn. Do not
-                // start a post-hangup model completion: its output would be
-                // saved into the conversation and could pollute the next call's
-                // context with non-voice or non-English labels.
             } catch (e: Exception) {
                 addError(e, conversationId, title = context.getString(R.string.error_title_voice_call))
             }
@@ -742,6 +745,7 @@ class ChatService(
         conversationId: Uuid,
         messageRange: ClosedRange<Int>? = null,
         requestMode: ChatRequestMode = ChatRequestMode.Normal,
+        voiceCallRuntimeState: VoiceCallRuntimeState = requestMode.defaultVoiceCallRuntimeState(),
         additionalSystemPrompt: String? = null,
         allowVoiceCallAudioTags: Boolean = true,
     ) {
@@ -776,6 +780,7 @@ class ChatService(
             // check invalid messages
             checkInvalidMessages(conversationId)
             val conversation = getConversationFlow(conversationId).value
+            val voiceCallRuntimeContext = buildVoiceCallRuntimeContext(voiceCallRuntimeState)
 
             // start generating
             val session = getOrCreateSession(conversationId)
@@ -787,10 +792,16 @@ class ChatService(
                     ChatRequestMode.VoiceCall -> messages
                 }
             }
+            val transientLastContextMessage = generationMessages.lastOrNull()
+                ?.takeIf {
+                    voiceCallRuntimeState == VoiceCallRuntimeState.ENDED && it.role == MessageRole.USER
+                }
+                ?.withVoiceCallEndedEventForRequest()
             val voiceCallToolEnabled = LocalToolOption.VoiceCall in assistant.localTools &&
-                requestMode == ChatRequestMode.Normal
+                voiceCallRuntimeState == VoiceCallRuntimeState.INACTIVE
             val localToolOptions = assistant.localTools.filterNot {
-                requestMode == ChatRequestMode.VoiceCall && it == LocalToolOption.VoiceCall
+                voiceCallRuntimeState != VoiceCallRuntimeState.INACTIVE &&
+                    it == LocalToolOption.VoiceCall
             }
             val voiceCallConfigured = settings.getSelectedTTSProvider() != null
             val voiceCallAudioTagFormat = settings.getSelectedTTSProvider()
@@ -798,7 +809,7 @@ class ChatService(
                 ?.takeIf {
                     allowVoiceCallAudioTags && requestMode == ChatRequestMode.VoiceCall
                 }
-            val proactiveVoiceCallEnabled = requestMode == ChatRequestMode.Normal && voiceCallToolEnabled
+            val proactiveVoiceCallEnabled = voiceCallToolEnabled
             val momentScopeId = conversation.momentScopeId(assistant)
             val anonymousQuestionScopeId = conversation.personaScopeId(assistant)
             val anonymousQuestionContextPrompt = when {
@@ -825,7 +836,8 @@ class ChatService(
                 conversationContextSummary = conversation.compressedSummary,
                 conversationModeInjectionIds = conversation.modeInjectionIds,
                 conversationLorebookIds = conversation.lorebookIds,
-                runtimeStateSystemPrompt = buildVoiceCallRuntimeStatePrompt(requestMode),
+                runtimeStateSystemPrompt = voiceCallRuntimeContext.systemPrompt,
+                transientLastContextMessage = transientLastContextMessage,
                 extraSystemPrompt = listOfNotNull(
                     when (requestMode) {
                         ChatRequestMode.Normal -> null
@@ -1000,7 +1012,15 @@ class ChatService(
 
         val primaryReply = primaryMessages[primaryReplyIndex]
         val primaryReplyText = primaryReply.toText().trim()
-        val taggingSegments = splitVoiceCallAudioTaggingSegments(primaryReplyText)
+        val originalSegments = splitVoiceCallAudioTaggingSegments(primaryReplyText)
+        val taggingSegmentIndexes = selectVoiceCallAudioTaggingSegmentIndexes(
+            segments = originalSegments,
+            englishOnly = settings.displaySetting.ttsEnglishOnly,
+        )
+        if (taggingSegmentIndexes.isEmpty()) return primaryMessages
+        val taggingSegments = taggingSegmentIndexes.map(originalSegments::get)
+        val filteredTaggingSegmentIndexes = taggingSegmentIndexes
+            .takeIf { settings.displaySetting.ttsEnglishOnly }
         val taggingContext = listOf(
             UIMessage.user(
                 buildVoiceCallAudioTaggingRequest(taggingSegments)
@@ -1085,6 +1105,7 @@ class ChatService(
             if (index == primaryReplyIndex) {
                 message.withSelectedVoiceCallAudioTagAssignments(
                     selectedAssignments = selectedAssignments,
+                    taggingSegmentIndexes = filteredTaggingSegmentIndexes,
                     format = format,
                     selectionFailureReason = requestFailureReason,
                 )
@@ -1951,6 +1972,55 @@ class ChatService(
         }
 
         saveConversation(conversationId, currentConversation.copy(messageNodes = updatedNodes))
+    }
+
+    suspend fun deleteVoiceCallRecord(
+        conversationId: Uuid,
+        callId: String,
+    ) {
+        val conversation = getConversationFlow(conversationId).value
+        val recordMessages = conversation.messageNodes
+            .flatMap { it.messages }
+            .mapNotNull { message ->
+                message.voiceCallRecord()
+                    ?.takeIf { it.callId == callId }
+                    ?.let { record -> message to record }
+            }
+        if (recordMessages.isEmpty()) return
+
+        val linkedMessageIds = buildSet {
+            recordMessages.forEach { (message, record) ->
+                addAll(record.messageIds)
+                if (!record.standalone) add(message.id.toString())
+            }
+        }
+        val audioUris = recordMessages
+            .flatMap { (_, record) ->
+                record.audioSegments + record.audioSegmentsByMessageId.values.flatten()
+            }
+            .map { it.audioUri }
+            .distinct()
+            .map(String::toUri)
+
+        val updatedNodes = conversation.messageNodes.mapNotNull { node ->
+            val remainingMessages = node.messages.filterNot { message ->
+                message.id.toString() in linkedMessageIds ||
+                    message.voiceCallRecord()?.callId == callId
+            }
+            if (remainingMessages.isEmpty()) {
+                null
+            } else {
+                node.copy(
+                    messages = remainingMessages,
+                    selectIndex = node.selectIndex.coerceAtMost(remainingMessages.lastIndex),
+                )
+            }
+        }
+        saveConversation(
+            conversationId,
+            conversation.copy(messageNodes = updatedNodes),
+        )
+        filesManager.deleteChatFiles(audioUris)
     }
 
     suspend fun deleteMessage(

@@ -8,6 +8,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -137,10 +138,12 @@ fun ChatMessage(
     if (voiceCallRecord != null) {
         if (voiceCallRecord.cardAnchor) {
             Surface(
-                onClick = { onOpenVoiceCallRecord?.invoke(voiceCallRecord.callId) },
                 shape = RoundedCornerShape(14.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                modifier = modifier.fillMaxWidth(),
+                modifier = modifier.combinedClickable(
+                    onClick = { onOpenVoiceCallRecord?.invoke(voiceCallRecord.callId) },
+                    onLongClick = onDelete,
+                ),
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
@@ -148,7 +151,7 @@ fun ChatMessage(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Icon(HugeIcons.Voice, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Text("通话记录", modifier = Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+                    Text("通话记录", style = MaterialTheme.typography.labelLarge)
                     Text(formatVoiceCallDuration(voiceCallRecord.durationSeconds), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }

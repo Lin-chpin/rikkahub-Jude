@@ -79,7 +79,9 @@ import me.rerere.rikkahub.data.model.momentPersonaName
 import me.rerere.rikkahub.data.model.momentScopeId
 import me.rerere.rikkahub.data.model.personaScopeId
 import me.rerere.rikkahub.service.ChatError
+import me.rerere.rikkahub.data.voice.voiceCallRecord
 import me.rerere.rikkahub.ui.components.ai.ChatInput
+import me.rerere.rikkahub.ui.components.ui.RikkaConfirmDialog
 import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.context.Navigator
@@ -276,6 +278,7 @@ private fun ChatPageContent(
     var initialVoiceCallAssistantMessageId by rememberSaveable(conversation.id) { mutableStateOf<String?>(null) }
     var initialVoiceCallToolCallId by rememberSaveable(conversation.id) { mutableStateOf<String?>(null) }
     var handledIncomingVoiceCallId by rememberSaveable(conversation.id) { mutableStateOf<String?>(null) }
+    var pendingVoiceCallDeleteId by rememberSaveable(conversation.id) { mutableStateOf<String?>(null) }
     var momentsVisible by rememberSaveable(conversation.id) { mutableStateOf(false) }
     var anonymousQuestionBoxVisible by rememberSaveable(conversation.id) { mutableStateOf(false) }
     val assistant = setting.getAssistantById(conversation.assistantId) ?: setting.getCurrentAssistant()
@@ -470,7 +473,7 @@ private fun ChatPageContent(
         ) { innerPadding ->
             ChatList(
                 innerPadding = innerPadding,
-                conversation = conversation,
+                conversation = conversation.forNormalChatDisplay(),
                 state = chatListState,
                 loading = loadingJob != null,
                 processingStatus = processingStatus,
@@ -499,7 +502,12 @@ private fun ChatPageContent(
                     if (loadingJob != null) {
                         vm.showDeleteBlockedWhileGeneratingError()
                     } else {
-                        vm.deleteMessage(it)
+                        val record = it.voiceCallRecord()
+                        if (record?.standalone == true) {
+                            pendingVoiceCallDeleteId = record.callId
+                        } else {
+                            vm.deleteMessage(it)
+                        }
                     }
                 },
                 onUpdateMessage = { newNode ->
@@ -636,6 +644,18 @@ private fun ChatPageContent(
             onDismiss = { anonymousQuestionBoxVisible = false },
         )
     }
+    RikkaConfirmDialog(
+        show = pendingVoiceCallDeleteId != null,
+        title = "是否删除",
+        confirmText = stringResource(R.string.delete),
+        dismissText = stringResource(R.string.cancel),
+        onConfirm = {
+            pendingVoiceCallDeleteId?.let(vm::deleteVoiceCallRecord)
+            pendingVoiceCallDeleteId = null
+        },
+        onDismiss = { pendingVoiceCallDeleteId = null },
+        text = { Text("删除后将同时删除这次通话的原始对话和音频，无法撤销。") },
+    )
 }
 
 @Composable

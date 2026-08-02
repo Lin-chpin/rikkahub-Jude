@@ -388,6 +388,67 @@ class VoiceCallAudioTaggingTest {
         assertEquals("What does [quietly] mean?", normalContext.toText())
     }
 
+    @Test
+    fun englishOnlyTaggingSkipsChineseAndMixedSegments() {
+        val segments = listOf(
+            "你好。",
+            "Hello there!",
+            "中文 mixed English.",
+            "How are you?",
+        )
+
+        assertEquals(
+            listOf(1, 3),
+            selectVoiceCallAudioTaggingSegmentIndexes(segments, englishOnly = true),
+        )
+    }
+
+    @Test
+    fun englishOnlyTaggingRuleIsIndependentOfVoiceTagFormat() {
+        val segments = listOf("纯中文。", "English only!", "中文 and English.")
+        val selectedIndexes = selectVoiceCallAudioTaggingSegmentIndexes(
+            segments = segments,
+            englishOnly = true,
+        )
+
+        VoiceCallAudioTagFormat.entries.forEach { format ->
+            assertEquals(format.name, listOf(1), selectedIndexes)
+        }
+    }
+
+    @Test
+    fun mapsEnglishOnlyAssignmentsWithoutTaggingChineseSegments() {
+        val primaryReply = assistantMessage("你好。Hello there!")
+
+        val taggedReply = primaryReply.withSelectedVoiceCallAudioTagAssignments(
+            selectedAssignments = listOf(VoiceCallAudioTagAssignment(tagId = "LAUGHS")),
+            format = VoiceCallAudioTagFormat.ELEVEN_LABS_V3,
+            taggingSegmentIndexes = listOf(1),
+        )
+
+        assertEquals(
+            "你好。\n[laughs] Hello there!",
+            taggedReply.voiceCallSpeechTextOrPlainText(),
+        )
+    }
+
+    @Test
+    fun englishOnlyFallbackDoesNotAddTagsToChineseSegments() {
+        val primaryReply = assistantMessage("你好。Hello there!")
+
+        val taggedReply = primaryReply.withSelectedVoiceCallAudioTagAssignments(
+            selectedAssignments = null,
+            format = VoiceCallAudioTagFormat.ELEVEN_LABS_V3,
+            taggingSegmentIndexes = listOf(1),
+            selectionFailureReason = VoiceCallTaggingFallbackReason.MISSING_TOOL_CALL,
+        )
+
+        assertEquals(
+            "你好。\n[breath fallback:missing_tool_call] Hello there!",
+            taggedReply.voiceCallDisplayTextOrPlainText(),
+        )
+    }
+
     private fun assistantMessage(text: String): UIMessage {
         return UIMessage(
             role = MessageRole.ASSISTANT,

@@ -86,6 +86,7 @@ class GenerationHandler(
         conversationLorebookIds: Set<Uuid> = emptySet(),
         extraSystemPrompt: String? = null,
         runtimeStateSystemPrompt: String? = null,
+        transientLastContextMessage: UIMessage? = null,
         maxTokensOverride: Int? = null,
     ): Flow<GenerationChunk> = flow {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
@@ -168,6 +169,7 @@ class GenerationHandler(
                     conversationLorebookIds = conversationLorebookIds,
                     extraSystemPrompt = extraSystemPrompt,
                     runtimeStateSystemPrompt = runtimeStateSystemPrompt,
+                    transientLastContextMessage = transientLastContextMessage,
                     maxTokensOverride = maxTokensOverride,
                 )
                 messages = messages.visualTransforms(
@@ -365,6 +367,7 @@ class GenerationHandler(
         conversationLorebookIds: Set<Uuid> = emptySet(),
         extraSystemPrompt: String? = null,
         runtimeStateSystemPrompt: String? = null,
+        transientLastContextMessage: UIMessage? = null,
         maxTokensOverride: Int? = null,
     ) {
         val internalMessages = buildList {
@@ -421,7 +424,14 @@ class GenerationHandler(
             } else {
                 messages.limitContext(assistant.contextMessageSize)
             }
-            addAll(contextMessages)
+            val requestContextMessages = if (
+                transientLastContextMessage != null && contextMessages.isNotEmpty()
+            ) {
+                // Replace only the provider-facing copy. Response accumulation still
+                // starts from `messages`, so runtime state never enters persistence or UI.
+                contextMessages.dropLast(1) + transientLastContextMessage
+            } else contextMessages
+            addAll(requestContextMessages)
         }.transforms(
             transformers = transformers,
             context = context,

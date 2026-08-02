@@ -294,6 +294,7 @@ internal fun UIMessage.withSelectedVoiceCallAudioTagIds(
 internal fun UIMessage.withSelectedVoiceCallAudioTagAssignments(
     selectedAssignments: List<VoiceCallAudioTagAssignment>?,
     format: VoiceCallAudioTagFormat,
+    taggingSegmentIndexes: List<Int>? = null,
     selectionFailureReason: VoiceCallTaggingFallbackReason? = null,
 ): UIMessage {
     val originalText = parts.filterIsInstance<UIMessagePart.Text>()
@@ -302,14 +303,35 @@ internal fun UIMessage.withSelectedVoiceCallAudioTagAssignments(
     if (originalText.isBlank()) return this
 
     val originalSegments = splitVoiceCallAudioTaggingSegments(originalText)
-    val acceptedTagging = if (selectionFailureReason != null) {
-        fallbackVoiceCallResponse(originalText, selectionFailureReason, format)
-    } else {
-        buildVoiceCallResponseFromSelectedAssignments(
+    val assignmentsForOriginalSegments = expandVoiceCallAudioTagAssignments(
+        originalSegmentCount = originalSegments.size,
+        selectedAssignments = selectedAssignments,
+        taggingSegmentIndexes = taggingSegmentIndexes,
+    )
+    val acceptedTagging = when {
+        selectionFailureReason != null && taggingSegmentIndexes != null ->
+            fallbackVoiceCallResponseForSegments(
+                originalSegments,
+                taggingSegmentIndexes,
+                selectionFailureReason,
+                format,
+            )
+
+        selectionFailureReason != null ->
+            fallbackVoiceCallResponse(originalText, selectionFailureReason, format)
+
+        else -> buildVoiceCallResponseFromSelectedAssignments(
             originalSegments = originalSegments,
-            selectedAssignments = selectedAssignments,
+            selectedAssignments = assignmentsForOriginalSegments,
             format = format,
-        ) ?: fallbackVoiceCallResponse(
+        ) ?: taggingSegmentIndexes?.let { indexes ->
+            fallbackVoiceCallResponseForSegments(
+                originalSegments,
+                indexes,
+                VoiceCallTaggingFallbackReason.INVALID_TOOL_ARGUMENTS,
+                format,
+            )
+        } ?: fallbackVoiceCallResponse(
             originalText,
             VoiceCallTaggingFallbackReason.INVALID_TOOL_ARGUMENTS,
             format,
@@ -457,6 +479,27 @@ private fun parseLegacyTaggedSegments(rawResponse: String): List<ParsedVoiceCall
     }
 }
 
+internal fun selectVoiceCallAudioTaggingSegmentIndexes(
+    segments: List<String>,
+    englishOnly: Boolean,
+): List<Int> {
+    return segments.indices.filter { segmentIndex ->
+        !englishOnly || segments[segmentIndex].isEnglishOnlyVoiceCallSegment()
+    }
+}
+
+private fun String.isEnglishOnlyVoiceCallSegment(): Boolean {
+    var hasLatinLetter = false
+    forEach { character ->
+        if (!character.isLetter()) return@forEach
+        if (Character.UnicodeScript.of(character.code) != Character.UnicodeScript.LATIN) {
+            return false
+        }
+        hasLatinLetter = true
+    }
+    return hasLatinLetter
+}
+
 internal fun splitVoiceCallAudioTaggingSegments(text: String): List<String> {
     val segments = mutableListOf<String>()
     var start = 0
@@ -503,6 +546,50 @@ private fun buildVoiceCallResponseFromSelectedAssignments(
                 text = text,
                 selectionSource = VoiceCallTagSelectionSource.STRUCTURED,
                 replacementText = assignment.replacementText,
+            )
+        },
+        format,
+    )
+}
+
+private fun expandVoiceCallAudioTagAssignments(
+    originalSegmentCount: Int,
+    selectedAssignments: List<VoiceCallAudioTagAssignment>?,
+    taggingSegmentIndexes: List<Int>?,
+): List<VoiceCallAudioTagAssignment>? {
+    if (taggingSegmentIndexes == null) return selectedAssignments
+    if (selectedAssignments == null || selectedAssignments.size != taggingSegmentIndexes.size) return null
+    if (taggingSegmentIndexes.distinct().size != taggingSegmentIndexes.size ||
+        taggingSegmentIndexes.any { it !in 0 until originalSegmentCount }
+    ) {
+        return null
+    }
+
+    val assignmentBySegmentIndex = taggingSegmentIndexes.zip(selectedAssignments).toMap()
+    return List(originalSegmentCount) { segmentIndex ->
+        assignmentBySegmentIndex[segmentIndex] ?: VoiceCallAudioTagAssignment(tagId = null)
+    }
+}
+
+private fun fallbackVoiceCallResponseForSegments(
+    originalSegments: List<String>,
+    taggingSegmentIndexes: List<Int>,
+    reason: VoiceCallTaggingFallbackReason,
+    format: VoiceCallAudioTagFormat,
+): ParsedVoiceCallResponse {
+    val taggedIndexes = taggingSegmentIndexes.toSet()
+    return buildParsedVoiceCallResponse(
+        originalSegments.mapIndexed { index, text ->
+            val shouldTag = index in taggedIndexes
+            ParsedVoiceCallSegment(
+                tag = format.fallbackTag().takeIf { shouldTag },
+                text = text,
+                selectionSource = if (shouldTag) {
+                    VoiceCallTagSelectionSource.FALLBACK
+                } else {
+                    VoiceCallTagSelectionSource.STRUCTURED
+                },
+                fallbackReason = reason.takeIf { shouldTag },
             )
         },
         format,

@@ -279,6 +279,13 @@ class ChatVM(
         }
     }
 
+    fun deleteVoiceCallRecord(callId: String) {
+        viewModelScope.launch {
+            chatService.deleteVoiceCallRecord(_conversationId, callId)
+        }
+    }
+
+
     fun showDeleteBlockedWhileGeneratingError() {
         chatService.addError(
             error = IllegalStateException("请先停止生成再删除消息"),
