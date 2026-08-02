@@ -131,42 +131,28 @@ class UsageStatsReader(private val context: Context) {
         endMillis: Long,
     ): String? {
         val events = queryEvents(startMillis, endMillis)
-        val activeComponentsByPackage = mutableMapOf<String, MutableSet<String>>()
         val latestForegroundStartMillisByPackage = mutableMapOf<String, Long>()
+        val latestForegroundEndMillisByPackage = mutableMapOf<String, Long>()
         val event = UsageEvents.Event()
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
             val packageName = event.packageName ?: continue
-            val componentKey = event.foregroundComponentKey(packageName)
             when {
                 event.eventType.isForegroundStartEvent() -> {
-                    activeComponentsByPackage
-                        .getOrPut(packageName) { mutableSetOf() }
-                        .add(componentKey)
                     latestForegroundStartMillisByPackage[packageName] = event.timeStamp
                 }
-
                 event.eventType.isForegroundEndEvent() -> {
-                    val activeComponents = activeComponentsByPackage[packageName] ?: continue
-                    activeComponents.remove(componentKey)
-                    if (activeComponents.isEmpty()) {
-                        activeComponentsByPackage.remove(packageName)
-                    }
+                    latestForegroundEndMillisByPackage[packageName] = event.timeStamp
                 }
             }
         }
-        return activeComponentsByPackage.keys
-            .maxByOrNull { latestForegroundStartMillisByPackage[it] ?: Long.MIN_VALUE }
-    }
-
-    private fun UsageEvents.Event.foregroundComponentKey(packageName: String): String {
-        return if (eventType == UsageEvents.Event.MOVE_TO_FOREGROUND ||
-            eventType == UsageEvents.Event.MOVE_TO_BACKGROUND
-        ) {
-            packageName
-        } else {
-            className?.takeIf { it.isNotBlank() } ?: packageName
-        }
+        return latestForegroundStartMillisByPackage
+            .asSequence()
+            .filter { (packageName, startMillis) ->
+                startMillis > (latestForegroundEndMillisByPackage[packageName] ?: Long.MIN_VALUE)
+            }
+            .maxByOrNull { (_, startMillis) -> startMillis }
+            ?.key
     }
 
     private fun PackageManager.loadInstalledApps(): Map<String, String> {

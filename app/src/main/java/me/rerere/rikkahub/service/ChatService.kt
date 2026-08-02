@@ -90,6 +90,7 @@ import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.voice.VOICE_CALL_UNAVAILABLE_MESSAGE
 import me.rerere.rikkahub.data.voice.VoiceCallCompletion
+import me.rerere.rikkahub.data.voice.isStandaloneVoiceCallRecord
 import me.rerere.rikkahub.data.voice.withVoiceCallRecord
 import me.rerere.rikkahub.data.voice.VoiceCallAudioTagFormat
 import me.rerere.rikkahub.data.voice.VoiceCallAudioTagSelectionResult
@@ -631,11 +632,6 @@ class ChatService(
                     )
                 }
                 voiceCallCompletion?.let { completion ->
-                    val hasAiContent = conversation.currentMessages.any { message ->
-                        message.id.toString() in completion.messageIds &&
-                            message.role == MessageRole.ASSISTANT &&
-                            message.toText().isNotBlank()
-                    }
                     conversation = conversation.copy(
                         messageNodes = conversation.messageNodes.map { node ->
                             node.copy(
@@ -645,7 +641,6 @@ class ChatService(
                                             UIMessageAnnotation.VoiceCallRecord(
                                                 callId = completion.callId,
                                                 durationSeconds = completion.durationSeconds,
-                                                cardAnchor = hasAiContent && message.id.toString() == completion.cardAnchorMessageId,
                                                 audioSegments = completion.audioSegmentsByMessageId[message.id.toString()].orEmpty(),
                                             )
                                         )
@@ -655,6 +650,21 @@ class ChatService(
                                 }
                             )
                         }
+                    )
+                    val recordNode = UIMessage(
+                        role = MessageRole.ASSISTANT,
+                        parts = emptyList(),
+                        annotations = listOf(
+                            UIMessageAnnotation.VoiceCallRecord(
+                                callId = completion.callId,
+                                durationSeconds = completion.durationSeconds,
+                                cardAnchor = true,
+                                standalone = true,
+                            )
+                        ),
+                    ).toMessageNode()
+                    conversation = conversation.copy(
+                        messageNodes = conversation.messageNodes + recordNode
                     )
                 }
                 if (toolCallId != null) {
@@ -1426,6 +1436,7 @@ class ChatService(
         val providerHandler = providerManager.getProviderByType(compressionProvider)
 
         val allNodes = conversation.visibleMessageNodes
+            .filterNot { it.currentMessage.isStandaloneVoiceCallRecord() }
         val allMessages = allNodes.map { it.currentMessage }
         if (allMessages.isEmpty()) {
             throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))

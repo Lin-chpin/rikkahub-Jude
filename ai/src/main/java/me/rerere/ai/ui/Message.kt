@@ -780,6 +780,7 @@ sealed class UIMessageAnnotation {
         val callId: String,
         val durationSeconds: Int,
         val cardAnchor: Boolean = false,
+        val standalone: Boolean = false,
         val audioSegments: List<VoiceCallAudioSegment> = emptyList(),
     ) : UIMessageAnnotation()
 }

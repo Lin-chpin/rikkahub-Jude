@@ -11,6 +11,7 @@ import me.rerere.ai.util.InstantSerializer
 import me.rerere.rikkahub.data.datastore.DEFAULT_ASSISTANT_ID
 import java.time.Instant
 import kotlin.uuid.Uuid
+import me.rerere.rikkahub.data.voice.isStandaloneVoiceCallRecord
 
 @Serializable
 data class Conversation(
@@ -44,7 +45,9 @@ data class Conversation(
      */
     val currentMessages
         get(): List<UIMessage> {
-            return messageNodes.map { node -> node.messages[node.selectIndex] }
+            return messageNodes
+                .filterNot { it.currentMessage.isStandaloneVoiceCallRecord() }
+                .map { node -> node.currentMessage }
         }
 
     val visibleMessageNodes: List<MessageNode>
@@ -84,7 +87,10 @@ data class Conversation(
         val newNodes = this.messageNodes.toMutableList()
         val compressedNodeIds = activeCompressedMessageNodeIds
         val targetNodeIndices = newNodes.mapIndexedNotNull { index, node ->
-            index.takeIf { node.id !in compressedNodeIds }
+            index.takeIf {
+                node.id !in compressedNodeIds &&
+                    !node.currentMessage.isStandaloneVoiceCallRecord()
+            }
         }
 
         messages.forEachIndexed { index, message ->
@@ -153,9 +159,11 @@ fun Conversation.messagesForGeneration(messageRange: ClosedRange<Int>? = null): 
     }
     val visibleMessages = sourceNodes
         .filterNot { it.id in compressedMessageNodeIds }
+        .filterNot { it.currentMessage.isStandaloneVoiceCallRecord() }
         .map { it.currentMessage }
     return visibleMessages.ifEmpty {
-        sourceNodes.lastOrNull()?.currentMessage?.let(::listOf).orEmpty()
+        sourceNodes.lastOrNull { !it.currentMessage.isStandaloneVoiceCallRecord() }
+            ?.currentMessage?.let(::listOf).orEmpty()
     }
 }
 

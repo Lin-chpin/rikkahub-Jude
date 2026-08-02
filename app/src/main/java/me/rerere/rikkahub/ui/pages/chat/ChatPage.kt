@@ -583,6 +583,8 @@ private fun ChatPageContent(
         incomingVoiceCall?.let { request ->
             IncomingVoiceCallOverlay(
                 request = request,
+                setting = setting,
+                assistant = assistant,
                 userAvatar = setting.displaySetting.userAvatar,
                 userName = setting.displaySetting.userNickname.ifBlank { "我" },
                 assistantAvatar = assistant.avatar,

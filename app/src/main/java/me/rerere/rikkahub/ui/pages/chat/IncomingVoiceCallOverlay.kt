@@ -62,8 +62,10 @@ import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Voice
 import me.rerere.rikkahub.data.ai.tools.REQUEST_VOICE_CALL_TOOL_NAME
 import me.rerere.rikkahub.data.model.Avatar
+import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.ui.components.ui.UIAvatar
 import me.rerere.rikkahub.data.voice.VOICE_CALL_UNAVAILABLE_MESSAGE
+import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.ui.context.LocalTTSState
 import me.rerere.rikkahub.ui.context.LocalToaster
 import kotlin.math.roundToInt
@@ -108,6 +110,8 @@ internal fun List<UIMessage>.pendingIncomingVoiceCall(): IncomingVoiceCallReques
 @Composable
 internal fun IncomingVoiceCallOverlay(
     request: IncomingVoiceCallRequest,
+    setting: Settings,
+    assistant: Assistant,
     userAvatar: Avatar,
     userName: String,
     assistantAvatar: Avatar,
@@ -163,13 +167,20 @@ internal fun IncomingVoiceCallOverlay(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background,
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .safeDrawingPadding()
-                    .padding(horizontal = 28.dp, vertical = 36.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
+            Box(Modifier.fillMaxSize()) {
+                AssistantBackground(
+                    setting = setting,
+                    assistant = assistant,
+                    modifier = Modifier.fillMaxSize(),
+                    useVoiceCallBackground = true,
+                )
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .safeDrawingPadding()
+                        .padding(horizontal = 28.dp, vertical = 36.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
                 Spacer(Modifier.weight(0.8f))
 
                 IncomingCallAvatarPair(
@@ -229,6 +240,7 @@ internal fun IncomingVoiceCallOverlay(
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
+            }
             }
         }
     }

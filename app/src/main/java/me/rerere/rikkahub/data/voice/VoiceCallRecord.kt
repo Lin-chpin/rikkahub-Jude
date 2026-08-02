@@ -8,7 +8,6 @@ data class VoiceCallCompletion(
     val callId: String,
     val durationSeconds: Int,
     val messageIds: Set<String>,
-    val cardAnchorMessageId: String?,
     val audioSegmentsByMessageId: Map<String, List<VoiceCallAudioSegment>>,
 )
 
@@ -20,3 +19,6 @@ fun UIMessage.withVoiceCallRecord(record: UIMessageAnnotation.VoiceCallRecord): 
         annotations = annotations.filterNot { it is UIMessageAnnotation.VoiceCallRecord } + record
     )
 }
+
+fun UIMessage.isStandaloneVoiceCallRecord(): Boolean =
+    voiceCallRecord()?.standalone == true
