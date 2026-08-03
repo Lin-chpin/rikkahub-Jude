@@ -63,7 +63,11 @@ data class Conversation(
             }
             val existingNodeIds = messageNodes.mapTo(mutableSetOf()) { it.id }
             val activeIds = compressedMessageNodeIds.filterTo(mutableSetOf()) { it in existingNodeIds }
-            return activeIds.takeUnless { it.size >= messageNodes.size } ?: emptySet()
+            return if (activeIds.size < messageNodes.size) {
+                activeIds
+            } else {
+                activeIds - messageNodes.last().id
+            }
         }
 
     fun normalizeCompressionState(): Conversation {
@@ -73,6 +77,62 @@ data class Conversation(
         } else {
             copy(compressedMessageNodeIds = activeIds)
         }
+    }
+
+    /**
+     * Applies an asynchronous compression result only while its summary base is still current.
+     * New messages may be appended during compression, but another compression or summary edit wins.
+     */
+    fun withCompressionResultIfBaseUnchanged(
+        expectedSummary: String?,
+        expectedCompressedNodeIds: Set<Uuid>,
+        newSummary: String?,
+        nodeIdsToCompress: Set<Uuid>,
+        newAutoCompressConfig: AutoCompressConfig?,
+    ): Conversation? {
+        val normalized = normalizeCompressionState()
+        if (
+            normalized.compressedSummary != expectedSummary ||
+            normalized.activeCompressedMessageNodeIds != expectedCompressedNodeIds
+        ) {
+            return null
+        }
+
+        val existingNodeIds = normalized.messageNodes.mapTo(mutableSetOf()) { it.id }
+        val applicableNodeIds = nodeIdsToCompress.filterTo(mutableSetOf()) { it in existingNodeIds }
+        if (applicableNodeIds.isEmpty()) return null
+
+        return normalized.copy(
+            compressedSummary = newSummary,
+            compressedMessageNodeIds = normalized.activeCompressedMessageNodeIds + applicableNodeIds,
+            autoCompressConfig = newAutoCompressConfig ?: normalized.autoCompressConfig,
+        ).normalizeCompressionState()
+    }
+
+    /**
+     * Remaps compression metadata when a visible message prefix is copied into a fork.
+     * A fork created inside compressed history cannot reuse the rolling summary because
+     * that summary may contain messages that occur after the selected fork point.
+     */
+    fun compressionStateForFork(
+        targetNodeId: Uuid,
+        copiedNodeIdsBySourceId: Map<Uuid, Uuid>,
+    ): ConversationForkCompressionState {
+        val activeCompressedNodeIds = activeCompressedMessageNodeIds
+        if (compressedSummary.isNullOrBlank() || targetNodeId in activeCompressedNodeIds) {
+            return ConversationForkCompressionState()
+        }
+
+        val remappedCompressedNodeIds = activeCompressedNodeIds
+            .mapNotNullTo(mutableSetOf()) { copiedNodeIdsBySourceId[it] }
+        if (remappedCompressedNodeIds.isEmpty()) {
+            return ConversationForkCompressionState()
+        }
+
+        return ConversationForkCompressionState(
+            summary = compressedSummary,
+            compressedNodeIds = remappedCompressedNodeIds,
+        )
     }
 
     fun getMessageNodeByMessage(message: UIMessage): MessageNode? {
@@ -92,9 +152,18 @@ data class Conversation(
                     !node.currentMessage.isStandaloneVoiceCallRecord()
             }
         }
+        val existingNodeIndexByMessageId = buildMap {
+            newNodes.forEachIndexed { nodeIndex, node ->
+                node.messages.forEach { message -> put(message.id, nodeIndex) }
+            }
+        }
 
         messages.forEachIndexed { index, message ->
-            val nodeIndex = targetNodeIndices.getOrNull(index)
+            // Whole-conversation transforms may include compressed messages. Match identity first
+            // so those messages stay in their original hidden nodes; generation output can still
+            // fall back to the visible positional projection used by the streaming pipeline.
+            val nodeIndex = existingNodeIndexByMessageId[message.id]
+                ?: targetNodeIndices.getOrNull(index)
             val node = if (nodeIndex != null) {
                 newNodes[nodeIndex]
             } else {
@@ -149,6 +218,11 @@ data class AutoCompressConfig(
     val additionalPrompt: String = "",
     val targetTokens: Int = 2000,
     val keepRecentMessages: Int = 32,
+)
+
+data class ConversationForkCompressionState(
+    val summary: String? = null,
+    val compressedNodeIds: Set<Uuid> = emptySet(),
 )
 
 fun Conversation.messagesForGeneration(messageRange: ClosedRange<Int>? = null): List<UIMessage> {

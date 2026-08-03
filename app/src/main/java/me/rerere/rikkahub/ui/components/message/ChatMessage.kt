@@ -86,6 +86,7 @@ import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.AssistantAffectScope
 import me.rerere.rikkahub.data.model.MessageNode
+import me.rerere.rikkahub.data.model.memoryScope
 import me.rerere.rikkahub.data.model.replaceRegexes
 import me.rerere.rikkahub.data.voice.withoutVoiceCallAudioTagsForChatDisplay
 import me.rerere.rikkahub.ui.components.richtext.MarkdownBlock
@@ -379,6 +380,7 @@ private fun MessagePartsBlock(
                                 key(step.tool.toolCallId.ifBlank { step.hashCode().toString() }) {
                                     ChatMessageToolStep(
                                         tool = step.tool,
+                                        memoryScope = assistant?.memoryScope,
                                         loading = loading && !step.tool.isExecuted,
                                         onToolApproval = onToolApproval,
                                         onToolAnswer = onToolAnswer,

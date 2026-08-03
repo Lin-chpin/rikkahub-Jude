@@ -5,6 +5,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -21,6 +23,28 @@ class ConversationSession(
     private val scope: CoroutineScope,
     private val onIdle: (Uuid) -> Unit,
 ) {
+    private val initializationMutex = Mutex()
+
+    @Volatile
+    private var stateInitialized = false
+
+    suspend fun initializeState(load: suspend () -> Conversation): Conversation =
+        initializationMutex.withLock {
+            if (!stateInitialized) {
+                val loaded = load()
+                // A live update may win while Room is loading. Never replace that newer state.
+                if (!stateInitialized) {
+                    state.value = loaded
+                    stateInitialized = true
+                }
+            }
+            state.value
+        }
+
+    fun replaceState(conversation: Conversation) {
+        stateInitialized = true
+        state.value = conversation
+    }
     // 会话状态
     val state = MutableStateFlow(initial)
 

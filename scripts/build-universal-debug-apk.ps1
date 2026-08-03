@@ -6,15 +6,15 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
-$outputDir = Join-Path $ProjectRoot 'app\build\outputs\apk\debug'
-$targetName = 'app-universal-debug.apk'
+$outputDir = Join-Path $ProjectRoot 'app\build\outputs\apk\public\debug'
+$targetName = 'app-public-universal-debug.apk'
 $targetPath = Join-Path $outputDir $targetName
 
 $pushedLocation = $false
 try {
     Push-Location $ProjectRoot
     $pushedLocation = $true
-    $gradleArgs = @(':app:assembleDebug')
+    $gradleArgs = @(':app:assemblePublicDebug')
     if ($RerunTasks) {
         $gradleArgs += '--rerun-tasks'
     }
@@ -33,7 +33,7 @@ if (!(Test-Path -LiteralPath $targetPath)) {
 }
 
 $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$copyName = "RikkaHub-universal-debug-$timestamp.apk"
+$copyName = "RikkaHub-public-universal-debug-$timestamp.apk"
 $copyPath = Join-Path $outputDir $copyName
 Copy-Item -LiteralPath $targetPath -Destination $copyPath -Force
 

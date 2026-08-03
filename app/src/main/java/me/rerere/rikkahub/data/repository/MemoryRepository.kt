@@ -5,40 +5,29 @@ import kotlinx.coroutines.flow.map
 import me.rerere.rikkahub.data.db.dao.MemoryDAO
 import me.rerere.rikkahub.data.db.entity.MemoryEntity
 import me.rerere.rikkahub.data.model.AssistantMemory
+import me.rerere.rikkahub.data.model.MemoryScope
 
 class MemoryRepository(private val memoryDAO: MemoryDAO) {
-    companion object {
-        const val GLOBAL_MEMORY_ID = "__global__"
-    }
 
-    fun getMemoriesOfAssistantFlow(assistantId: String): Flow<List<AssistantMemory>> =
-        memoryDAO.getMemoriesOfAssistantFlow(assistantId)
+    fun observeMemories(scope: MemoryScope): Flow<List<AssistantMemory>> =
+        memoryDAO.getMemoriesOfAssistantFlow(scope.ownerId)
             .map { entities ->
                 entities.map { AssistantMemory(it.id, it.content) }
             }
 
-    suspend fun getMemoriesOfAssistant(assistantId: String): List<AssistantMemory> {
-        return memoryDAO.getMemoriesOfAssistant(assistantId)
+    suspend fun getMemories(scope: MemoryScope): List<AssistantMemory> {
+        return memoryDAO.getMemoriesOfAssistant(scope.ownerId)
             .map { AssistantMemory(it.id, it.content) }
     }
 
-    fun getGlobalMemoriesFlow(): Flow<List<AssistantMemory>> =
-        memoryDAO.getMemoriesOfAssistantFlow(GLOBAL_MEMORY_ID)
-            .map { entities ->
-                entities.map { AssistantMemory(it.id, it.content) }
-            }
 
-    suspend fun getGlobalMemories(): List<AssistantMemory> {
-        return memoryDAO.getMemoriesOfAssistant(GLOBAL_MEMORY_ID)
-            .map { AssistantMemory(it.id, it.content) }
+    suspend fun deleteMemories(scope: MemoryScope) {
+        memoryDAO.deleteMemoriesOfAssistant(scope.ownerId)
     }
 
-    suspend fun deleteMemoriesOfAssistant(assistantId: String) {
-        memoryDAO.deleteMemoriesOfAssistant(assistantId)
-    }
-
-    suspend fun updateContent(id: Int, content: String): AssistantMemory {
-        val old = memoryDAO.getMemoryById(id) ?: error("Memory record #$id not found")
+    suspend fun updateMemory(scope: MemoryScope, id: Int, content: String): AssistantMemory {
+        val old = memoryDAO.getMemoryByIdInScope(id, scope.ownerId)
+            ?: error("Memory record #$id not found in the requested scope")
         val newMemory = old.copy(
             content = content
         )
@@ -49,7 +38,7 @@ class MemoryRepository(private val memoryDAO: MemoryDAO) {
         )
     }
 
-    suspend fun addMemory(assistantId: String, content: String): AssistantMemory {
+    suspend fun addMemory(scope: MemoryScope, content: String): AssistantMemory {
         val memory = AssistantMemory(
             id = 0,
             content = content,
@@ -57,7 +46,7 @@ class MemoryRepository(private val memoryDAO: MemoryDAO) {
         val newMemory = memory.copy(
             id = memoryDAO.insertMemory(
                 MemoryEntity(
-                    assistantId = assistantId,
+                    assistantId = scope.ownerId,
                     content = memory.content
                 )
             ).toInt()
@@ -65,7 +54,7 @@ class MemoryRepository(private val memoryDAO: MemoryDAO) {
         return newMemory
     }
 
-    suspend fun deleteMemory(id: Int) {
-        memoryDAO.deleteMemory(id)
+    suspend fun deleteMemory(scope: MemoryScope, id: Int): Boolean {
+        return memoryDAO.deleteMemoryInScope(id, scope.ownerId) > 0
     }
 }

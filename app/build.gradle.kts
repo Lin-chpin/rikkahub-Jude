@@ -31,6 +31,16 @@ android {
         }
     }
 
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("public") {
+            dimension = "distribution"
+        }
+        create("personal") {
+            dimension = "distribution"
+        }
+    }
+
     splits {
         abi {
             // AppBundle tasks usually contain "bundle" in their name

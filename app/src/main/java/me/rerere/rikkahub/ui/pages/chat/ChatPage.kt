@@ -1,5 +1,8 @@
 package me.rerere.rikkahub.ui.pages.chat
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -46,6 +49,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -60,6 +64,7 @@ import kotlinx.coroutines.launch
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.Bug01
 import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.LeftToRightListBullet
 import me.rerere.hugeicons.stroke.Menu03
@@ -269,6 +274,15 @@ private fun ChatPageContent(
 ) {
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
+    val context = LocalContext.current
+    val clipboardManager = remember(context) {
+        context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+    }
+    val compressionDiagnostics by vm.compressionDiagnostics.collectAsStateWithLifecycle()
+    var showCompressionDiagnostics by rememberSaveable(conversation.id) {
+        mutableStateOf(false)
+    }
+
     var previewMode by rememberSaveable { mutableStateOf(false) }
     var showCompressedMessages by rememberSaveable(conversation.id) { mutableStateOf(false) }
     var summaryEditorVisible by rememberSaveable(conversation.id) { mutableStateOf(false) }
@@ -352,6 +366,13 @@ private fun ChatPageContent(
                         initialVoiceCallAssistantMessageId = null
                         initialVoiceCallToolCallId = null
                         voiceCallVisible = true
+                    },
+                    onOpenCompressionDiagnostics = {
+                        vm.recordCompressionDiagnosticSnapshot(
+                            stage = "diagnostics.open",
+                            details = "showCompressedMessages=$showCompressedMessages",
+                        )
+                        showCompressionDiagnostics = true
                     },
                     showMoments = momentsEnabled,
                     momentsUnread = momentsUnread,
@@ -644,6 +665,23 @@ private fun ChatPageContent(
             onDismiss = { anonymousQuestionBoxVisible = false },
         )
     }
+    ConversationCompressionDiagnosticsDialog(
+        visible = showCompressionDiagnostics,
+        steps = compressionDiagnostics,
+        onCopy = {
+            val report = buildString {
+                appendLine("RikkaHub \u538b\u7f29\u6392\u67e5\u6d41\u7a0b")
+                appendLine("conversation=" + conversation.id)
+                append(compressionDiagnostics.joinToString("\n"))
+            }
+            clipboardManager?.setPrimaryClip(
+                ClipData.newPlainText("\u538b\u7f29\u6392\u67e5\u6d41\u7a0b", report)
+            )
+            toaster.show("\u5df2\u590d\u5236\u538b\u7f29\u6392\u67e5\u6d41\u7a0b")
+        },
+        onClear = { vm.clearCompressionDiagnostics() },
+        onDismiss = { showCompressionDiagnostics = false },
+    )
     RikkaConfirmDialog(
         show = pendingVoiceCallDeleteId != null,
         title = "是否删除",
@@ -671,6 +709,7 @@ private fun TopBar(
     onCompressedSummaryChange: (String?) -> Unit,
     onSummaryEditorVisibilityChange: (Boolean) -> Unit,
     onOpenVoiceCall: () -> Unit,
+    onOpenCompressionDiagnostics: () -> Unit,
     showMoments: Boolean,
     momentsUnread: Boolean,
     onOpenMoments: () -> Unit,
@@ -691,6 +730,13 @@ private fun TopBar(
                 onClick = onOpenVoiceCall
             ) {
                 Icon(HugeIcons.Voice, "Voice call")
+            }
+        }
+        add {
+            IconButton(
+                onClick = onOpenCompressionDiagnostics
+            ) {
+                Icon(HugeIcons.Bug01, "Compression diagnostics")
             }
         }
         if (showMoments) {

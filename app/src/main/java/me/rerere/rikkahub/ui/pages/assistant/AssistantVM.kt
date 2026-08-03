@@ -11,6 +11,8 @@ import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.model.MemoryScope
+import me.rerere.rikkahub.data.model.memoryScope
 import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
@@ -51,7 +53,7 @@ class AssistantVM(
                     assistants = settings.assistants.filter { it.id != assistant.id }
                 )
             )
-            memoryRepository.deleteMemoriesOfAssistant(assistant.id.toString())
+            memoryRepository.deleteMemories(MemoryScope.assistant(assistant.id))
             conversationRepo.deleteConversationOfAssistant(assistant.id)
         }
     }
@@ -84,10 +86,5 @@ class AssistantVM(
         }
     }
 
-    fun getMemories(assistant: Assistant) =
-        if (assistant.useGlobalMemory) {
-            memoryRepository.getGlobalMemoriesFlow()
-        } else {
-            memoryRepository.getMemoriesOfAssistantFlow(assistant.id.toString())
-        }
+    fun getMemories(assistant: Assistant) = memoryRepository.observeMemories(assistant.memoryScope)
 }

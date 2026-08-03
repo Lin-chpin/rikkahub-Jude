@@ -30,6 +30,7 @@ import me.rerere.rikkahub.di.repositoryModule
 import me.rerere.rikkahub.di.viewModelModule
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.local.LocalBuildIntegration
 import me.rerere.rikkahub.service.WebServerService
 import me.rerere.rikkahub.service.UsageReminderService
 import me.rerere.rikkahub.utils.CrashHandler
@@ -88,6 +89,8 @@ class RikkaHubApp : Application() {
 
         // Start usage reminders if enabled in settings
         startUsageReminderIfEnabled()
+
+        LocalBuildIntegration.onApplicationCreated(this)
 
         // Increment launch count
         incrementLaunchCount()

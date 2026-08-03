@@ -22,6 +22,7 @@ import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.AssistantMemory
 import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.model.Tag
+import me.rerere.rikkahub.data.model.memoryScope
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import kotlin.uuid.Uuid
 
@@ -63,14 +64,9 @@ class AssistantDetailVM(
             scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = Assistant()
         )
 
-    val memories = assistant
-        .flatMapLatest { currentAssistant ->
-            if (currentAssistant.useGlobalMemory) {
-                memoryRepository.getGlobalMemoriesFlow()
-            } else {
-                memoryRepository.getMemoriesOfAssistantFlow(assistantId.toString())
-            }
-        }
+    val memories = assistant.flatMapLatest { currentAssistant ->
+        memoryRepository.observeMemories(currentAssistant.memoryScope)
+    }
         .stateIn(
             scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = emptyList()
         )
@@ -169,13 +165,8 @@ class AssistantDetailVM(
 
     fun addMemory(memory: AssistantMemory) {
         viewModelScope.launch {
-            val memoryAssistantId = if (assistant.value.useGlobalMemory) {
-                MemoryRepository.GLOBAL_MEMORY_ID
-            } else {
-                assistantId.toString()
-            }
             memoryRepository.addMemory(
-                assistantId = memoryAssistantId,
+                scope = assistant.value.memoryScope,
                 content = memory.content
             )
         }
@@ -183,13 +174,13 @@ class AssistantDetailVM(
 
     fun updateMemory(memory: AssistantMemory) {
         viewModelScope.launch {
-            memoryRepository.updateContent(id = memory.id, content = memory.content)
+            memoryRepository.updateMemory(assistant.value.memoryScope, memory.id, memory.content)
         }
     }
 
     fun deleteMemory(memory: AssistantMemory) {
         viewModelScope.launch {
-            memoryRepository.deleteMemory(id = memory.id)
+            memoryRepository.deleteMemory(assistant.value.memoryScope, memory.id)
         }
     }
 

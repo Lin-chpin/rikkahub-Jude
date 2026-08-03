@@ -80,6 +80,7 @@ import me.rerere.hugeicons.stroke.VolumeHigh
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.event.AppEvent
 import me.rerere.rikkahub.data.event.AppEventBus
+import me.rerere.rikkahub.data.model.MemoryScope
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.ui.components.richtext.HighlightCodeBlock
 import me.rerere.rikkahub.ui.components.richtext.MarkdownBlock
@@ -141,6 +142,7 @@ private fun JsonElement?.getStringContent(key: String): String? =
 @Composable
 fun ChainOfThoughtScope.ChatMessageToolStep(
     tool: UIMessagePart.Tool,
+    memoryScope: MemoryScope? = null,
     loading: Boolean = false,
     onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
@@ -409,6 +411,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
     if (showResult) {
         ToolCallPreviewSheet(
             toolName = tool.toolName,
+            memoryScope = memoryScope,
             arguments = arguments,
             content = content,
             output = tool.output,
@@ -420,6 +423,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
 @Composable
 private fun ToolCallPreviewSheet(
     toolName: String,
+    memoryScope: MemoryScope?,
     arguments: JsonElement,
     content: JsonElement?,
     output: List<UIMessagePart>,
@@ -441,6 +445,7 @@ private fun ToolCallPreviewSheet(
                 content == null -> GenericToolPreview(
                     toolName = toolName,
                     arguments = arguments,
+                    memoryScope = memoryScope,
                     output = emptyList(),
                     isMemoryOperation = false,
                     memoryId = null,
@@ -458,6 +463,7 @@ private fun ToolCallPreviewSheet(
                 else -> GenericToolPreview(
                     toolName = toolName,
                     arguments = arguments,
+                    memoryScope = memoryScope,
                     output = output,
                     isMemoryOperation = isMemoryOperation,
                     memoryId = memoryId,
@@ -608,6 +614,7 @@ private fun ScrapeWebPreview(content: JsonElement) {
 @Composable
 private fun GenericToolPreview(
     toolName: String,
+    memoryScope: MemoryScope?,
     arguments: JsonElement,
     output: List<UIMessagePart>,
     isMemoryOperation: Boolean,
@@ -634,11 +641,11 @@ private fun GenericToolPreview(
                 textAlign = TextAlign.Center
             )
 
-            if (isMemoryOperation && memoryId != null) {
+            if (isMemoryOperation && memoryId != null && memoryScope != null) {
                 IconButton(
                     onClick = {
                         scope.launch {
-                            memoryRepo.deleteMemory(memoryId)
+                            memoryRepo.deleteMemory(memoryScope, memoryId)
                             onDismissRequest()
                         }
                     }

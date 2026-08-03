@@ -63,3 +63,20 @@ internal fun VoiceCallDiagnosticsDialog(
         },
     )
 }
+
+@Composable
+internal fun ConversationCompressionDiagnosticsDialog(
+    visible: Boolean,
+    steps: List<String>,
+    onCopy: () -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    VoiceCallDiagnosticsDialog(
+        visible = visible,
+        steps = steps,
+        onCopy = onCopy,
+        onClear = onClear,
+        onDismiss = onDismiss,
+    )
+}

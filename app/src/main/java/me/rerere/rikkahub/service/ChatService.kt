@@ -92,6 +92,7 @@ import me.rerere.rikkahub.data.voice.VOICE_CALL_UNAVAILABLE_MESSAGE
 import me.rerere.rikkahub.data.voice.VoiceCallCompletion
 import me.rerere.rikkahub.data.voice.isStandaloneVoiceCallRecord
 import me.rerere.rikkahub.data.voice.voiceCallRecord
+import me.rerere.rikkahub.data.voice.voiceCallRecordNodeIdsFullyCoveredBy
 import me.rerere.rikkahub.data.voice.VoiceCallAudioTagFormat
 import me.rerere.rikkahub.data.voice.VoiceCallAudioTagSelectionResult
 import me.rerere.rikkahub.data.voice.VoiceCallTaggingFallbackReason
@@ -108,6 +109,7 @@ import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.data.model.momentScopeId
 import me.rerere.rikkahub.data.model.messagesForGeneration
 import me.rerere.rikkahub.data.model.personaScopeId
+import me.rerere.rikkahub.data.model.memoryScope
 import me.rerere.rikkahub.data.model.replaceRegexes
 import me.rerere.rikkahub.data.model.toMessageNode
 import me.rerere.rikkahub.data.repository.ConversationRepository
@@ -230,6 +232,7 @@ class ChatService(
     // 统一会话管理
     private val sessions = ConcurrentHashMap<Uuid, ConversationSession>()
     private val _sessionsVersion = MutableStateFlow(0L)
+    private val compressionDiagnostics = ConversationCompressionDiagnosticsRecorder()
 
     // 错误状态
     private val _errors = MutableStateFlow<List<ChatError>>(emptyList())
@@ -353,6 +356,26 @@ class ChatService(
         return session.processingStatus
     }
 
+    fun getCompressionDiagnosticsFlow(conversationId: Uuid): StateFlow<List<String>> =
+        compressionDiagnostics.observe(conversationId)
+
+    fun clearCompressionDiagnostics(conversationId: Uuid) {
+        compressionDiagnostics.clear(conversationId)
+    }
+
+    fun recordCompressionDiagnosticSnapshot(
+        conversationId: Uuid,
+        stage: String,
+        details: String? = null,
+    ) {
+        compressionDiagnostics.record(
+            conversationId = conversationId,
+            stage = stage,
+            conversation = getConversationFlow(conversationId).value,
+            details = details,
+        )
+    }
+
     fun getConversationJobs(): Flow<Map<Uuid, Job?>> {
         return _sessionsVersion.flatMapLatest {
             val currentSessions = sessions.values.toList()
@@ -371,24 +394,29 @@ class ChatService(
     // ---- 初始化对话 ----
 
     suspend fun initializeConversation(conversationId: Uuid) {
-        getOrCreateSession(conversationId) // 确保 session 存在
-        val conversation = conversationRepo.getConversationById(conversationId)
-        if (conversation != null) {
-            updateConversation(conversationId, conversation)
-            settingsStore.updateAssistant(conversation.assistantId)
-        } else {
-            // 新建对话, 并添加预设消息
-            val currentSettings = settingsStore.settingsFlowRaw.first()
-            val assistant = currentSettings.getCurrentAssistant()
-            val newConversation = Conversation.ofId(
-                id = conversationId,
-                assistantId = assistant.id,
-                newConversation = true
-            ).updateCurrentMessages(assistant.presetMessages)
-            updateConversation(conversationId, newConversation)
+        val session = getOrCreateSession(conversationId)
+        val initializedConversation = session.initializeState {
+            val conversation = conversationRepo.getConversationById(conversationId)
+            if (conversation != null) {
+                settingsStore.updateAssistant(conversation.assistantId)
+                conversation
+            } else {
+                // 新建对话, 并添加预设消息
+                val currentSettings = settingsStore.settingsFlowRaw.first()
+                val assistant = currentSettings.getCurrentAssistant()
+                Conversation.ofId(
+                    id = conversationId,
+                    assistantId = assistant.id,
+                    newConversation = true
+                ).updateCurrentMessages(assistant.presetMessages)
+            }
         }
+        compressionDiagnostics.record(
+            conversationId = conversationId,
+            stage = "initialize.ready",
+            conversation = initializedConversation,
+        )
     }
-
     // ---- 发送消息 ----
 
     fun sendMessage(
@@ -405,6 +433,7 @@ class ChatService(
 
         val job = appScope.launch {
             try {
+                initializeConversation(conversationId)
                 val currentConversation = session.state.value
                 val endedEventConsumption = if (
                     answer && requestMode == ChatRequestMode.Normal
@@ -414,6 +443,12 @@ class ChatService(
                     null
                 }
                 val conversationBeforeSend = endedEventConsumption?.conversation ?: currentConversation
+                compressionDiagnostics.record(
+                    conversationId = conversationId,
+                    stage = "send.before",
+                    conversation = conversationBeforeSend,
+                    details = "answer=$answer requestMode=$requestMode",
+                )
                 val settings = settingsStore.settingsFlow.first()
                 val assistant = settings.getAssistantById(conversationBeforeSend.assistantId)
                     ?: settings.getCurrentAssistant()
@@ -427,6 +462,11 @@ class ChatService(
                     ).toMessageNode(),
                 )
                 saveConversation(conversationId, newConversation)
+                compressionDiagnostics.record(
+                    conversationId = conversationId,
+                    stage = "send.saved",
+                    conversation = getConversationFlow(conversationId).value,
+                )
 
                 // 开始补全
                 if (answer) {
@@ -862,11 +902,7 @@ class ChatService(
                     anonymousQuestionContextPrompt,
                     additionalSystemPrompt,
                 ).joinToString("\n\n").takeIf { it.isNotBlank() },
-                memories = if (assistant.useGlobalMemory) {
-                    memoryRepository.getGlobalMemories()
-                } else {
-                    memoryRepository.getMemoriesOfAssistant(assistant.id.toString())
-                },
+                memories = memoryRepository.getMemories(assistant.memoryScope),
                 inputTransformers = buildList {
                     addAll(inputTransformers)
                     add(templateTransformer)
@@ -1457,13 +1493,22 @@ class ChatService(
 
     suspend fun compressConversation(
         conversationId: Uuid,
-        conversation: Conversation,
         additionalPrompt: String,
         targetTokens: Int,
         keepRecentMessages: Int = 32,
         autoCompressConfig: AutoCompressConfig? = null,
     ): Result<Unit> = runCatching {
         val settings = settingsStore.settingsFlow.first()
+        initializeConversation(conversationId)
+        val compressionBase = getConversationFlow(conversationId).value.normalizeCompressionState()
+        val expectedSummary = compressionBase.compressedSummary
+        val expectedCompressedNodeIds = compressionBase.activeCompressedMessageNodeIds
+        compressionDiagnostics.record(
+            conversationId = conversationId,
+            stage = "compress.start",
+            conversation = compressionBase,
+            details = "targetTokens=$targetTokens keepRecent=$keepRecentMessages",
+        )
         val model = settings.findModelById(settings.compressModelId)
             ?: settings.getCurrentChatModel()
             ?: throw IllegalStateException("No model available for compression")
@@ -1474,8 +1519,14 @@ class ChatService(
 
         val providerHandler = providerManager.getProviderByType(compressionProvider)
 
-        val allNodes = conversation.visibleMessageNodes
-            .filterNot { it.currentMessage.isStandaloneVoiceCallRecord() }
+        val visibleNodes = compressionBase.visibleMessageNodes
+        val standaloneVoiceCallRecordNodes = visibleNodes
+            .filter { it.currentMessage.isStandaloneVoiceCallRecord() }
+        val voiceCallMessageIds = standaloneVoiceCallRecordNodes
+            .flatMapTo(mutableSetOf()) { node ->
+                node.currentMessage.voiceCallRecord()?.messageIds.orEmpty()
+            }
+        val allNodes = visibleNodes.filterNot { it.currentMessage.isStandaloneVoiceCallRecord() }
         val allMessages = allNodes.map { it.currentMessage }
         if (allMessages.isEmpty()) {
             throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))
@@ -1488,7 +1539,11 @@ class ChatService(
 
         if (allMessages.size > effectiveKeepRecentMessages) {
             nodesToCompress = allNodes.dropLast(effectiveKeepRecentMessages)
-            messagesToCompress = nodesToCompress.map { it.currentMessage }
+            messagesToCompress = nodesToCompress.map { node ->
+                node.currentMessage.forConversationCompression(
+                    isVoiceCallTranscript = node.currentMessage.id.toString() in voiceCallMessageIds,
+                )
+            }
         } else {
             throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))
         }
@@ -1553,7 +1608,6 @@ class ChatService(
                 .awaitAll()
         }
 
-        val latestConversation = getConversationFlow(conversationId).value
         val compressedSummary = mergeSummaries(
             summaries = compressedSummaries,
             extraContext = buildString {
@@ -1566,7 +1620,7 @@ class ChatService(
                 }
             }
         )
-        val previousSummary = latestConversation.compressedSummary?.takeIf { it.isNotBlank() }
+        val previousSummary = expectedSummary?.takeIf { it.isNotBlank() }
         val summaryForPrompt = if (previousSummary == null) {
             compressedSummary.ifBlank { null }
         } else {
@@ -1590,21 +1644,45 @@ class ChatService(
                 }
             ).ifBlank { null }
         }
-        val latestNodeIds = latestConversation.messageNodes.map { it.id }.toSet()
-        val nodeIdsToCompress = nodesToCompress
-            .map { it.id }
-            .filter { it in latestNodeIds }
+        val selectedNodeIds = nodesToCompress.mapTo(mutableSetOf()) { it.id }
+        val coveredNodeIds = expectedCompressedNodeIds + selectedNodeIds
+        val voiceCallRecordNodeIdsToCompress =
+            compressionBase.voiceCallRecordNodeIdsFullyCoveredBy(coveredNodeIds)
+        val nodeIdsToCompress = selectedNodeIds + voiceCallRecordNodeIdsToCompress
+        val latestConversation = getConversationFlow(conversationId).value
+        val newConversation = latestConversation
+            .withCompressionResultIfBaseUnchanged(
+                expectedSummary = expectedSummary,
+                expectedCompressedNodeIds = expectedCompressedNodeIds,
+                newSummary = summaryForPrompt,
+                nodeIdsToCompress = nodeIdsToCompress,
+                newAutoCompressConfig = autoCompressConfig?.copy(
+                    keepRecentMessages = effectiveKeepRecentMessages
+                ),
+            )
+            ?.copy(chatSuggestions = emptyList())
+        if (newConversation == null) {
+            compressionDiagnostics.record(
+                conversationId = conversationId,
+                stage = "compress.rejected",
+                conversation = latestConversation,
+                details = "expectedSummaryChars=${expectedSummary?.length ?: 0} expectedCompressed=${expectedCompressedNodeIds.size}",
+            )
+            return@runCatching
+        }
 
-        val newConversation = latestConversation.copy(
-            chatSuggestions = emptyList(),
-            compressedSummary = summaryForPrompt,
-            compressedMessageNodeIds = latestConversation.compressedMessageNodeIds + nodeIdsToCompress,
-            autoCompressConfig = autoCompressConfig?.copy(
-                keepRecentMessages = effectiveKeepRecentMessages
-            ) ?: latestConversation.autoCompressConfig,
+        compressionDiagnostics.record(
+            conversationId = conversationId,
+            stage = "compress.accepted",
+            conversation = newConversation,
+            details = "newlyCompressed=${nodeIdsToCompress.size}",
         )
-
         saveConversation(conversationId, newConversation)
+        compressionDiagnostics.record(
+            conversationId = conversationId,
+            stage = "compress.saved",
+            conversation = getConversationFlow(conversationId).value,
+        )
     }
 
     private suspend fun autoCompressConversationIfNeeded(
@@ -1628,7 +1706,6 @@ class ChatService(
 
         compressConversation(
             conversationId = conversationId,
-            conversation = conversation,
             additionalPrompt = config.additionalPrompt,
             targetTokens = config.targetTokens,
             keepRecentMessages = keepRecentMessages,
@@ -1779,9 +1856,18 @@ class ChatService(
     private fun updateConversation(conversationId: Uuid, conversation: Conversation) {
         if (conversation.id != conversationId) return
         val normalizedConversation = conversation.normalizeCompressionState()
+        if (normalizedConversation.compressedMessageNodeIds != conversation.compressedMessageNodeIds) {
+            compressionDiagnostics.record(
+                conversationId = conversationId,
+                stage = "normalize.changed",
+                conversation = normalizedConversation,
+                details = "beforeStored=" + conversation.compressedMessageNodeIds.size +
+                    " beforeActive=" + conversation.activeCompressedMessageNodeIds.size,
+            )
+        }
         val session = getOrCreateSession(conversationId)
         checkFilesDelete(normalizedConversation, session.state.value)
-        session.state.value = normalizedConversation
+        session.replaceState(normalizedConversation)
     }
 
     fun updateConversationState(conversationId: Uuid, update: (Conversation) -> Conversation) {
@@ -1928,13 +2014,19 @@ class ChatService(
         if (targetNodeIndex == -1) {
             throw NotFoundException("Message not found")
         }
+        compressionDiagnostics.record(
+            conversationId = conversationId,
+            stage = "fork.before",
+            conversation = currentConversation,
+            details = "targetIndex=" + targetNodeIndex,
+        )
 
-        val copiedNodes = currentConversation.messageNodes
+        val copiedNodePairs = currentConversation.messageNodes
             .subList(0, targetNodeIndex + 1)
-            .map { node ->
-                node.copy(
+            .map { sourceNode ->
+                sourceNode.id to sourceNode.copy(
                     id = Uuid.random(),
-                    messages = node.messages.map { message ->
+                    messages = sourceNode.messages.map { message ->
                         message.copy(
                             parts = message.parts.map { part ->
                                 part.copyWithForkedFileUrl()
@@ -1943,6 +2035,15 @@ class ChatService(
                     }
                 )
             }
+        val copiedNodeIdsBySourceId = copiedNodePairs.associate { (sourceNodeId, copiedNode) ->
+            sourceNodeId to copiedNode.id
+        }
+        val copiedNodes = copiedNodePairs.map { it.second }
+        val targetNodeId = currentConversation.messageNodes[targetNodeIndex].id
+        val forkCompressionState = currentConversation.compressionStateForFork(
+            targetNodeId = targetNodeId,
+            copiedNodeIdsBySourceId = copiedNodeIdsBySourceId,
+        )
 
         val forkConversation = Conversation(
             id = Uuid.random(),
@@ -1951,9 +2052,26 @@ class ChatService(
             customSystemPrompt = currentConversation.customSystemPrompt,
             modeInjectionIds = currentConversation.modeInjectionIds,
             lorebookIds = currentConversation.lorebookIds,
+            compressedSummary = forkCompressionState.summary,
+            compressedMessageNodeIds = forkCompressionState.compressedNodeIds,
+            autoCompressConfig = currentConversation.autoCompressConfig,
         )
 
         saveConversation(forkConversation.id, forkConversation)
+        compressionDiagnostics.record(
+            conversationId = conversationId,
+            stage = "fork.completed",
+            conversation = currentConversation,
+            details = "forkId=" + forkConversation.id +
+                " copiedNodes=" + copiedNodes.size +
+                " mappedCompressed=" + forkCompressionState.compressedNodeIds.size,
+        )
+        compressionDiagnostics.record(
+            conversationId = forkConversation.id,
+            stage = "fork.created",
+            conversation = forkConversation,
+            details = "sourceId=" + conversationId + " targetIndex=" + targetNodeIndex,
+        )
         return forkConversation
     }
 
@@ -2213,6 +2331,22 @@ private fun appendCompressedSummaryToSystemPrompt(
         systemPrompt.trim().takeIf { it.isNotBlank() },
         summaryBlock,
     ).filterNotNull().joinToString("\n\n")
+}
+
+internal fun UIMessage.forConversationCompression(
+    isVoiceCallTranscript: Boolean,
+): UIMessage {
+    if (!isVoiceCallTranscript) return this
+
+    val markedTranscript = buildString {
+        appendLine("[VOICE_CALL_TRANSCRIPT_SEGMENT]")
+        appendLine("This text is from a voice call, not a normal chat message.")
+        appendLine(toText())
+        append("[/VOICE_CALL_TRANSCRIPT_SEGMENT]")
+    }
+    return copy(
+        parts = listOf(UIMessagePart.Text(markedTranscript)),
+    )
 }
 
 internal fun splitMessagesForCompression(

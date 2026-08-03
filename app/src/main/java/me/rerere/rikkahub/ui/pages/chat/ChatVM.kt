@@ -79,6 +79,9 @@ class ChatVM(
         chatService
             .getProcessingStatusFlow(_conversationId)
 
+    val compressionDiagnostics: StateFlow<List<String>> =
+        chatService.getCompressionDiagnosticsFlow(_conversationId)
+
     val conversationJobs = chatService
         .getConversationJobs()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
@@ -233,7 +236,6 @@ class ChatVM(
             val conversationScoped = assistant?.allowConversationSystemPrompt == true
             chatService.compressConversation(
                 _conversationId,
-                conversation.value,
                 additionalPrompt,
                 targetTokens,
                 keepRecentMessages,
@@ -244,6 +246,15 @@ class ChatVM(
                 chatService.addError(it, title = context.getString(R.string.error_title_compress_conversation))
             }
         }
+    }
+
+
+    fun recordCompressionDiagnosticSnapshot(stage: String, details: String? = null) {
+        chatService.recordCompressionDiagnosticSnapshot(_conversationId, stage, details)
+    }
+
+    fun clearCompressionDiagnostics() {
+        chatService.clearCompressionDiagnostics(_conversationId)
     }
 
     fun saveAutoCompressConfig(config: AutoCompressConfig) {

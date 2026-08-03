@@ -16,6 +16,7 @@ import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.data.model.memoryScope
 import me.rerere.rikkahub.data.repository.AnonymousQuestion
 import me.rerere.rikkahub.data.repository.AnonymousQuestionAuthor
 import me.rerere.rikkahub.data.repository.AnonymousQuestionEntry
@@ -188,11 +189,7 @@ class AnonymousQuestionBoxVM(
     ): String? {
         val settings = settingsStore.settingsFlow.value
         val model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId) ?: return null
-        val memories = if (assistant.useGlobalMemory) {
-            memoryRepository.getGlobalMemories()
-        } else {
-            memoryRepository.getMemoriesOfAssistant(assistant.id.toString())
-        }
+        val memories = memoryRepository.getMemories(assistant.memoryScope)
         var output = ""
         generationHandler.generateText(
             settings = settings,

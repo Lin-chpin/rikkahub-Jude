@@ -29,6 +29,7 @@ import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.data.model.memoryScope
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.repository.Moment
@@ -276,11 +277,7 @@ class MomentsVM(
             return MomentReactionGeneration.VisionModelSetupRequired
         }
         val inputTransformers = if (requiresOcrFallback) listOf(OcrTransformer) else emptyList()
-        val memories = if (assistant.useGlobalMemory) {
-            memoryRepository.getGlobalMemories()
-        } else {
-            memoryRepository.getMemoriesOfAssistant(assistant.id.toString())
-        }
+        val memories = memoryRepository.getMemories(assistant.memoryScope)
         val timelineContext = buildTimelineContext(moment.assistantId, excludeMomentId = moment.id)
         val imageInstruction = if (moment.imageUris.isNotEmpty() && moment.imageDescription.isBlank()) {
             """
@@ -349,11 +346,7 @@ class MomentsVM(
         val settings = settingsStore.settingsFlow.value
         val model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId)
             ?: return CommentGenerationResult.ModelUnavailable
-        val memories = if (assistant.useGlobalMemory) {
-            memoryRepository.getGlobalMemories()
-        } else {
-            memoryRepository.getMemoriesOfAssistant(assistant.id.toString())
-        }
+        val memories = memoryRepository.getMemories(assistant.memoryScope)
         val prompt = """
             Reply as the assistant in a Moments comment thread.
             Keep it natural and short. Return only the reply text, no JSON and no markdown.

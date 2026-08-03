@@ -4,6 +4,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.VoiceCallAudioSegment
 import me.rerere.rikkahub.data.model.Conversation
+import kotlin.uuid.Uuid
 
 data class VoiceCallEndedEventConsumption(
     val conversation: Conversation,
@@ -22,6 +23,31 @@ fun UIMessage.voiceCallRecord(): UIMessageAnnotation.VoiceCallRecord? =
 
 fun UIMessage.isStandaloneVoiceCallRecord(): Boolean =
     voiceCallRecord()?.standalone == true
+
+fun Conversation.voiceCallRecordNodeIdsFullyCoveredBy(
+    coveredNodeIds: Set<Uuid>,
+): Set<Uuid> {
+    val existingMessageIds = messageNodes
+        .asSequence()
+        .flatMap { it.messages.asSequence() }
+        .mapTo(mutableSetOf()) { it.id.toString() }
+    val coveredMessageIds = messageNodes
+        .asSequence()
+        .filter { it.id in coveredNodeIds }
+        .flatMap { it.messages.asSequence() }
+        .mapTo(mutableSetOf()) { it.id.toString() }
+
+    return messageNodes.mapNotNullTo(mutableSetOf()) { node ->
+        val record = node.currentMessage.voiceCallRecord()?.takeIf { it.standalone }
+            ?: return@mapNotNullTo null
+        val linkedExistingIds = record.messageIds.filterTo(mutableSetOf()) {
+            it in existingMessageIds
+        }
+        node.id.takeIf {
+            linkedExistingIds.isNotEmpty() && linkedExistingIds.all { it in coveredMessageIds }
+        }
+    }
+}
 
 fun Conversation.consumePendingVoiceCallEndedEvent(): VoiceCallEndedEventConsumption {
     var shouldNotifyModel = false

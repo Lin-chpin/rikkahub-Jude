@@ -69,6 +69,7 @@ class UsageReminderService : Service() {
     private var lockNoticeSignature: String? = null
     private var lockNoticeJob: Job? = null
     private var lastLockNotificationSignature: String? = null
+    private var lastLockStateLogSignature: String? = null
     private var lastTargetRedirectPackageName: String? = null
     private var lastTargetRedirectAtMillis: Long = 0L
 
@@ -215,10 +216,6 @@ class UsageReminderService : Service() {
             clearLock()
         } else if (activeLock != null) {
             if (activeLock.lockedUntilMillis > now) {
-                logUsageLock(
-                    "checkUsageRules: active lock target=${activeLock.targetPackageName} " +
-                        "label=${activeLock.targetLabel} until=${activeLock.lockedUntilMillis}"
-                )
                 sendLockNotification(activeLock)
                 syncLockOverlay(activeLock)
                 scheduleUnlock(activeLock.lockedUntilMillis)
@@ -361,6 +358,7 @@ class UsageReminderService : Service() {
             lockJob = null
         }
         scheduledUnlockAtMillis = 0L
+        lastLockStateLogSignature = null
         removeLockOverlay()
         removeLockNotice()
         settingsStore.update { current ->
@@ -394,7 +392,6 @@ class UsageReminderService : Service() {
             append(lock.reason)
         }
         if (existing != null && lockOverlaySignature == signature) {
-            logUsageLock("showLockOverlay: overlay already shown signature=$signature")
             return
         }
         if (existing != null) {
@@ -428,12 +425,30 @@ class UsageReminderService : Service() {
             foregroundPackageName == targetPackageName -> "redirect_home"
             else -> "no_match_remove"
         }
-        logUsageLock(
-            "syncLockOverlay: target=$targetPackageName label=${lock.targetLabel} " +
-                "foreground=$foregroundPackageName self=$packageName action=$action source=${lock.source} " +
-                "until=${lock.lockedUntilMillis} usageAccess=${reader.hasUsageAccess()} " +
-                "overlay=${canDrawOverlays(this)} monitorActive=${monitorJob?.isActive == true}"
-        )
+        val usageAccess = reader.hasUsageAccess()
+        val overlayPermission = canDrawOverlays(this)
+        val monitorActive = monitorJob?.isActive == true
+        val stateLogSignature = listOf(
+            targetPackageName,
+            lock.targetLabel,
+            lock.reason,
+            lock.source,
+            lock.lockedUntilMillis,
+            foregroundPackageName,
+            action,
+            usageAccess,
+            overlayPermission,
+            monitorActive,
+        ).joinToString("|")
+        if (lastLockStateLogSignature != stateLogSignature) {
+            lastLockStateLogSignature = stateLogSignature
+            logUsageLock(
+                "syncLockOverlay: target=$targetPackageName label=${lock.targetLabel} " +
+                    "foreground=$foregroundPackageName self=$packageName action=$action source=${lock.source} " +
+                    "until=${lock.lockedUntilMillis} usageAccess=$usageAccess " +
+                    "overlay=$overlayPermission monitorActive=$monitorActive"
+            )
+        }
         when {
             targetPackageName == null -> {
                 removeLockOverlay()
@@ -455,10 +470,6 @@ class UsageReminderService : Service() {
             targetPackageName == lastTargetRedirectPackageName &&
             now - lastTargetRedirectAtMillis < TARGET_REDIRECT_COOLDOWN_MILLIS
         ) {
-            logUsageLock(
-                "redirectTargetToHome: cooldown skip target=$targetPackageName " +
-                    "elapsed=${now - lastTargetRedirectAtMillis}"
-            )
             return
         }
         lastTargetRedirectPackageName = targetPackageName
@@ -502,7 +513,6 @@ class UsageReminderService : Service() {
             append(lock.reason)
         }
         if (lockNoticeView != null && lockNoticeSignature == signature) {
-            logUsageLock("showCenterLockNotice: notice already shown signature=$signature")
             return
         }
         removeLockNotice()
@@ -749,7 +759,6 @@ class UsageReminderService : Service() {
 
     private fun scheduleUnlock(lockedUntilMillis: Long) {
         if (lockJob?.isActive == true && scheduledUnlockAtMillis == lockedUntilMillis) {
-            logUsageLock("scheduleUnlock: already scheduled until=$lockedUntilMillis")
             return
         }
         lockJob?.cancel()
