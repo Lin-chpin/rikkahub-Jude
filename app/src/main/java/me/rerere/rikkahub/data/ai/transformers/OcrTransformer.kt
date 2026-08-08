@@ -21,6 +21,7 @@ import me.rerere.common.cache.SingleFileCacheStore
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.datastore.findProvider
+import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.get
 import java.io.File
@@ -82,53 +83,68 @@ object OcrTransformer : InputMessageTransformer, KoinComponent {
         }
     }
 
-    suspend fun performOcr(part: UIMessagePart.Image): String = runCatching {
-        // Check cache first
-        cache.get(part.url)?.let { cachedResult ->
-            Log.i(TAG, "performOcr: Using cached result for ${part.url}")
-            return cachedResult
-        }
-
+    suspend fun performOcr(part: UIMessagePart.Image): String {
         val settings = get<SettingsStore>().settingsFlow.value
-        val model = settings.findModelById(settings.ocrModelId)
-            ?.withOcrModelOverride(settings.ocrOpenAIConfig)
-            ?: settings.ocrOpenAIConfig.toModelOrNull()
-            ?: return "[Image]"
-        val providerSetting = if (settings.ocrOpenAIConfig.enabled) {
-            settings.ocrOpenAIConfig.toProviderSetting()
+        val ocrConfig = settings.ocrOpenAIConfig
+        val model = if (ocrConfig.enabled) {
+            ocrConfig.modelId.trim().takeIf { it.isNotBlank() }?.let { modelId ->
+                Model(
+                    modelId = modelId,
+                    displayName = modelId,
+                    type = ModelType.CHAT,
+                )
+            } ?: settings.ocrModelId?.let(settings::findModelById)
+            ?: settings.getCurrentChatModel()
         } else {
-            model.findProvider(settings.providers) ?: return "[Image]"
+            settings.ocrModelId?.let(settings::findModelById)
+                ?: settings.getCurrentChatModel()
+        } ?: throw IllegalStateException(
+            "No chat model available for OCR. Configure the chat model in Settings > Model Settings."
+        )
+        val providerSetting = if (ocrConfig.enabled) {
+            ocrConfig.toProviderSetting()
+        } else {
+            model.findProvider(settings.providers)
+                ?: throw IllegalStateException("Provider not found for OCR")
         }
         val provider = get<ProviderManager>().getProviderByType(providerSetting)
-        val result = provider.generateText(
-            providerSetting = providerSetting,
-            messages = listOf(
-                UIMessage.system(settings.ocrPrompt),
-                UIMessage(
-                    role = MessageRole.USER,
-                    parts = listOf(UIMessagePart.Image(part.url))
-                )
-            ),
-            params = TextGenerationParams(
-                model = model,
-                customHeaders = model.customHeaders,
-                customBody = model.customBodies,
-            ),
-        )
-        val content = result.choices[0].message?.toText() ?: "[ERROR, OCR failed]"
-        Log.i(TAG, "performOcr: $content")
-        val ocrResult = """
-            <image_file_ocr>
-               $content
-            </image_file_ocr>
-            * The image_file_ocr tag contains a description of an image that the user uploaded to you, not the user's prompt.
-        """.trimIndent()
+        return runCatching {
+            // Check cache first
+            cache.get(part.url)?.let { cachedResult ->
+                Log.i(TAG, "performOcr: Using cached result for ${part.url}")
+                return cachedResult
+            }
 
-        // Cache the result
-        cache.put(part.url, ocrResult)
-        return ocrResult
-    }.getOrElse {
-        "[ERROR, OCR failed: $it]"
+            val result = provider.generateText(
+                providerSetting = providerSetting,
+                messages = listOf(
+                    UIMessage.system(settings.ocrPrompt),
+                    UIMessage(
+                        role = MessageRole.USER,
+                        parts = listOf(UIMessagePart.Image(part.url))
+                    )
+                ),
+                params = TextGenerationParams(
+                    model = model,
+                    customHeaders = model.customHeaders,
+                    customBody = model.customBodies,
+                ),
+            )
+            val content = result.choices[0].message?.toText() ?: "[ERROR, OCR failed]"
+            Log.i(TAG, "performOcr: $content")
+            val ocrResult = """
+                <image_file_ocr>
+                   $content
+                </image_file_ocr>
+                * The image_file_ocr tag contains a description of an image that the user uploaded to you, not the user's prompt.
+            """.trimIndent()
+
+            // Cache the result
+            cache.put(part.url, ocrResult)
+            return ocrResult
+        }.getOrElse {
+            "[ERROR, OCR failed: $it]"
+        }
     }
 
     private fun OcrOpenAIConfig.toProviderSetting(): ProviderSetting {
@@ -140,18 +156,5 @@ object OcrTransformer : InputMessageTransformer, KoinComponent {
         )
     }
 
-    private fun OcrOpenAIConfig.toModelOrNull(): Model? {
-        if (!enabled || modelId.isBlank()) return null
-        val trimmedModelId = modelId.trim()
-        return Model(
-            modelId = trimmedModelId,
-            displayName = trimmedModelId,
-            type = ModelType.CHAT,
-        )
-    }
 
-    private fun Model.withOcrModelOverride(config: OcrOpenAIConfig): Model {
-        if (!config.enabled || config.modelId.isBlank()) return this
-        return copy(modelId = config.modelId.trim())
-    }
 }

@@ -161,19 +161,11 @@ private fun buildParsedVoiceCallResponse(
     return ParsedVoiceCallResponse(
         visibleText = segments.joinToString("\n") { it.text },
         speechText = segments.joinToString("\n") { segment ->
-            val speechSegmentText = segment.text.removeLeadingVoiceCallInterjection(
-                tag = segment.tag,
-                format = format,
-                replacementText = segment.replacementText,
-            )
+            val speechSegmentText = segment.voiceCallSpeechText(format)
             segment.tag?.let { "${format.renderForSpeech(it.word)}$speechSegmentText" } ?: speechSegmentText
         },
         displayText = segments.joinToString("\n") { segment ->
-            val displaySegmentText = segment.text.removeLeadingVoiceCallInterjection(
-                tag = segment.tag,
-                format = format,
-                replacementText = segment.replacementText,
-            )
+            val displaySegmentText = segment.voiceCallSpeechText(format)
             val label = when (segment.selectionSource) {
                 VoiceCallTagSelectionSource.STRUCTURED,
                 VoiceCallTagSelectionSource.LEGACY,
@@ -191,6 +183,23 @@ private fun buildParsedVoiceCallResponse(
             label?.let { "${format.renderForSpeech(it)}$displaySegmentText" } ?: displaySegmentText
         },
         segments = segments,
+    )
+}
+
+private fun ParsedVoiceCallSegment.voiceCallSpeechText(
+    format: VoiceCallAudioTagFormat,
+): String {
+    // MiniMax renders round-bracket tags itself; strip square-bracket directions the
+    // primary model may have written so they never reach the MiniMax speech copy.
+    val cleanText = if (format == VoiceCallAudioTagFormat.MINIMAX_SPEECH_2_8) {
+        text.removeModelAudioDirections().trim()
+    } else {
+        text
+    }
+    return cleanText.removeLeadingVoiceCallInterjection(
+        tag = tag,
+        format = format,
+        replacementText = replacementText,
     )
 }
 
@@ -278,6 +287,7 @@ internal fun UIMessage.toVoiceCallAudioTagPresentation(
         }
     )
 }
+
 
 internal fun UIMessage.withSelectedVoiceCallAudioTagIds(
     selectedTagIds: List<String?>?,

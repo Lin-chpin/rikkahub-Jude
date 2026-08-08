@@ -105,6 +105,9 @@ fun SettingModelPage(vm: SettingVM = koinViewModel()) {
             }
 
             item {
+                DefaultVoiceCallAudioTagModelSetting(settings = settings, vm = vm)
+            }
+            item {
                 DefaultTitleModelSetting(settings = settings, vm = vm)
             }
 
@@ -463,6 +466,133 @@ private fun DefaultChatModelSetting(
 }
 
 @Composable
+private fun DefaultVoiceCallAudioTagModelSetting(
+    settings: Settings,
+    vm: SettingVM,
+) {
+    var showModal by remember { mutableStateOf(false) }
+    val config = settings.voiceCallAudioTagConfig
+    ModelFeatureCard(
+        icon = {
+            Icon(HugeIcons.MessageMultiple01, null)
+        },
+        title = {
+            Text(stringResource(R.string.setting_model_page_voice_call_audio_tag_model), maxLines = 1)
+        },
+        description = {
+            Text(stringResource(R.string.setting_model_page_voice_call_audio_tag_model_desc))
+        },
+        actions = {
+            Box(modifier = Modifier.weight(1f)) {
+                if (config.enabled) {
+                    SeparateOpenAIModelSelector(
+                        providerName = "语音标签专用 OpenAI API",
+                        modelId = config.modelId,
+                        apiKey = config.apiKey,
+                        baseUrl = config.baseUrl,
+                        chatCompletionsPath = config.chatCompletionsPath,
+                        useResponseApi = config.useResponseApi,
+                        onModelIdChange = { modelId ->
+                            vm.updateSettings(
+                                settings.copy(
+                                    voiceCallAudioTagConfig = config.copy(modelId = modelId)
+                                )
+                            )
+                        },
+                        modifier = Modifier.wrapContentWidth()
+                    )
+                } else {
+                    ModelSelector(
+                        modelId = settings.voiceCallAudioTagModelId ?: settings.chatModelId,
+                        type = ModelType.CHAT,
+                        onSelect = { model ->
+                            vm.updateSettings(
+                                settings.copy(
+                                    voiceCallAudioTagModelId = model.modelId.takeIf { it.isNotBlank() }?.let { model.id }
+                                )
+                            )
+                        },
+                        providers = settings.providers,
+                        allowClear = true,
+                        modifier = Modifier.wrapContentWidth()
+                    )
+                }
+            }
+            IconButton(
+                onClick = {
+                    showModal = true
+                },
+                colors = IconButtonDefaults.filledTonalIconButtonColors()
+            ) {
+                Icon(HugeIcons.Tools, null)
+            }
+        }
+    )
+
+    if (showModal) {
+        ModalBottomSheet(
+            onDismissRequest = {
+                showModal = false
+            },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SeparateOpenAIConfigForm(
+                    title = "语音标签专用 OpenAI API",
+                    description = "开启后，通话中的语音情绪标签会使用这里的 API，不影响当前对话模型 API。",
+                    toggleLabel = "单独使用标签 API",
+                    enabled = config.enabled,
+                    apiKey = config.apiKey,
+                    baseUrl = config.baseUrl,
+                    chatCompletionsPath = config.chatCompletionsPath,
+                    useResponseApi = config.useResponseApi,
+                    onEnabledChange = { enabled ->
+                        vm.updateSettings(
+                            settings.copy(
+                                voiceCallAudioTagConfig = config.copy(enabled = enabled)
+                            )
+                        )
+                    },
+                    onApiKeyChange = { apiKey ->
+                        vm.updateSettings(
+                            settings.copy(
+                                voiceCallAudioTagConfig = config.copy(apiKey = apiKey)
+                            )
+                        )
+                    },
+                    onBaseUrlChange = { baseUrl ->
+                        vm.updateSettings(
+                            settings.copy(
+                                voiceCallAudioTagConfig = config.copy(baseUrl = baseUrl)
+                            )
+                        )
+                    },
+                    onChatCompletionsPathChange = { path ->
+                        vm.updateSettings(
+                            settings.copy(
+                                voiceCallAudioTagConfig = config.copy(chatCompletionsPath = path)
+                            )
+                        )
+                    },
+                    onUseResponseApiChange = { useResponseApi ->
+                        vm.updateSettings(
+                            settings.copy(
+                                voiceCallAudioTagConfig = config.copy(useResponseApi = useResponseApi)
+                            )
+                        )
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun DefaultOcrModelSetting(
     settings: Settings,
     vm: SettingVM
@@ -491,16 +621,17 @@ private fun DefaultOcrModelSetting(
                     )
                 } else {
                     ModelSelector(
-                        modelId = settings.ocrModelId,
+                        modelId = settings.ocrModelId ?: settings.chatModelId,
                         type = ModelType.CHAT,
-                        onSelect = {
+                        onSelect = { model ->
                             vm.updateSettings(
                                 settings.copy(
-                                    ocrModelId = it.id
+                                    ocrModelId = model.modelId.takeIf { it.isNotBlank() }?.let { model.id }
                                 )
                             )
                         },
                         providers = settings.providers,
+                        allowClear = true,
                         modifier = Modifier.wrapContentWidth()
                     )
                 }
@@ -574,67 +705,22 @@ private fun OcrOpenAIModelSelector(
     vm: SettingVM,
     modifier: Modifier = Modifier,
 ) {
-    val providerManager = koinInject<ProviderManager>()
     val config = settings.ocrOpenAIConfig
-    val provider = remember(
-        config.apiKey,
-        config.baseUrl,
-        config.chatCompletionsPath,
-        config.useResponseApi,
-    ) {
-        ProviderSetting.OpenAI(
-            name = "OCR 专用 OpenAI API",
-            apiKey = config.apiKey,
-            baseUrl = config.baseUrl.trimEnd('/'),
-            chatCompletionsPath = config.chatCompletionsPath,
-            useResponseApi = config.useResponseApi,
-        )
-    }
-    val availableModels by produceState<List<Model>>(emptyList(), provider) {
-        runCatching {
-            value = providerManager.getProviderByType(provider)
-                .listModels(provider)
-                .map { model ->
-                    model.copy(
-                        type = ModelType.CHAT,
-                        inputModalities = ModelRegistry.MODEL_INPUT_MODALITIES.getData(model.modelId),
-                        outputModalities = ModelRegistry.MODEL_OUTPUT_MODALITIES.getData(model.modelId),
-                        abilities = ModelRegistry.MODEL_ABILITIES.getData(model.modelId),
-                    )
-                }
-                .sortedBy { it.modelId }
-        }.onFailure {
-            it.printStackTrace()
-        }
-    }
-    val selectedFallback = remember(config.modelId, availableModels) {
-        config.modelId
-            .takeIf { it.isNotBlank() && availableModels.none { model -> model.modelId == it } }
-            ?.let { Model(modelId = it, displayName = it, type = ModelType.CHAT) }
-    }
-    val models = remember(availableModels, selectedFallback) {
-        if (selectedFallback == null) {
-            availableModels
-        } else {
-            listOf(selectedFallback) + availableModels
-        }
-    }
-    val selectedModelId = remember(config.modelId, models) {
-        models.firstOrNull { it.modelId == config.modelId }?.id
-    }
-
-    ModelSelector(
-        modelId = selectedModelId,
-        type = ModelType.CHAT,
-        onSelect = { model ->
+    SeparateOpenAIModelSelector(
+        providerName = "OCR 专用 OpenAI API",
+        modelId = config.modelId,
+        apiKey = config.apiKey,
+        baseUrl = config.baseUrl,
+        chatCompletionsPath = config.chatCompletionsPath,
+        useResponseApi = config.useResponseApi,
+        onModelIdChange = { modelId ->
             vm.updateSettings(
                 settings.copy(
-                    ocrOpenAIConfig = config.copy(modelId = model.modelId)
+                    ocrOpenAIConfig = config.copy(modelId = modelId)
                 )
             )
         },
-        providers = listOf(provider.copy(models = models)),
-        modifier = modifier
+        modifier = modifier,
     )
 }
 
@@ -643,97 +729,42 @@ private fun OcrOpenAIConfigForm(
     settings: Settings,
     vm: SettingVM
 ) {
-    FormItem(
-        label = {
-            Text("OCR 专用 OpenAI API")
-        },
-        description = {
-            Text("开启后，图片 OCR 会使用这里的 OpenAI API，不影响当前对话模型 API。")
-        }
-    ) {
-        val config = settings.ocrOpenAIConfig
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("单独使用 OCR API")
-            Switch(
-                checked = config.enabled,
-                onCheckedChange = {
-                    vm.updateSettings(
-                        settings.copy(
-                            ocrOpenAIConfig = config.copy(enabled = it)
-                        )
-                    )
-                }
+    val config = settings.ocrOpenAIConfig
+    SeparateOpenAIConfigForm(
+        title = "OCR 专用 OpenAI API",
+        description = "开启后，图片 OCR 会使用这里的 OpenAI API，不影响当前对话模型 API。",
+        toggleLabel = "单独使用 OCR API",
+        enabled = config.enabled,
+        apiKey = config.apiKey,
+        baseUrl = config.baseUrl,
+        chatCompletionsPath = config.chatCompletionsPath,
+        useResponseApi = config.useResponseApi,
+        onEnabledChange = { enabled ->
+            vm.updateSettings(
+                settings.copy(ocrOpenAIConfig = config.copy(enabled = enabled))
             )
-        }
-
-        if (config.enabled) {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedTextField(
-                    value = config.apiKey,
-                    onValueChange = {
-                        vm.updateSettings(
-                            settings.copy(
-                                ocrOpenAIConfig = config.copy(apiKey = it)
-                            )
-                        )
-                    },
-                    label = { Text("API Key") },
-                    modifier = Modifier.fillMaxWidth(),
-                    maxLines = 1,
-                )
-                OutlinedTextField(
-                    value = config.baseUrl,
-                    onValueChange = {
-                        vm.updateSettings(
-                            settings.copy(
-                                ocrOpenAIConfig = config.copy(baseUrl = it)
-                            )
-                        )
-                    },
-                    label = { Text("Base URL") },
-                    modifier = Modifier.fillMaxWidth(),
-                    maxLines = 1,
-                )
-                OutlinedTextField(
-                    value = config.chatCompletionsPath,
-                    onValueChange = {
-                        vm.updateSettings(
-                            settings.copy(
-                                ocrOpenAIConfig = config.copy(chatCompletionsPath = it)
-                            )
-                        )
-                    },
-                    label = { Text("Chat Completions Path") },
-                    modifier = Modifier.fillMaxWidth(),
-                    maxLines = 1,
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("使用 Responses API")
-                    Switch(
-                        checked = config.useResponseApi,
-                        onCheckedChange = {
-                            vm.updateSettings(
-                                settings.copy(
-                                    ocrOpenAIConfig = config.copy(useResponseApi = it)
-                                )
-                            )
-                        }
-                    )
-                }
-            }
-        }
-    }
+        },
+        onApiKeyChange = { apiKey ->
+            vm.updateSettings(
+                settings.copy(ocrOpenAIConfig = config.copy(apiKey = apiKey))
+            )
+        },
+        onBaseUrlChange = { baseUrl ->
+            vm.updateSettings(
+                settings.copy(ocrOpenAIConfig = config.copy(baseUrl = baseUrl))
+            )
+        },
+        onChatCompletionsPathChange = { path ->
+            vm.updateSettings(
+                settings.copy(ocrOpenAIConfig = config.copy(chatCompletionsPath = path))
+            )
+        },
+        onUseResponseApiChange = { useResponseApi ->
+            vm.updateSettings(
+                settings.copy(ocrOpenAIConfig = config.copy(useResponseApi = useResponseApi))
+            )
+        },
+    )
 }
 
 @Composable
@@ -765,16 +796,17 @@ private fun DefaultCompressModelSetting(
                     )
                 } else {
                     ModelSelector(
-                        modelId = settings.compressModelId,
+                        modelId = settings.compressModelId ?: settings.chatModelId,
                         type = ModelType.CHAT,
-                        onSelect = {
+                        onSelect = { model ->
                             vm.updateSettings(
                                 settings.copy(
-                                    compressModelId = it.id
+                                    compressModelId = model.modelId.takeIf { it.isNotBlank() }?.let { model.id }
                                 )
                             )
                         },
                         providers = settings.providers,
+                        allowClear = true,
                         modifier = Modifier.wrapContentWidth()
                     )
                 }
@@ -848,20 +880,88 @@ private fun CompressOpenAIModelSelector(
     vm: SettingVM,
     modifier: Modifier = Modifier,
 ) {
-    val providerManager = koinInject<ProviderManager>()
     val config = settings.compressOpenAIConfig
-    val provider = remember(
-        config.apiKey,
-        config.baseUrl,
-        config.chatCompletionsPath,
-        config.useResponseApi,
-    ) {
+    SeparateOpenAIModelSelector(
+        providerName = "压缩专用 OpenAI API",
+        modelId = config.modelId,
+        apiKey = config.apiKey,
+        baseUrl = config.baseUrl,
+        chatCompletionsPath = config.chatCompletionsPath,
+        useResponseApi = config.useResponseApi,
+        onModelIdChange = { modelId ->
+            vm.updateSettings(
+                settings.copy(
+                    compressOpenAIConfig = config.copy(modelId = modelId)
+                )
+            )
+        },
+        modifier = modifier,
+    )
+}
+
+@Composable
+private fun CompressOpenAIConfigForm(
+    settings: Settings,
+    vm: SettingVM
+) {
+    val config = settings.compressOpenAIConfig
+    SeparateOpenAIConfigForm(
+        title = "压缩专用 OpenAI API",
+        description = "开启后，滚动摘要和手动压缩会使用这里的 OpenAI API，不影响当前对话模型 API。",
+        toggleLabel = "单独使用压缩 API",
+        enabled = config.enabled,
+        apiKey = config.apiKey,
+        baseUrl = config.baseUrl,
+        chatCompletionsPath = config.chatCompletionsPath,
+        useResponseApi = config.useResponseApi,
+        onEnabledChange = { enabled ->
+            vm.updateSettings(
+                settings.copy(compressOpenAIConfig = config.copy(enabled = enabled))
+            )
+        },
+        onApiKeyChange = { apiKey ->
+            vm.updateSettings(
+                settings.copy(compressOpenAIConfig = config.copy(apiKey = apiKey))
+            )
+        },
+        onBaseUrlChange = { baseUrl ->
+            vm.updateSettings(
+                settings.copy(compressOpenAIConfig = config.copy(baseUrl = baseUrl))
+            )
+        },
+        onChatCompletionsPathChange = { path ->
+            vm.updateSettings(
+                settings.copy(compressOpenAIConfig = config.copy(chatCompletionsPath = path))
+            )
+        },
+        onUseResponseApiChange = { useResponseApi ->
+            vm.updateSettings(
+                settings.copy(compressOpenAIConfig = config.copy(useResponseApi = useResponseApi))
+            )
+        },
+    )
+}
+
+
+@Composable
+private fun SeparateOpenAIModelSelector(
+    providerName: String,
+    modelId: String,
+    apiKey: String,
+    baseUrl: String,
+    chatCompletionsPath: String,
+    useResponseApi: Boolean,
+    onModelIdChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val providerManager = koinInject<ProviderManager>()
+    val provider = remember(apiKey, baseUrl, chatCompletionsPath, useResponseApi) {
         ProviderSetting.OpenAI(
-            name = "压缩专用 OpenAI API",
-            apiKey = config.apiKey,
-            baseUrl = config.baseUrl.trimEnd('/'),
-            chatCompletionsPath = config.chatCompletionsPath,
-            useResponseApi = config.useResponseApi,
+            name = providerName,
+            apiKey = apiKey,
+            baseUrl = baseUrl.trimEnd('/'),
+            chatCompletionsPath = chatCompletionsPath,
+            useResponseApi = useResponseApi,
         )
     }
     val availableModels by produceState<List<Model>>(emptyList(), provider) {
@@ -881,8 +981,8 @@ private fun CompressOpenAIModelSelector(
             it.printStackTrace()
         }
     }
-    val selectedFallback = remember(config.modelId, availableModels) {
-        config.modelId
+    val selectedFallback = remember(modelId, availableModels) {
+        modelId
             .takeIf { it.isNotBlank() && availableModels.none { model -> model.modelId == it } }
             ?.let { Model(modelId = it, displayName = it, type = ModelType.CHAT) }
     }
@@ -893,97 +993,77 @@ private fun CompressOpenAIModelSelector(
             listOf(selectedFallback) + availableModels
         }
     }
-    val selectedModelId = remember(config.modelId, models) {
-        models.firstOrNull { it.modelId == config.modelId }?.id
+    val selectedModelId = remember(modelId, models) {
+        models.firstOrNull { it.modelId == modelId }?.id
     }
 
     ModelSelector(
         modelId = selectedModelId,
         type = ModelType.CHAT,
-        onSelect = { model ->
-            vm.updateSettings(
-                settings.copy(
-                    compressOpenAIConfig = config.copy(modelId = model.modelId)
-                )
-            )
-        },
+        onSelect = { model -> onModelIdChange(model.modelId) },
         providers = listOf(provider.copy(models = models)),
         modifier = modifier
     )
 }
 
 @Composable
-private fun CompressOpenAIConfigForm(
-    settings: Settings,
-    vm: SettingVM
+private fun SeparateOpenAIConfigForm(
+    title: String,
+    description: String,
+    toggleLabel: String,
+    enabled: Boolean,
+    apiKey: String,
+    baseUrl: String,
+    chatCompletionsPath: String,
+    useResponseApi: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+    onApiKeyChange: (String) -> Unit,
+    onBaseUrlChange: (String) -> Unit,
+    onChatCompletionsPathChange: (String) -> Unit,
+    onUseResponseApiChange: (Boolean) -> Unit,
 ) {
     FormItem(
         label = {
-            Text("压缩专用 OpenAI API")
+            Text(title)
         },
         description = {
-            Text("开启后，滚动摘要和手动压缩会使用这里的 OpenAI API，不影响当前对话模型 API。")
+            Text(description)
         }
     ) {
-        val config = settings.compressOpenAIConfig
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("单独使用压缩 API")
+            Text(toggleLabel)
             Switch(
-                checked = config.enabled,
-                onCheckedChange = {
-                    vm.updateSettings(
-                        settings.copy(
-                            compressOpenAIConfig = config.copy(enabled = it)
-                        )
-                    )
-                }
+                checked = enabled,
+                onCheckedChange = onEnabledChange
             )
         }
 
-        if (config.enabled) {
+        if (enabled) {
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 OutlinedTextField(
-                    value = config.apiKey,
-                    onValueChange = {
-                        vm.updateSettings(
-                            settings.copy(
-                                compressOpenAIConfig = config.copy(apiKey = it)
-                            )
-                        )
-                    },
+                    value = apiKey,
+                    onValueChange = onApiKeyChange,
                     label = { Text("API Key") },
                     modifier = Modifier.fillMaxWidth(),
                     maxLines = 1,
                 )
                 OutlinedTextField(
-                    value = config.baseUrl,
-                    onValueChange = {
-                        vm.updateSettings(
-                            settings.copy(
-                                compressOpenAIConfig = config.copy(baseUrl = it)
-                            )
-                        )
-                    },
+                    value = baseUrl,
+                    onValueChange = onBaseUrlChange,
                     label = { Text("Base URL") },
                     modifier = Modifier.fillMaxWidth(),
                     maxLines = 1,
                 )
                 OutlinedTextField(
-                    value = config.chatCompletionsPath,
-                    onValueChange = {
-                        vm.updateSettings(
-                            settings.copy(
-                                compressOpenAIConfig = config.copy(chatCompletionsPath = it)
-                            )
-                        )
-                    },
+                    value = chatCompletionsPath,
+                    onValueChange = onChatCompletionsPathChange,
                     label = { Text("Chat Completions Path") },
                     modifier = Modifier.fillMaxWidth(),
                     maxLines = 1,
@@ -995,14 +1075,8 @@ private fun CompressOpenAIConfigForm(
                 ) {
                     Text("使用 Responses API")
                     Switch(
-                        checked = config.useResponseApi,
-                        onCheckedChange = {
-                            vm.updateSettings(
-                                settings.copy(
-                                    compressOpenAIConfig = config.copy(useResponseApi = it)
-                                )
-                            )
-                        }
+                        checked = useResponseApi,
+                        onCheckedChange = onUseResponseApiChange
                     )
                 }
             }

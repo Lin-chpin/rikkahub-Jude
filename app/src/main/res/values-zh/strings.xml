@@ -768,6 +768,8 @@
   <string name="setting_mcp_page_url_label">URL</string>
   <string name="setting_model_page_chat_model">聊天模型</string>
   <string name="setting_model_page_chat_model_desc">全局默认的聊天模型</string>
+  <string name="setting_model_page_voice_call_audio_tag_model">语音情绪标签模型</string>
+  <string name="setting_model_page_voice_call_audio_tag_model_desc">用于二次选择语音情绪标签的模型，默认跟随聊天模型</string>
   <string name="setting_model_page_compress_model">压缩模型</string>
   <string name="setting_model_page_compress_model_desc">用于压缩对话历史的模型</string>
   <string name="setting_model_page_compress_prompt_vars">变量：{content}、{target_tokens}、{additional_context}</string>

@@ -449,6 +449,44 @@ class VoiceCallAudioTaggingTest {
         )
     }
 
+    @Test
+    fun cleansElevenLabsSquareBracketTagsFromMiniMaxSpeechCopy() {
+        val primaryReply = assistantMessage("[laughs] 嘿嘿，我好开心。[pause] 然后呢？")
+
+        val taggedReply = primaryReply.withSelectedVoiceCallAudioTagIds(
+            selectedTagIds = listOf("LAUGHS", "EMM"),
+            format = VoiceCallAudioTagFormat.MINIMAX_SPEECH_2_8,
+        )
+
+        assertEquals("[laughs] 嘿嘿，我好开心。[pause] 然后呢？", taggedReply.toText())
+        assertEquals(
+            "(laughs)，我好开心。\n(emm)，然后呢？",
+            taggedReply.voiceCallSpeechTextOrPlainText(),
+        )
+        assertEquals(
+            "(laughs)，我好开心。\n(emm)，然后呢？",
+            taggedReply.voiceCallDisplayTextOrPlainText(),
+        )
+    }
+
+    @Test
+    fun miniMaxFallbackCleansSquareBracketTags() {
+        val primaryReply = assistantMessage("[laughs] 我很好。")
+
+        val taggedReply = primaryReply.withSelectedVoiceCallAudioTagIds(
+            selectedTagIds = null,
+            format = VoiceCallAudioTagFormat.MINIMAX_SPEECH_2_8,
+            selectionFailureReason = VoiceCallTaggingFallbackReason.MISSING_TOOL_CALL,
+        )
+
+        assertEquals("[laughs] 我很好。", taggedReply.toText())
+        assertEquals("我很好。", taggedReply.voiceCallSpeechTextOrPlainText())
+        assertEquals(
+            "(no tag fallback:missing_tool_call)，我很好。",
+            taggedReply.voiceCallDisplayTextOrPlainText(),
+        )
+    }
+
     private fun assistantMessage(text: String): UIMessage {
         return UIMessage(
             role = MessageRole.ASSISTANT,

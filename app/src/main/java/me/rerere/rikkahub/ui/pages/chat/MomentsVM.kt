@@ -524,7 +524,7 @@ private data class MomentsProcessOutcome(
 }
 
 private fun Settings.hasConfiguredVisionOcrModel(): Boolean {
-    val configuredModelSupportsImages = findModelById(ocrModelId)
+    val configuredModelSupportsImages = ocrModelId?.let(::findModelById)
         ?.inputModalities
         ?.contains(Modality.IMAGE) == true
     val customOcrModelConfigured = ocrOpenAIConfig.enabled && ocrOpenAIConfig.modelId.isNotBlank()

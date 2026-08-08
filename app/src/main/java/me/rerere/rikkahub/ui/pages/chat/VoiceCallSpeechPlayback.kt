@@ -277,10 +277,16 @@ internal fun BindVoiceCallSpeechPlayback(
                 PlaybackStatus.Playing -> {
                     recordFlow("TTS开始播放 messageId=$messageId")
                     if (state.activeMessageId() != messageId) return@LaunchedEffect
-                    latestAssistantDisplayText.voiceCallDisplaySegments().forEach { displaySegment ->
-                        if (state.activeMessageId() != messageId) return@LaunchedEffect
-                        state.revealThrough(displaySegment.endLength)
-                        delay(voiceCallRevealDelayMillis(displaySegment.text))
+                    if (useWholeReplyTts) {
+                        // 整段合成：单条音频按估算节奏逐句揭示，近似跟随朗读进度。
+                        latestAssistantDisplayText.voiceCallDisplaySegments().forEach { displaySegment ->
+                            if (state.activeMessageId() != messageId) return@LaunchedEffect
+                            state.revealThrough(displaySegment.endLength)
+                            delay(voiceCallRevealDelayMillis(displaySegment.text))
+                        }
+                    } else {
+                        // 逐句合成：只揭示当前正在朗读的句子，保证气泡文本与音频一一对应。
+                        state.revealThrough(segment.endLength)
                     }
                 }
 

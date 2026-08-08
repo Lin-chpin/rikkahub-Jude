@@ -102,6 +102,7 @@ import me.rerere.rikkahub.ui.components.ui.permission.rememberPermissionState
 import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.context.LocalTTSState
 import me.rerere.rikkahub.ui.context.LocalToaster
+import me.rerere.tts.provider.TTSProviderSetting
 import org.koin.compose.koinInject
 
 @Composable
@@ -145,8 +146,10 @@ fun VoiceCallOverlay(
     val ttsAvailable by tts.isAvailable.collectAsState()
     val ttsError by tts.error.collectAsState()
     val playbackState by tts.playbackState.collectAsState()
-    val useWholeReplyTts = settings.getSelectedTTSProvider()
-        ?.voiceCallAudioTagFormatOrNull() == VoiceCallAudioTagFormat.ELEVEN_LABS_V3
+    val selectedTtsProvider = settings.getSelectedTTSProvider()
+    // 整段合成只保留给 ElevenLabs v3；MiniMax 全部模型一律按句切片、逐句合成并逐句播放。
+    val useWholeReplyTts = selectedTtsProvider is TTSProviderSetting.ElevenLabs &&
+        selectedTtsProvider.voiceCallAudioTagFormatOrNull() == VoiceCallAudioTagFormat.ELEVEN_LABS_V3
     val asrPermission = rememberPermissionState(PermissionRecordAudio)
     PermissionManager(permissionState = asrPermission)
 

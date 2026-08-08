@@ -44,6 +44,7 @@ internal fun buildVoiceCallAudioTagPrompt(format: VoiceCallAudioTagFormat): Stri
           as an allowed tag, choose that tag even if the exact wording is not listed in these
           examples. Do not require a literal dictionary match. Return that exact leading text in `replacementText`, including punctuation when it belongs to the filler; return an empty string when no replacement is needed. The client validates it as a prefix and removes it from the speech copy. The original reply remains unchanged for display.
         - If the segment has no leading spoken interjection, still choose one natural MiniMax tag whenever possible. Keep `replacementText` empty in that case; do not fall back to NONE merely because there is no word to replace.
+        - Ignore any square-bracket directions (for example [laughs] or [pause]) that appear in a segment; the client removes them from the MiniMax speech copy before synthesis. Choose the tag from the audible meaning of the remaining text.
         - SIGHS is an actual audible sigh, not a request to pronounce the word "sighs". Do not keep
           the leading sigh-like filler in the MiniMax speech copy after selecting SIGHS.
         - Use this replacement only for an explicit audible interjection. Do not turn an abstract
@@ -88,7 +89,10 @@ internal fun buildVoiceCallAudioTagPrompt(format: VoiceCallAudioTagFormat): Stri
     Tool protocol:
     - You MUST call `$VOICE_CALL_AUDIO_TAG_SELECTION_TOOL_NAME` exactly once.
     - Supply exactly one assignment for every segment index. Do not skip or duplicate indices.
-    - Do not output normal text, JSON, prose, explanations, reasoning, or code fences.
+    - Do not output normal text, prose, explanations, reasoning, or code fences.
+    - If your runtime cannot emit a tool call, reply with ONLY the JSON envelope
+      {"segments":[{"tagId":"...","text":"..."}]} covering every segment in order; the client
+      accepts either a tool call or this JSON text.
     $noTagRule
     - Each `tagId` MUST be exactly one value from this allowlist:
       $allowedTagIds${if (format.allowsNoTag) ", $NO_VOICE_CALL_AUDIO_TAG_ID" else ""}.

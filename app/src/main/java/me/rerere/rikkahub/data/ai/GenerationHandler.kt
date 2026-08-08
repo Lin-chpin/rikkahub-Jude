@@ -89,8 +89,10 @@ class GenerationHandler(
         runtimeStateSystemPrompt: String? = null,
         transientLastContextMessage: UIMessage? = null,
         maxTokensOverride: Int? = null,
+        providerOverride: ProviderSetting? = null,
     ): Flow<GenerationChunk> = flow {
-        val provider = model.findProvider(settings.providers) ?: error("Provider not found")
+        val provider = providerOverride ?: model.findProvider(settings.providers)
+            ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
 
         var messages: List<UIMessage> = messages

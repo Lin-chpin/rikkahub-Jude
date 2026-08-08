@@ -39,6 +39,7 @@ import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
+import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
@@ -100,7 +101,10 @@ import me.rerere.rikkahub.data.voice.consumePendingVoiceCallEndedEvent
 import me.rerere.rikkahub.data.voice.createVoiceCallAudioTagSelectionTool
 import me.rerere.rikkahub.data.voice.splitVoiceCallAudioTaggingSegments
 import me.rerere.rikkahub.data.voice.selectVoiceCallAudioTaggingSegmentIndexes
+import me.rerere.rikkahub.data.voice.parseVoiceCallAudioTagResponse
 import me.rerere.rikkahub.data.voice.voiceCallAudioTagFormatOrNull
+import me.rerere.rikkahub.data.voice.VoiceCallAudioTagAssignment
+import me.rerere.rikkahub.data.voice.VoiceCallTagSelectionSource
 import me.rerere.rikkahub.data.voice.withSelectedVoiceCallAudioTagAssignments
 import me.rerere.rikkahub.data.voice.withoutVoiceCallAudioTagsForNormalContext
 import me.rerere.rikkahub.data.model.AssistantAffectScope
@@ -141,6 +145,7 @@ private const val VOICE_CALL_SYSTEM_PROMPT = """
 请像真实电话聊天一样自然、简短、连贯地说话。
 每一句都尽量短，适合一句一句朗读。
 每一句都必须用句号、问号或感叹号结束。
+不要输出任何音频标签、情绪标签或声音指示（例如 [laughs]、[pause] 这类内容），只输出会被朗读的纯文本。
 只回答当前最需要回应的内容，通常使用一个短段落；内容已经完整时立即结束，不要为了凑长度继续展开。
 不使用 Markdown 表格，不写长列表。
 如果需要解释复杂问题，分成几个容易朗读的小块。
@@ -151,14 +156,17 @@ private const val VOICE_CALL_SYSTEM_PROMPT = """
 """
 
 private val VOICE_CALL_ACTIVE_TOOL_STATUS = """
-    Voice-call state: ACTIVE. The call is connected and this is the only state in which ElevenLabs v3 audio tags are allowed.
-    For every subsequent spoken reply in this active call, every sentence MUST begin with exactly one English audio tag in square brackets. Every sentence must have one and only one tag; never omit a tag or let multiple sentences share one tag.
-    Keep the tags in the text sent to TTS. Do not use Chinese emotion labels. Use commas, ellipses, and [pause] only when they create a natural pause.
+    Voice-call state: ACTIVE. The call is connected.
+    Never output any audio tags, emotion labels, or sound directions of any kind. Do not write
+    [laughs], (laughs), [pause], [sighs], or similar markers, and never describe the performance
+    inside brackets or parentheses. Reply with plain spoken text only; tags are added automatically
+    by a separate process.
 """.trimIndent()
 
 private val VOICE_CALL_ENDED_TOOL_STATUS = """
-    Voice-call state: ENDED. The call has been disconnected. Do not output any audio or emotion tags in later non-call replies.
-    Audio tags may be used again only after a new call is connected and its tool result reports ACTIVE.
+    Voice-call state: ENDED. The call has been disconnected.
+    Never output audio or emotion tags in any reply, inside or outside a call; tags are added
+    automatically by a separate process.
 """.trimIndent()
 
 private const val PROACTIVE_VOICE_CALL_SYSTEM_PROMPT = """
@@ -817,16 +825,6 @@ class ChatService(
             // reset suggestions
             updateConversation(conversationId, initialConversation.copy(chatSuggestions = emptyList()))
 
-            // memory tool
-            if (!model.abilities.contains(ModelAbility.TOOL)) {
-                if (settings.enableWebSearch || mcpManager.getAllAvailableTools().isNotEmpty()) {
-                    addError(
-                        IllegalStateException(context.getString(R.string.tools_warning)),
-                        conversationId,
-                        title = context.getString(R.string.error_title_tool_unavailable)
-                    )
-                }
-            }
 
             // check invalid messages
             checkInvalidMessages(conversationId)
@@ -1091,6 +1089,36 @@ class ChatService(
             allowConversationSystemPrompt = false,
             allowConversationPromptInjection = false,
         )
+        val voiceCallAudioTagConfig = settings.voiceCallAudioTagConfig
+        val voiceCallAudioTagProviderOverride = if (voiceCallAudioTagConfig.enabled) {
+            ProviderSetting.OpenAI(
+                apiKey = voiceCallAudioTagConfig.apiKey,
+                baseUrl = voiceCallAudioTagConfig.baseUrl,
+                chatCompletionsPath = voiceCallAudioTagConfig.chatCompletionsPath,
+                useResponseApi = voiceCallAudioTagConfig.useResponseApi,
+            )
+        } else {
+            null
+        }
+        val voiceCallAudioTagModel = if (
+            voiceCallAudioTagConfig.enabled &&
+            voiceCallAudioTagConfig.modelId.isNotBlank()
+        ) {
+            val trimmedModelId = voiceCallAudioTagConfig.modelId.trim()
+            Model(
+                modelId = trimmedModelId,
+                displayName = trimmedModelId,
+                type = ModelType.CHAT,
+            )
+        } else {
+            settings.voiceCallAudioTagModelId?.let(settings::findModelById) ?: model
+        }
+        // 二次标注只依赖本地的 select_voice_call_audio_tags 工具。模型注册表按 id 匹配能力，
+        // 常见写法（Qwen3-14B / Qwen-2.5-14B-instruct）匹配不到 TOOL，各 provider 就不会把
+        // tools 发出去，模型只能回文本导致 missing_tool_call 回退。这里强制带上 TOOL 能力。
+        val voiceCallAudioTaggingModel = voiceCallAudioTagModel.copy(
+            abilities = (voiceCallAudioTagModel.abilities + ModelAbility.TOOL).distinct()
+        )
         var toolCallCount = 0
         var selectionResult: VoiceCallAudioTagSelectionResult? = null
         val tagSelectionTool = createVoiceCallAudioTagSelectionTool(
@@ -1106,6 +1134,7 @@ class ChatService(
             },
         )
         var requestFailureReason: VoiceCallTaggingFallbackReason? = null
+        var rawTaggingResponse = ""
         Logging.log(
             TAG,
             "applySecondPassVoiceCallAudioTags: provider=${format.providerName}, " +
@@ -1114,7 +1143,7 @@ class ChatService(
         try {
             generationHandler.generateText(
                 settings = settings,
-                model = model,
+                model = voiceCallAudioTaggingModel,
                 processingStatus = processingStatus,
                 messages = taggingContext,
                 assistant = taggingAssistant,
@@ -1124,7 +1153,12 @@ class ChatService(
                 maxSteps = 1,
                 extraSystemPrompt = buildVoiceCallAudioTagPrompt(format),
                 maxTokensOverride = 2048,
-            ).collect { }
+                providerOverride = voiceCallAudioTagProviderOverride,
+            ).collect { chunk ->
+                if (chunk is GenerationChunk.Messages) {
+                    rawTaggingResponse = chunk.messages.lastOrNull()?.toText().orEmpty()
+                }
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
@@ -1148,14 +1182,49 @@ class ChatService(
         )
 
         val selectedAssignments = (selectionResult as? VoiceCallAudioTagSelectionResult.Selected)?.assignments
+        // 部分模型不调用工具、直接回 JSON 文本：客户端只取校验过的 tagId，按索引映射回自己的
+        // 原文分段来渲染，绝不使用模型回填的正文，避免模型改写文本进入语音副本。
+        val parsedTextFallbackAssignments = if (selectedAssignments == null && rawTaggingResponse.isNotBlank()) {
+            parseVoiceCallAudioTagResponse(rawTaggingResponse, format)
+                .takeIf { parsed ->
+                    parsed.segments.isNotEmpty() &&
+                        parsed.segments.all { it.selectionSource != VoiceCallTagSelectionSource.FALLBACK }
+                }
+                ?.segments
+                ?.map { segment ->
+                    VoiceCallAudioTagAssignment(
+                        tagId = segment.tag?.id,
+                        replacementText = segment.replacementText,
+                    )
+                }
+                ?.takeIf { it.size == taggingSegments.size }
+        } else {
+            null
+        }
         return primaryMessages.mapIndexed { index, message ->
             if (index == primaryReplyIndex) {
-                message.withSelectedVoiceCallAudioTagAssignments(
-                    selectedAssignments = selectedAssignments,
-                    taggingSegmentIndexes = filteredTaggingSegmentIndexes,
-                    format = format,
-                    selectionFailureReason = requestFailureReason,
-                )
+                when {
+                    selectedAssignments != null -> message.withSelectedVoiceCallAudioTagAssignments(
+                        selectedAssignments = selectedAssignments,
+                        taggingSegmentIndexes = filteredTaggingSegmentIndexes,
+                        format = format,
+                        selectionFailureReason = requestFailureReason,
+                    )
+
+                    parsedTextFallbackAssignments != null -> message.withSelectedVoiceCallAudioTagAssignments(
+                        selectedAssignments = parsedTextFallbackAssignments,
+                        taggingSegmentIndexes = filteredTaggingSegmentIndexes,
+                        format = format,
+                        selectionFailureReason = null,
+                    )
+
+                    else -> message.withSelectedVoiceCallAudioTagAssignments(
+                        selectedAssignments = null,
+                        taggingSegmentIndexes = filteredTaggingSegmentIndexes,
+                        format = format,
+                        selectionFailureReason = requestFailureReason,
+                    )
+                }
             } else {
                 message
             }
@@ -1509,7 +1578,7 @@ class ChatService(
             conversation = compressionBase,
             details = "targetTokens=$targetTokens keepRecent=$keepRecentMessages",
         )
-        val model = settings.findModelById(settings.compressModelId)
+        val model = settings.compressModelId?.let(settings::findModelById)
             ?: settings.getCurrentChatModel()
             ?: throw IllegalStateException("No model available for compression")
         val provider = model.findProvider(settings.providers)

@@ -100,6 +100,8 @@ class SettingsStore(
         val COMPRESS_MODEL = stringPreferencesKey("compress_model")
         val COMPRESS_PROMPT = stringPreferencesKey("compress_prompt")
         val COMPRESS_OPENAI_CONFIG = stringPreferencesKey("compress_openai_config")
+        val VOICE_CALL_AUDIO_TAG_CONFIG = stringPreferencesKey("voice_call_audio_tag_config")
+        val VOICE_CALL_AUDIO_TAG_MODEL = stringPreferencesKey("voice_call_audio_tag_model")
 
         // 提供商
         val PROVIDERS = stringPreferencesKey("providers")
@@ -183,16 +185,20 @@ class SettingsStore(
                 translatePrompt = preferences[TRANSLATION_PROMPT] ?: DEFAULT_TRANSLATION_PROMPT,
                 translateThinkingBudget = preferences[TRANSLATE_THINKING_BUDGET] ?: 0,
                 suggestionPrompt = preferences[SUGGESTION_PROMPT] ?: DEFAULT_SUGGESTION_PROMPT,
-                ocrModelId = preferences[OCR_MODEL]?.let { Uuid.parse(it) } ?: Uuid.random(),
+                ocrModelId = preferences[OCR_MODEL]?.let { Uuid.parse(it) },
                 ocrPrompt = preferences[OCR_PROMPT] ?: DEFAULT_OCR_PROMPT,
                 ocrOpenAIConfig = preferences[OCR_OPENAI_CONFIG]?.let {
                     JsonInstant.decodeFromString(it)
                 } ?: OcrOpenAIConfig(),
-                compressModelId = preferences[COMPRESS_MODEL]?.let { Uuid.parse(it) } ?: DEFAULT_AUTO_MODEL_ID,
+                compressModelId = preferences[COMPRESS_MODEL]?.let { Uuid.parse(it) },
                 compressPrompt = preferences[COMPRESS_PROMPT] ?: DEFAULT_COMPRESS_PROMPT,
                 compressOpenAIConfig = preferences[COMPRESS_OPENAI_CONFIG]?.let {
                     JsonInstant.decodeFromString(it)
                 } ?: CompressOpenAIConfig(),
+                voiceCallAudioTagConfig = preferences[VOICE_CALL_AUDIO_TAG_CONFIG]?.let {
+                    JsonInstant.decodeFromString(it)
+                } ?: VoiceCallAudioTagConfig(),
+                voiceCallAudioTagModelId = preferences[VOICE_CALL_AUDIO_TAG_MODEL]?.let { Uuid.parse(it) },
                 assistantId = preferences[SELECT_ASSISTANT]?.let { Uuid.parse(it) }
                     ?: DEFAULT_ASSISTANT_ID,
                 assistantTags = preferences[ASSISTANT_TAGS]?.let {
@@ -382,12 +388,17 @@ class SettingsStore(
             preferences[TRANSLATION_PROMPT] = settings.translatePrompt
             preferences[TRANSLATE_THINKING_BUDGET] = settings.translateThinkingBudget
             preferences[SUGGESTION_PROMPT] = settings.suggestionPrompt
-            preferences[OCR_MODEL] = settings.ocrModelId.toString()
+            settings.ocrModelId?.let { preferences[OCR_MODEL] = it.toString() } ?: preferences.remove(OCR_MODEL)
             preferences[OCR_PROMPT] = settings.ocrPrompt
             preferences[OCR_OPENAI_CONFIG] = JsonInstant.encodeToString(settings.ocrOpenAIConfig)
-            preferences[COMPRESS_MODEL] = settings.compressModelId.toString()
+            settings.compressModelId?.let { preferences[COMPRESS_MODEL] = it.toString() } ?: preferences.remove(COMPRESS_MODEL)
             preferences[COMPRESS_PROMPT] = settings.compressPrompt
             preferences[COMPRESS_OPENAI_CONFIG] = JsonInstant.encodeToString(settings.compressOpenAIConfig)
+            preferences[VOICE_CALL_AUDIO_TAG_CONFIG] =
+                JsonInstant.encodeToString(settings.voiceCallAudioTagConfig)
+            settings.voiceCallAudioTagModelId?.let {
+                preferences[VOICE_CALL_AUDIO_TAG_MODEL] = it.toString()
+            } ?: preferences.remove(VOICE_CALL_AUDIO_TAG_MODEL)
 
             preferences[PROVIDERS] = JsonInstant.encodeToString(settings.providers)
 
@@ -522,11 +533,13 @@ data class Settings(
     val translateThinkingBudget: Int = 0,
     val suggestionModelId: Uuid = Uuid.random(),
     val suggestionPrompt: String = DEFAULT_SUGGESTION_PROMPT,
-    val ocrModelId: Uuid = Uuid.random(),
+    val ocrModelId: Uuid? = null,
     val ocrPrompt: String = DEFAULT_OCR_PROMPT,
     val ocrOpenAIConfig: OcrOpenAIConfig = OcrOpenAIConfig(),
-    val compressModelId: Uuid = Uuid.random(),
+    val compressModelId: Uuid? = null,
     val compressPrompt: String = DEFAULT_COMPRESS_PROMPT,
+    val voiceCallAudioTagConfig: VoiceCallAudioTagConfig = VoiceCallAudioTagConfig(),
+    val voiceCallAudioTagModelId: Uuid? = null,
     val compressOpenAIConfig: CompressOpenAIConfig = CompressOpenAIConfig(),
     val assistantId: Uuid = DEFAULT_ASSISTANT_ID,
     val providers: List<ProviderSetting> = DEFAULT_PROVIDERS,
@@ -574,6 +587,16 @@ data class OcrOpenAIConfig(
 
 @Serializable
 data class CompressOpenAIConfig(
+    val enabled: Boolean = false,
+    val modelId: String = "",
+    val apiKey: String = "",
+    val baseUrl: String = "https://api.openai.com/v1",
+    val chatCompletionsPath: String = "/chat/completions",
+    val useResponseApi: Boolean = false,
+)
+
+@Serializable
+data class VoiceCallAudioTagConfig(
     val enabled: Boolean = false,
     val modelId: String = "",
     val apiKey: String = "",

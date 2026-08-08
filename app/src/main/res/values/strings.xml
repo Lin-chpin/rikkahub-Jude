@@ -800,6 +800,8 @@
   <string name="setting_mcp_page_url_label">URL</string>
   <string name="setting_model_page_chat_model">Chat Model</string>
   <string name="setting_model_page_chat_model_desc">Global default chat model</string>
+  <string name="setting_model_page_voice_call_audio_tag_model">Voice Emotion Tag Model</string>
+  <string name="setting_model_page_voice_call_audio_tag_model_desc">Model used for the second pass that selects voice emotion tags; follows the chat model by default</string>
   <string name="setting_model_page_compress_model">Compress Model</string>
   <string name="setting_model_page_compress_model_desc">Model for compressing conversation history</string>
   <string name="setting_model_page_compress_prompt_vars">Variables: {content}, {target_tokens}, {additional_context}</string>
