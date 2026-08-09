@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -65,7 +66,13 @@ class AssistantDetailVM(
         )
 
     val memories = assistant.flatMapLatest { currentAssistant ->
-        memoryRepository.observeMemories(currentAssistant.memoryScope)
+        // A conversation scope has no single owner on the assistant settings page;
+        // its records are managed by the memory tool inside each chat window.
+        if (currentAssistant.useConversationMemory) {
+            flowOf(emptyList())
+        } else {
+            memoryRepository.observeMemories(currentAssistant.memoryScope)
+        }
     }
         .stateIn(
             scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = emptyList()

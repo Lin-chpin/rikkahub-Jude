@@ -90,6 +90,7 @@ class GenerationHandler(
         transientLastContextMessage: UIMessage? = null,
         maxTokensOverride: Int? = null,
         providerOverride: ProviderSetting? = null,
+        conversationId: Uuid? = null,
     ): Flow<GenerationChunk> = flow {
         val provider = providerOverride ?: model.findProvider(settings.providers)
             ?: error("Provider not found")
@@ -103,7 +104,7 @@ class GenerationHandler(
             val toolsInternal = buildList {
                 Log.i(TAG, "generateInternal: build tools($assistant)")
                 if (assistant.enableMemory) {
-                    val memoryScope = assistant.memoryScope
+                    val memoryScope = assistant.memoryScope(conversationId)
                     buildMemoryTools(
                         json = json,
                         onCreation = { content ->

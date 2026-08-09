@@ -881,6 +881,7 @@ class ChatService(
                 processingStatus = session.processingStatus,
                 messages = generationMessages,
                 assistant = assistant,
+                conversationId = conversation.id,
                 conversationSystemPrompt = conversation.customSystemPrompt,
                 conversationContextSummary = conversation.compressedSummary,
                 conversationModeInjectionIds = conversation.modeInjectionIds,
@@ -900,7 +901,7 @@ class ChatService(
                     anonymousQuestionContextPrompt,
                     additionalSystemPrompt,
                 ).joinToString("\n\n").takeIf { it.isNotBlank() },
-                memories = memoryRepository.getMemories(assistant.memoryScope),
+                memories = memoryRepository.getMemories(assistant.memoryScope(conversation.id)),
                 inputTransformers = buildList {
                     addAll(inputTransformers)
                     add(templateTransformer)

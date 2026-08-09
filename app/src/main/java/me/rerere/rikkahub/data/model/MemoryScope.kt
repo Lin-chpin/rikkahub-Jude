@@ -8,8 +8,18 @@ value class MemoryScope private constructor(val ownerId: String) {
         val Global = MemoryScope("__global__")
 
         fun assistant(assistantId: Uuid): MemoryScope = MemoryScope(assistantId.toString())
+
+        /** Conversation keys are prefixed so they can never collide with legacy assistant UUID keys. */
+        fun conversation(conversationId: Uuid): MemoryScope =
+            MemoryScope("conversation:$conversationId")
     }
 }
 
 val Assistant.memoryScope: MemoryScope
-    get() = if (useGlobalMemory) MemoryScope.Global else MemoryScope.assistant(id)
+    get() = memoryScope(conversationId = null)
+
+fun Assistant.memoryScope(conversationId: Uuid?): MemoryScope = when {
+    useConversationMemory && conversationId != null -> MemoryScope.conversation(conversationId)
+    useGlobalMemory -> MemoryScope.Global
+    else -> MemoryScope.assistant(id)
+}

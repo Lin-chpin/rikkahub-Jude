@@ -277,7 +277,7 @@ class MomentsVM(
             return MomentReactionGeneration.VisionModelSetupRequired
         }
         val inputTransformers = if (requiresOcrFallback) listOf(OcrTransformer) else emptyList()
-        val memories = memoryRepository.getMemories(assistant.memoryScope)
+        val memories = memoryRepository.getMemories(assistant.memoryScope(conversation.id))
         val timelineContext = buildTimelineContext(moment.assistantId, excludeMomentId = moment.id)
         val imageInstruction = if (moment.imageUris.isNotEmpty() && moment.imageDescription.isBlank()) {
             """
@@ -314,6 +314,7 @@ class MomentsVM(
             settings = settings,
             assistant = assistant,
             model = model,
+            conversationId = conversation.id,
             memories = memories,
             messages = listOf(UIMessage(
                 role = MessageRole.USER,
@@ -346,7 +347,7 @@ class MomentsVM(
         val settings = settingsStore.settingsFlow.value
         val model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId)
             ?: return CommentGenerationResult.ModelUnavailable
-        val memories = memoryRepository.getMemories(assistant.memoryScope)
+        val memories = memoryRepository.getMemories(assistant.memoryScope(conversation.id))
         val prompt = """
             Reply as the assistant in a Moments comment thread.
             Keep it natural and short. Return only the reply text, no JSON and no markdown.
@@ -368,6 +369,7 @@ class MomentsVM(
             settings = settings,
             assistant = assistant,
             model = model,
+            conversationId = conversation.id,
             memories = memories,
             messages = listOf(UIMessage.user(prompt)),
             conversationSystemPrompt = conversationSystemPrompt,
@@ -394,6 +396,7 @@ class MomentsVM(
         settings: Settings,
         assistant: me.rerere.rikkahub.data.model.Assistant,
         model: me.rerere.ai.provider.Model,
+        conversationId: Uuid,
         memories: List<me.rerere.rikkahub.data.model.AssistantMemory>,
         messages: List<UIMessage>,
         inputTransformers: List<InputMessageTransformer> = emptyList(),
@@ -405,6 +408,7 @@ class MomentsVM(
         generationHandler.generateText(
             settings = settings,
             model = model,
+            conversationId = conversationId,
             messages = messages,
             inputTransformers = inputTransformers,
             assistant = assistant.copy(streamOutput = false),

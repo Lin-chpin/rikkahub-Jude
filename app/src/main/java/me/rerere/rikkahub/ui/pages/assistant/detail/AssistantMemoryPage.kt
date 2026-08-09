@@ -194,9 +194,30 @@ private fun AssistantMemoryContent(
                     Switch(
                         checked = assistant.useGlobalMemory,
                         onCheckedChange = {
+                        onUpdateAssistant(
+                            assistant.copy(
+                                    useGlobalMemory = it,
+                                    useConversationMemory = false,
+                                )
+                            )
+                        },
+                        enabled = assistant.enableMemory
+                    )
+                }
+            )
+            item(
+                headlineContent = { Text(stringResource(R.string.assistant_page_conversation_memory)) },
+                supportingContent = {
+                    Text(stringResource(R.string.assistant_page_conversation_memory_desc))
+                },
+                trailingContent = {
+                    Switch(
+                        checked = assistant.useConversationMemory,
+                        onCheckedChange = {
                             onUpdateAssistant(
                                 assistant.copy(
-                                    useGlobalMemory = it
+                                    useConversationMemory = it,
+                                    useGlobalMemory = false,
                                 )
                             )
                         },

@@ -133,6 +133,7 @@ class AnonymousQuestionBoxVM(
     ): String? {
         return generateText(
             assistant = assistant,
+            conversationId = conversation.id,
             conversationSystemPrompt = conversationSystemPrompt,
             conversationContextSummary = conversation.compressedSummary,
             messages = listOf(UIMessage.user(
@@ -159,6 +160,7 @@ class AnonymousQuestionBoxVM(
     ): String? {
         return generateText(
             assistant = assistant,
+            conversationId = conversation.id,
             conversationSystemPrompt = conversationSystemPrompt,
             conversationContextSummary = conversation.compressedSummary,
             messages = listOf(UIMessage.user(
@@ -182,6 +184,7 @@ class AnonymousQuestionBoxVM(
 
     private suspend fun generateText(
         assistant: Assistant,
+        conversationId: Uuid,
         conversationSystemPrompt: String?,
         conversationContextSummary: String?,
         messages: List<UIMessage>,
@@ -189,12 +192,13 @@ class AnonymousQuestionBoxVM(
     ): String? {
         val settings = settingsStore.settingsFlow.value
         val model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId) ?: return null
-        val memories = memoryRepository.getMemories(assistant.memoryScope)
+        val memories = memoryRepository.getMemories(assistant.memoryScope(conversationId))
         var output = ""
         generationHandler.generateText(
             settings = settings,
             model = model,
             messages = messages,
+            conversationId = conversationId,
             // The 200-character rule is expressed in the prompt; this budget is a provider token limit.
             assistant = assistant.forAnonymousQuestionGeneration(),
             conversationSystemPrompt = conversationSystemPrompt,

@@ -82,6 +82,8 @@
   <string name="assistant_page_enter_image_url">Enter Image URL</string>
   <string name="assistant_page_global_memory">Global Memory</string>
   <string name="assistant_page_global_memory_desc">Use global shared memory instead of assistant-isolated memory. When enabled, all assistants share the same memory storage</string>
+  <string name="assistant_page_conversation_memory">Conversation Memory</string>
+  <string name="assistant_page_conversation_memory_desc">Keep memory isolated to the current chat window. It will not be read by other conversations of this assistant.</string>
   <string name="assistant_page_header_name">Header Name</string>
   <string name="assistant_page_header_value">Header Value</string>
   <string name="assistant_page_image_url">Image URL</string>
