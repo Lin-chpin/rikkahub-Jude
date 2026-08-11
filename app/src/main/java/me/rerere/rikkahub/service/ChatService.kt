@@ -31,6 +31,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -86,6 +88,7 @@ import me.rerere.rikkahub.data.datastore.getAssistantById
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.data.datastore.getSelectedTTSProvider
+import me.rerere.rikkahub.local.LocalBuildIntegration
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.Assistant
@@ -107,6 +110,7 @@ import me.rerere.rikkahub.data.voice.VoiceCallAudioTagAssignment
 import me.rerere.rikkahub.data.voice.VoiceCallTagSelectionSource
 import me.rerere.rikkahub.data.voice.withSelectedVoiceCallAudioTagAssignments
 import me.rerere.rikkahub.data.voice.withoutVoiceCallAudioTagsForNormalContext
+import me.rerere.rikkahub.data.voice.sanitizeVoiceCallTextForTranslation
 import me.rerere.rikkahub.data.model.AssistantAffectScope
 import me.rerere.rikkahub.data.model.AutoCompressConfig
 import me.rerere.rikkahub.data.model.MessageNode
@@ -114,6 +118,7 @@ import me.rerere.rikkahub.data.model.momentScopeId
 import me.rerere.rikkahub.data.model.messagesForGeneration
 import me.rerere.rikkahub.data.model.personaScopeId
 import me.rerere.rikkahub.data.model.memoryScope
+import me.rerere.rikkahub.data.model.MemoryScope
 import me.rerere.rikkahub.data.model.replaceRegexes
 import me.rerere.rikkahub.data.model.toMessageNode
 import me.rerere.rikkahub.data.repository.ConversationRepository
@@ -463,13 +468,15 @@ class ChatService(
                 val processedContent = preprocessUserInputParts(content, assistant)
 
                 // 添加消息到列表
+                val userMessage = UIMessage(
+                    role = MessageRole.USER,
+                    parts = processedContent,
+                )
                 val newConversation = conversationBeforeSend.copy(
-                    messageNodes = conversationBeforeSend.messageNodes + UIMessage(
-                        role = MessageRole.USER,
-                        parts = processedContent,
-                    ).toMessageNode(),
+                    messageNodes = conversationBeforeSend.messageNodes + userMessage.toMessageNode(),
                 )
                 saveConversation(conversationId, newConversation)
+                LocalBuildIntegration.onUserMessageSent(context, userMessage)
                 compressionDiagnostics.record(
                     conversationId = conversationId,
                     stage = "send.saved",
@@ -901,7 +908,18 @@ class ChatService(
                     anonymousQuestionContextPrompt,
                     additionalSystemPrompt,
                 ).joinToString("\n\n").takeIf { it.isNotBlank() },
-                memories = memoryRepository.getMemories(assistant.memoryScope(conversation.id)),
+                memories = buildList {
+                    // 管理记忆属于助手本身，所有会话都应读取；Conversation 只增加当前会话的记忆。
+                    addAll(memoryRepository.getMemories(assistant.memoryScope))
+                    if (assistant.useConversationMemory) {
+                        val managedMemoryIds = map { it.id }.toSet()
+                        addAll(
+                            memoryRepository
+                                .getMemories(MemoryScope.conversation(conversation.id))
+                                .filterNot { it.id in managedMemoryIds }
+                        )
+                    }
+                },
                 inputTransformers = buildList {
                     addAll(inputTransformers)
                     add(templateTransformer)
@@ -1672,9 +1690,11 @@ class ChatService(
             return generateCompressedSummary(contentToCompress, extraContext)
         }
 
+        // 压缩请求体大、耗时长，限制并发，避免网关同时掐断多个连接。
+        val compressionSemaphore = Semaphore(2)
         val compressedSummaries = coroutineScope {
             splitMessagesForCompression(messagesToCompress, targetTokens)
-                .map { chunk -> async { compressMessages(chunk) } }
+                .map { chunk -> async { compressionSemaphore.withPermit { compressMessages(chunk) } } }
                 .awaitAll()
         }
 
@@ -1785,8 +1805,8 @@ class ChatService(
                 null
             },
         ).onFailure {
-            it.printStackTrace()
-            addError(it, conversationId, title = context.getString(R.string.error_title_compress_conversation))
+            // 自动压缩是后台优化：失败时只记录日志、跳过本次压缩，不弹错误卡片打断聊天。
+            Logging.log(TAG, "autoCompressConversationIfNeeded: $it")
         }
     }
 
@@ -1983,15 +2003,29 @@ class ChatService(
         appScope.launch(Dispatchers.IO) {
             try {
                 val settings = settingsStore.settingsFlow.first()
+                val loadingText = context.getString(R.string.translating)
+                val currentMessage = getConversationFlow(conversationId).value.messageNodes
+                    .asSequence()
+                    .flatMap { it.messages.asSequence() }
+                    .firstOrNull { it.id == message.id }
 
-                val messageText = message.parts.filterIsInstance<UIMessagePart.Text>()
+                // A saved translation is the cache for this message. The clear action is
+                // the explicit opt-in to translate it again.
+                if (currentMessage?.translation?.let {
+                        it.isNotBlank() && it != loadingText
+                    } == true
+                ) {
+                    return@launch
+                }
+
+                val sourceMessage = currentMessage ?: message
+                val messageText = sourceMessage.parts.filterIsInstance<UIMessagePart.Text>()
                     .joinToString("\n\n") { it.text }
                     .trim()
 
                 if (messageText.isBlank()) return@launch
 
                 // Set loading state for translation
-                val loadingText = context.getString(R.string.translating)
                 updateTranslationField(conversationId, message.id, loadingText)
 
                 generationHandler.translateText(
@@ -2008,6 +2042,54 @@ class ChatService(
             } catch (e: Exception) {
                 // Clear translation field on error
                 clearTranslationField(conversationId, message.id)
+                addError(e, conversationId, title = context.getString(R.string.error_title_translate_message))
+            }
+        }
+    }
+
+    fun translateVoiceCallBubble(
+        conversationId: Uuid,
+        message: UIMessage,
+        bubbleKey: String,
+        sourceText: String,
+        targetLanguage: Locale,
+    ) {
+        appScope.launch(Dispatchers.IO) {
+            try {
+                val settings = settingsStore.settingsFlow.first()
+                val loadingText = context.getString(R.string.translating)
+                val currentMessage = getConversationFlow(conversationId).value.messageNodes
+                    .asSequence()
+                    .flatMap { it.messages.asSequence() }
+                    .firstOrNull { it.id == message.id }
+                val cachedTranslation = currentMessage?.voiceCallTranslations?.get(bubbleKey)
+                if (cachedTranslation?.isNotBlank() == true && cachedTranslation != loadingText) {
+                    return@launch
+                }
+                if (sourceText.isBlank()) return@launch
+
+                updateVoiceCallTranslationField(conversationId, message.id, bubbleKey, loadingText)
+                generationHandler.translateText(
+                    settings = settings,
+                    sourceText = sourceText,
+                    targetLanguage = targetLanguage,
+                ) { translatedText ->
+                    updateVoiceCallTranslationField(
+                        conversationId = conversationId,
+                        messageId = message.id,
+                        bubbleKey = bubbleKey,
+                        translationText = translatedText.sanitizeVoiceCallTextForTranslation(),
+                    )
+                }.collect { }
+
+                saveConversation(conversationId, getConversationFlow(conversationId).value)
+            } catch (e: Exception) {
+                updateVoiceCallTranslationField(
+                    conversationId = conversationId,
+                    messageId = message.id,
+                    bubbleKey = bubbleKey,
+                    translationText = null,
+                )
                 addError(e, conversationId, title = context.getString(R.string.error_title_translate_message))
             }
         }
@@ -2034,6 +2116,42 @@ class ChatService(
             }
         }
 
+        updateConversation(conversationId, currentConversation.copy(messageNodes = updatedNodes))
+    }
+
+    private fun updateVoiceCallTranslationField(
+        conversationId: Uuid,
+        messageId: Uuid,
+        bubbleKey: String,
+        translationText: String?,
+        clearLegacyTranslation: Boolean = false,
+    ) {
+        val currentConversation = getConversationFlow(conversationId).value
+        val updatedNodes = currentConversation.messageNodes.map { node ->
+            if (node.messages.any { it.id == messageId }) {
+                node.copy(
+                    messages = node.messages.map { msg ->
+                        if (msg.id == messageId) {
+                            val translations = msg.voiceCallTranslations.toMutableMap().apply {
+                                if (translationText.isNullOrBlank()) {
+                                    remove(bubbleKey)
+                                } else {
+                                    put(bubbleKey, translationText)
+                                }
+                            }
+                            msg.copy(
+                                translation = if (clearLegacyTranslation) null else msg.translation,
+                                voiceCallTranslations = translations,
+                            )
+                        } else {
+                            msg
+                        }
+                    }
+                )
+            } else {
+                node
+            }
+        }
         updateConversation(conversationId, currentConversation.copy(messageNodes = updatedNodes))
     }
 
@@ -2295,23 +2413,43 @@ class ChatService(
     }
 
     fun clearTranslationField(conversationId: Uuid, messageId: Uuid) {
-        val currentConversation = getConversationFlow(conversationId).value
-        val updatedNodes = currentConversation.messageNodes.map { node ->
-            if (node.messages.any { it.id == messageId }) {
-                val updatedMessages = node.messages.map { msg ->
-                    if (msg.id == messageId) {
-                        msg.copy(translation = null)
-                    } else {
-                        msg
+        appScope.launch(Dispatchers.IO) {
+            val currentConversation = getConversationFlow(conversationId).value
+            val updatedNodes = currentConversation.messageNodes.map { node ->
+                if (node.messages.any { it.id == messageId }) {
+                    val updatedMessages = node.messages.map { msg ->
+                        if (msg.id == messageId) {
+                            msg.copy(translation = null)
+                        } else {
+                            msg
+                        }
                     }
+                    node.copy(messages = updatedMessages)
+                } else {
+                    node
                 }
-                node.copy(messages = updatedMessages)
-            } else {
-                node
             }
-        }
 
-        updateConversation(conversationId, currentConversation.copy(messageNodes = updatedNodes))
+            saveConversation(conversationId, currentConversation.copy(messageNodes = updatedNodes))
+        }
+    }
+
+    fun clearVoiceCallTranslation(
+        conversationId: Uuid,
+        messageId: Uuid,
+        bubbleKey: String,
+        clearLegacyTranslation: Boolean,
+    ) {
+        appScope.launch(Dispatchers.IO) {
+            updateVoiceCallTranslationField(
+                conversationId = conversationId,
+                messageId = messageId,
+                bubbleKey = bubbleKey,
+                translationText = null,
+                clearLegacyTranslation = clearLegacyTranslation,
+            )
+            saveConversation(conversationId, getConversationFlow(conversationId).value)
+        }
     }
 
     // 停止当前会话生成任务（不清理会话缓存）

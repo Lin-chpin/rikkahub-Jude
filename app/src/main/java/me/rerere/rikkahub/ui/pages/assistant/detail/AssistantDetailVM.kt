@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -65,14 +64,9 @@ class AssistantDetailVM(
             scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = Assistant()
         )
 
+    // 管理记忆始终使用助手级作用域；Conversation 开关只影响聊天窗口新增的会话记忆。
     val memories = assistant.flatMapLatest { currentAssistant ->
-        // A conversation scope has no single owner on the assistant settings page;
-        // its records are managed by the memory tool inside each chat window.
-        if (currentAssistant.useConversationMemory) {
-            flowOf(emptyList())
-        } else {
-            memoryRepository.observeMemories(currentAssistant.memoryScope)
-        }
+        memoryRepository.observeMemories(currentAssistant.memoryScope)
     }
         .stateIn(
             scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = emptyList()

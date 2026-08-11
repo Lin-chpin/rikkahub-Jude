@@ -8,13 +8,18 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.rikkahub.service.ChatRequestMode
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.model.Conversation
-import me.rerere.rikkahub.ui.context.LocalTTSState
-import me.rerere.rikkahub.utils.extractQuotedContentAsText
+import me.rerere.rikkahub.ui.hooks.rememberChatTtsPlayback
+import me.rerere.rikkahub.utils.toChatTtsText
 
 @Composable
-fun TTSAutoPlay(vm: ChatVM, setting: Settings, conversation: Conversation) {
+fun TTSAutoPlay(
+    vm: ChatVM,
+    setting: Settings,
+    conversation: Conversation,
+    onUpdateTtsMessage: (messageId: kotlin.uuid.Uuid, transform: (me.rerere.ai.ui.UIMessage) -> me.rerere.ai.ui.UIMessage) -> Unit,
+) {
     // Auto-play TTS after generation completes
-    val tts = LocalTTSState.current
+    val chatTts = rememberChatTtsPlayback()
     val currentConversation by rememberUpdatedState(conversation)
     val updatedSetting by rememberUpdatedState(setting)
     LaunchedEffect(Unit) {
@@ -33,13 +38,17 @@ fun TTSAutoPlay(vm: ChatVM, setting: Settings, conversation: Conversation) {
                     var isFirstSpeak = true
                     assistantMessages.forEach { message ->
                         val text = message.toText()
-                        val textToSpeak = if (updatedSetting.displaySetting.ttsOnlyReadQuoted) {
-                            text.extractQuotedContentAsText() ?: text
-                        } else {
-                            text
-                        }
+                        val textToSpeak = text.toChatTtsText(
+                            ttsOnlyReadQuoted = updatedSetting.displaySetting.ttsOnlyReadQuoted,
+                            ttsEnglishOnly = updatedSetting.displaySetting.ttsEnglishOnly,
+                        )
                         if (textToSpeak.isNotBlank()) {
-                            tts.speak(textToSpeak, flushCalled = isFirstSpeak)
+                            chatTts.speak(
+                                message = message,
+                                text = textToSpeak,
+                                onUpdateMessage = onUpdateTtsMessage,
+                                flushCalled = isFirstSpeak,
+                            )
                             isFirstSpeak = false
                         }
                     }

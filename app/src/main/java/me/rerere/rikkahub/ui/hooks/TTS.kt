@@ -23,6 +23,7 @@ import me.rerere.rikkahub.utils.keepEnglishOnlyForTts
 import me.rerere.rikkahub.utils.stripMarkdown
 import me.rerere.tts.model.TTSResponse
 import me.rerere.tts.model.AudioFormat
+import me.rerere.tts.model.CachedAudioSource
 import me.rerere.tts.provider.TTSManager
 import me.rerere.tts.provider.TTSProviderSetting
 import me.rerere.tts.controller.TtsController
@@ -46,7 +47,8 @@ fun rememberCustomTtsState(): CustomTtsState {
     val ttsState = remember {
         CustomTtsStateImpl(
             context = context.applicationContext,
-            settingsStore = settingsStore
+            settingsStore = settingsStore,
+            initialProvider = settings.getSelectedTTSProvider(),
         )
     }
 
@@ -73,6 +75,9 @@ interface CustomTtsState {
     /** Flow indicating if the TTS provider is available and ready. */
     val isAvailable: StateFlow<Boolean>
 
+    /** Becomes true after the runtime has synchronized with persisted provider settings. */
+    val isProviderReady: StateFlow<Boolean>
+
     /** Flow indicating if the TTS is currently speaking. */
     val isSpeaking: StateFlow<Boolean>
 
@@ -92,11 +97,18 @@ interface CustomTtsState {
      * Speaks the given text using the selected TTS provider.
      * Long texts will be automatically chunked and queued unless [chunked] is false.
      */
-    fun speak(text: String, flushCalled: Boolean = true, chunked: Boolean = true, onAudioReady: (suspend (TTSResponse) -> Unit)? = null)
+    fun speak(
+        text: String,
+        flushCalled: Boolean = true,
+        chunked: Boolean = true,
+        onAudioReady: (suspend (TTSResponse) -> Unit)? = null,
+        onAudioReadyWithChunk: (suspend (String, Int, Int, TTSResponse) -> Unit)? = null,
+    )
 
     /** Stops the current speech and clears the queue. */
     fun stop()
     fun playCachedAudio(audioUri: String, format: String, sampleRate: Int? = null)
+    fun playCachedAudios(audios: List<CachedAudioSource>, flushCalled: Boolean = true)
 
     /** Pauses the current playback. */
     fun pause()
@@ -122,16 +134,18 @@ interface CustomTtsState {
  */
 private class CustomTtsStateImpl(
     private val context: Context,
-    private val settingsStore: SettingsStore
+    private val settingsStore: SettingsStore,
+    initialProvider: TTSProviderSetting?,
 ) : CustomTtsState, KoinComponent {
 
     private val ttsManager by inject<TTSManager>()
-    private val controller by lazy { me.rerere.tts.controller.TtsController(context, ttsManager) }
+    private val controller = TtsController(context, ttsManager).also { it.setProvider(initialProvider) }
 
     private val scope = CoroutineScope(Dispatchers.Main)
     private var currentJob: Job? = null
 
     override val isAvailable: StateFlow<Boolean> get() = controller.isAvailable
+    override val isProviderReady: StateFlow<Boolean> get() = controller.isProviderReady
     override val isSpeaking: StateFlow<Boolean> get() = controller.isSpeaking
     override val error: StateFlow<String?> get() = controller.error
     override val currentChunk: StateFlow<Int> get() = controller.currentChunk
@@ -142,7 +156,13 @@ private class CustomTtsStateImpl(
         controller.setProvider(provider)
     }
 
-    override fun speak(text: String, flushCalled: Boolean, chunked: Boolean, onAudioReady: (suspend (TTSResponse) -> Unit)?) {
+    override fun speak(
+        text: String,
+        flushCalled: Boolean,
+        chunked: Boolean,
+        onAudioReady: (suspend (TTSResponse) -> Unit)?,
+        onAudioReadyWithChunk: (suspend (String, Int, Int, TTSResponse) -> Unit)?,
+    ) {
         val settings = settingsStore.settingsFlow.value
         val processed = text.stripMarkdown().let {
             if (settings.displaySetting.ttsEnglishOnly) {
@@ -151,7 +171,17 @@ private class CustomTtsStateImpl(
                 it
             }
         }
-        controller.speak(processed, flushCalled, chunked, onAudioReady)
+        controller.speak(
+            processed,
+            flushCalled,
+            chunked,
+            onAudioReady,
+            onAudioReadyWithChunk?.let { callback ->
+                { chunk, chunkIndex, totalChunks, response ->
+                    callback(chunk.text, chunkIndex, totalChunks, response)
+                }
+            },
+        )
     }
 
     override fun stop() {
@@ -192,6 +222,35 @@ private class CustomTtsStateImpl(
             }
         }
     }
+
+    override fun playCachedAudios(audios: List<CachedAudioSource>, flushCalled: Boolean) {
+        if (audios.isEmpty()) return
+        scope.launch {
+            val responses = withContext(Dispatchers.IO) {
+                audios.mapNotNull { audio ->
+                    readCachedAudio(audio.audioUri, audio.format.name, audio.sampleRate)
+                }
+            }
+            if (responses.isNotEmpty()) {
+                controller.playCachedAudioSequence(responses, flush = flushCalled)
+            }
+        }
+    }
+
+    private fun readCachedAudio(audioUri: String, format: String, sampleRate: Int?): TTSResponse? = runCatching {
+        val uri = Uri.parse(audioUri)
+        val bytes = when (uri.scheme?.lowercase()) {
+            "file" -> uri.path?.let { java.io.File(it).readBytes() }
+            else -> context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        } ?: error("Cached audio input stream is unavailable")
+        TTSResponse(
+            audioData = bytes,
+            format = AudioFormat.valueOf(format),
+            sampleRate = sampleRate,
+        )
+    }.onFailure { error ->
+        Log.e(TAG, "Cached audio read failed: uri=$audioUri", error)
+    }.getOrNull()
 
     override fun pause() {
         controller.pause()

@@ -87,6 +87,7 @@ sealed class TTSProviderSetting {
         val voiceId: String = "female-shaonv",
         val speed: Float = 1.0f,
         val emotion: String? = null,
+        val languageBoost: String? = null,
     ) : TTSProviderSetting() {
         companion object {
             const val DEFAULT_MODEL = "speech-2.8-turbo"
@@ -199,6 +200,7 @@ sealed class TTSProviderSetting {
         val baseUrl: String = "https://api.elevenlabs.io",
         val model: String = "eleven_v3",
         val voiceId: String = "",
+        val languageCode: String? = null,
         val stability: Float = 0.5f,
         val similarityBoost: Float = 0.75f,
         val useSpeakerBoost: Boolean = true,

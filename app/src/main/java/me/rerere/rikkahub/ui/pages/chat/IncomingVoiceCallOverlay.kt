@@ -119,7 +119,9 @@ internal fun IncomingVoiceCallOverlay(
     onAccept: () -> Unit,
     onReject: (reason: String) -> Unit,
 ) {
-    val ttsAvailable by LocalTTSState.current.isAvailable.collectAsState()
+    val ttsState = LocalTTSState.current
+    val ttsAvailable by ttsState.isAvailable.collectAsState()
+    val ttsProviderReady by ttsState.isProviderReady.collectAsState()
     val toaster = LocalToaster.current
     var resolved by remember(request.toolCallId) { mutableStateOf(false) }
     var secondsRemaining by remember(request.toolCallId) {
@@ -128,6 +130,10 @@ internal fun IncomingVoiceCallOverlay(
 
     fun acceptOnce() {
         if (resolved) return
+        if (!ttsProviderReady) {
+            toaster.show("语音模型正在初始化，请稍后再试", type = ToastType.Error)
+            return
+        }
         if (!ttsAvailable) {
             resolved = true
             toaster.show(VOICE_CALL_UNAVAILABLE_MESSAGE, type = ToastType.Error)

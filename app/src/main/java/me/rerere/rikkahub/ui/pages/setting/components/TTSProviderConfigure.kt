@@ -49,6 +49,11 @@ private data class ElevenLabsModelOption(
     val name: String,
 )
 
+private data class TtsLanguageOption(
+    val label: String,
+    val value: String?,
+)
+
 private val elevenLabsModelOptions = listOf(
     ElevenLabsModelOption(
         id = "eleven_multilingual_v2",
@@ -58,6 +63,31 @@ private val elevenLabsModelOptions = listOf(
         id = "eleven_v3",
         name = "Eleven v3",
     ),
+)
+
+private val elevenLabsLanguageOptions = listOf(
+    TtsLanguageOption("自动", null),
+    TtsLanguageOption("普通话", "zh"),
+    TtsLanguageOption("英语", "en"),
+    TtsLanguageOption("日语", "ja"),
+    TtsLanguageOption("韩语", "ko"),
+    TtsLanguageOption("法语", "fr"),
+    TtsLanguageOption("德语", "de"),
+    TtsLanguageOption("西班牙语", "es"),
+    TtsLanguageOption("葡萄牙语", "pt"),
+)
+
+private val miniMaxLanguageOptions = listOf(
+    TtsLanguageOption("自动", null),
+    TtsLanguageOption("普通话", "Chinese"),
+    TtsLanguageOption("粤语", "Chinese,Yue"),
+    TtsLanguageOption("英语", "English"),
+    TtsLanguageOption("日语", "Japanese"),
+    TtsLanguageOption("韩语", "Korean"),
+    TtsLanguageOption("法语", "French"),
+    TtsLanguageOption("德语", "German"),
+    TtsLanguageOption("西班牙语", "Spanish"),
+    TtsLanguageOption("葡萄牙语", "Portuguese"),
 )
 
 private fun String.isMiMoVoiceDesignModel(): Boolean {
@@ -373,6 +403,7 @@ private fun ElevenLabsTTSConfiguration(
     onValueChange: (TTSProviderSetting) -> Unit
 ) {
     var modelMenuExpanded by remember { mutableStateOf(false) }
+    var languageMenuExpanded by remember { mutableStateOf(false) }
 
     FormItem(
         label = { Text(stringResource(R.string.setting_tts_page_api_key)) },
@@ -462,6 +493,45 @@ private fun ElevenLabsTTSConfiguration(
                         onClick = {
                             onValueChange(setting.copy(model = model.id))
                             modelMenuExpanded = false
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    FormItem(
+        label = { Text("语言") },
+        description = { Text("可选。用于指定语言和文本规范化；口音仍由所选音色决定。Eleven Multilingual v2 不支持此参数。") },
+    ) {
+        val selectedLanguage = elevenLabsLanguageOptions.firstOrNull {
+            it.value == setting.languageCode
+        }
+        ExposedDropdownMenuBox(
+            expanded = languageMenuExpanded,
+            onExpandedChange = { languageMenuExpanded = !languageMenuExpanded },
+        ) {
+            OutlinedTextField(
+                value = selectedLanguage?.label ?: setting.languageCode.orEmpty(),
+                onValueChange = {},
+                readOnly = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                trailingIcon = {
+                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = languageMenuExpanded)
+                },
+            )
+            ExposedDropdownMenu(
+                expanded = languageMenuExpanded,
+                onDismissRequest = { languageMenuExpanded = false },
+            ) {
+                elevenLabsLanguageOptions.forEach { language ->
+                    DropdownMenuItem(
+                        text = { Text(language.label) },
+                        onClick = {
+                            onValueChange(setting.copy(languageCode = language.value))
+                            languageMenuExpanded = false
                         },
                     )
                 }
@@ -749,6 +819,8 @@ private fun MiniMaxTTSConfiguration(
     setting: TTSProviderSetting.MiniMax,
     onValueChange: (TTSProviderSetting) -> Unit
 ) {
+    var languageBoostExpanded by remember { mutableStateOf(false) }
+
     // API Key
     FormItem(
         label = { Text(stringResource(R.string.setting_tts_page_api_key)) },
@@ -829,6 +901,45 @@ private fun MiniMaxTTSConfiguration(
                                 )
                             )
                         }
+                    )
+                }
+            }
+        }
+    }
+
+    FormItem(
+        label = { Text("语言/方言") },
+        description = { Text("可选。增强指定语言或方言的识别；音色和口音仍主要由 Voice ID 决定。") },
+    ) {
+        val selectedLanguage = miniMaxLanguageOptions.firstOrNull {
+            it.value == setting.languageBoost
+        }
+        ExposedDropdownMenuBox(
+            expanded = languageBoostExpanded,
+            onExpandedChange = { languageBoostExpanded = !languageBoostExpanded },
+        ) {
+            OutlinedTextField(
+                value = selectedLanguage?.label ?: setting.languageBoost.orEmpty(),
+                onValueChange = {},
+                readOnly = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                trailingIcon = {
+                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = languageBoostExpanded)
+                },
+            )
+            ExposedDropdownMenu(
+                expanded = languageBoostExpanded,
+                onDismissRequest = { languageBoostExpanded = false },
+            ) {
+                miniMaxLanguageOptions.forEach { language ->
+                    DropdownMenuItem(
+                        text = { Text(language.label) },
+                        onClick = {
+                            onValueChange(setting.copy(languageBoost = language.value))
+                            languageBoostExpanded = false
+                        },
                     )
                 }
             }

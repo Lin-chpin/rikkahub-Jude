@@ -2,6 +2,7 @@ package me.rerere.rikkahub.local
 
 import android.app.Application
 import android.content.Context
+import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.ui.components.ui.CardGroupScope
 
 /**
@@ -12,6 +13,8 @@ import me.rerere.rikkahub.ui.components.ui.CardGroupScope
  */
 object LocalBuildIntegration {
     fun onApplicationCreated(application: Application) = Unit
+
+    fun onUserMessageSent(context: Context, message: UIMessage) = Unit
 }
 
 fun CardGroupScope.addLocalSettingsExtension(context: Context) = Unit

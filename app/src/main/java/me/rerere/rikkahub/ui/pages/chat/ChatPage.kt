@@ -316,7 +316,14 @@ private fun ChatPageContent(
     val anonymousQuestionUnread = anonymousQuestionBoxEnabled && rawAnonymousQuestionUnread
     val hazeState = rememberHazeState()
 
-    TTSAutoPlay(vm = vm, setting = setting, conversation = conversation)
+    TTSAutoPlay(
+        vm = vm,
+        setting = setting,
+        conversation = conversation,
+        onUpdateTtsMessage = { messageId, transform ->
+            vm.updateMessage(messageId, transform)
+        },
+    )
     LaunchedEffect(momentsEnabled) {
         if (!momentsEnabled) {
             momentsVisible = false
@@ -543,6 +550,9 @@ private fun ChatPageContent(
                             }
                         ))
                     vm.saveConversationAsync()
+                },
+                onUpdateTtsMessage = { messageId, transform ->
+                    vm.updateMessage(messageId, transform)
                 },
                 onClickSuggestion = { suggestion ->
                     inputState.editingMessage = null

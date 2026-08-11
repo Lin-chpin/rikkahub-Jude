@@ -71,6 +71,7 @@ import com.dokar.sonner.ToastType
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import java.util.UUID
+import java.util.Locale
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.hugeicons.HugeIcons
@@ -91,8 +92,11 @@ import me.rerere.rikkahub.data.voice.VOICE_CALL_UNAVAILABLE_MESSAGE
 import me.rerere.rikkahub.data.voice.voiceCallAudioTagFormatOrNull
 import me.rerere.rikkahub.data.voice.voiceCallDisplayTextOrPlainText
 import me.rerere.rikkahub.data.voice.voiceCallSpeechTextOrPlainText
+import me.rerere.rikkahub.data.voice.sanitizeVoiceCallTextForTranslation
 import me.rerere.rikkahub.service.ChatRequestMode
 import me.rerere.rikkahub.ui.components.richtext.appendVoiceCallAudioTagAwareText
+import me.rerere.rikkahub.ui.components.message.CollapsibleTranslationText
+import me.rerere.rikkahub.ui.components.message.TranslateMessageButton
 import me.rerere.rikkahub.ui.components.ui.KeepScreenOn
 import me.rerere.rikkahub.ui.components.ui.RabbitLoadingIndicator
 import me.rerere.rikkahub.ui.components.ui.UIAvatar
@@ -144,6 +148,7 @@ fun VoiceCallOverlay(
     val callAssistant = settings.getAssistantById(conversation.assistantId)
         ?: settings.getCurrentAssistant()
     val ttsAvailable by tts.isAvailable.collectAsState()
+    val ttsProviderReady by tts.isProviderReady.collectAsState()
     val ttsError by tts.error.collectAsState()
     val playbackState by tts.playbackState.collectAsState()
     val selectedTtsProvider = settings.getSelectedTTSProvider()
@@ -331,8 +336,8 @@ fun VoiceCallOverlay(
         onDismiss()
     }
 
-    LaunchedEffect(visible, ttsAvailable) {
-        if (!isHistory && visible && !ttsAvailable) {
+    LaunchedEffect(visible, ttsProviderReady, ttsAvailable) {
+        if (!isHistory && visible && ttsProviderReady && !ttsAvailable) {
             toaster.show(VOICE_CALL_UNAVAILABLE_MESSAGE, type = ToastType.Error)
             hangUp(VOICE_CALL_UNAVAILABLE_MESSAGE)
         }
@@ -341,6 +346,10 @@ fun VoiceCallOverlay(
     fun canStartInput(): Boolean {
         if (!hasChatModel) {
             toaster.show("请先选择聊天模型", type = ToastType.Error)
+            return false
+        }
+        if (!ttsProviderReady) {
+            toaster.show("语音模型正在初始化，请稍后再试", type = ToastType.Error)
             return false
         }
         if (!ttsAvailable) {
@@ -651,6 +660,7 @@ fun VoiceCallOverlay(
                                     hasChatModel = hasChatModel,
                                     micPermissionGranted = asrPermission.allRequiredPermissionsGranted,
                                     ttsAvailable = ttsAvailable,
+                                    ttsProviderReady = ttsProviderReady,
                                     keyboardCaptureActive = keyboardCaptureActive,
                                     loading = aiReplyActive,
                                 ),
@@ -662,6 +672,7 @@ fun VoiceCallOverlay(
 
                             Text(
                                 text = when {
+                                    !ttsProviderReady -> "正在连接语音模型..."
                                     !ttsAvailable -> "电话里的 AI 声音使用「文本转语音」里选中的语音模型。"
                                     !asrPermission.allRequiredPermissionsGranted -> "电话输入需要麦克风权限。"
                                     aiReplyActive -> "AI 正在回复..."
@@ -703,9 +714,42 @@ fun VoiceCallOverlay(
                                 visibleTextOverride = speechPlayback.visibleTextOverride(message.id.toString()),
                             )
                             displayItems.forEachIndexed { index, item ->
+                                val bubbleKey = item.translationKey(index)
+                                val isTranslationTarget =
+                                    message.role == MessageRole.ASSISTANT && bubbleKey != null
                                 VoiceCallMessageBubble(
                                     role = message.role,
                                     item = item,
+                                    translation = if (isTranslationTarget) {
+                                        message.voiceCallTranslations[bubbleKey]
+                                            ?: if (displayItems.size == 1) message.translation else null
+                                    } else {
+                                        null
+                                    },
+                                    onTranslate = if (isTranslationTarget) {
+                                        { language ->
+                                            vm.translateVoiceCallBubble(
+                                                message = message,
+                                                bubbleKey = bubbleKey!!,
+                                                sourceText = item.translationText!!
+                                                    .sanitizeVoiceCallTextForTranslation(),
+                                                targetLanguage = language,
+                                            )
+                                        }
+                                    } else {
+                                        null
+                                    },
+                                    onClearTranslation = if (isTranslationTarget) {
+                                        {
+                                            vm.clearVoiceCallTranslation(
+                                                messageId = message.id,
+                                                bubbleKey = bubbleKey!!,
+                                                clearLegacyTranslation = displayItems.size == 1,
+                                            )
+                                        }
+                                    } else {
+                                        null
+                                    },
                                 )
                                 if (index < displayItems.lastIndex) {
                                     Spacer(Modifier.height(10.dp))
@@ -904,6 +948,9 @@ private fun VoiceCallAvatarPair(
 private fun VoiceCallMessageBubble(
     role: MessageRole,
     item: VoiceCallDisplayItem,
+    translation: String? = null,
+    onTranslate: ((Locale) -> Unit)? = null,
+    onClearTranslation: (() -> Unit)? = null,
 ) {
     val tts = LocalTTSState.current
     val isUser = role == MessageRole.USER
@@ -923,90 +970,128 @@ private fun VoiceCallMessageBubble(
                 .widthIn(max = 520.dp),
             contentAlignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart,
         ) {
-            Surface(
+            Column(
                 modifier = Modifier.widthIn(max = 520.dp),
-                shape = RoundedCornerShape(
-                    topStart = 18.dp,
-                    topEnd = 18.dp,
-                    bottomStart = if (isUser) 18.dp else 6.dp,
-                    bottomEnd = if (isUser) 6.dp else 18.dp,
-                ),
-                color = if (isUser) {
-                    MaterialTheme.colorScheme.primaryContainer
-                } else {
-                    MaterialTheme.colorScheme.surfaceContainerHigh
-                },
+                horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
             ) {
-                when (item) {
-                    VoiceCallDisplayItem.Loading -> {
-                        Box(
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            RabbitLoadingIndicator(Modifier.size(24.dp))
-                        }
-                    }
-
-                    is VoiceCallDisplayItem.Voice -> {
-                        Column(
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                Surface(
+                    modifier = Modifier.widthIn(max = 520.dp),
+                    shape = RoundedCornerShape(
+                        topStart = 18.dp,
+                        topEnd = 18.dp,
+                        bottomStart = if (isUser || onTranslate != null) 18.dp else 6.dp,
+                        bottomEnd = 18.dp,
+                    ),
+                    color = if (isUser) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    },
+                ) {
+                    Column {
+                    when (item) {
+                        VoiceCallDisplayItem.Loading -> {
+                            Box(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                contentAlignment = Alignment.Center,
                             ) {
-                                Icon(
-                                    imageVector = HugeIcons.Voice,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(22.dp),
-                                    tint = MaterialTheme.colorScheme.primary,
-                                )
-                                Text(
-                                    text = "语音消息",
-                                    modifier = Modifier.weight(1f),
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    text = "${item.durationSeconds}s",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                item.audioSegment?.let { audio ->
-                                    IconButton(onClick = { tts.playCachedAudio(audio.audioUri, audio.format, audio.sampleRate) }, modifier = Modifier.size(28.dp)) {
-                                        Icon(HugeIcons.VolumeHigh, contentDescription = "播放通话 TTS", modifier = Modifier.size(16.dp))
+                                RabbitLoadingIndicator(Modifier.size(24.dp))
+                            }
+                        }
+
+                        is VoiceCallDisplayItem.Voice -> {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = HugeIcons.Voice,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(22.dp),
+                                        tint = MaterialTheme.colorScheme.primary,
+                                    )
+                                    Text(
+                                        text = "语音消息",
+                                        modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        text = "${item.durationSeconds}s",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    item.audioSegment?.let { audio ->
+                                        IconButton(onClick = { tts.playCachedAudio(audio.audioUri, audio.format, audio.sampleRate) }, modifier = Modifier.size(28.dp)) {
+                                            Icon(HugeIcons.VolumeHigh, contentDescription = "播放通话 TTS", modifier = Modifier.size(16.dp))
+                                        }
                                     }
                                 }
+                                Spacer(Modifier.height(6.dp))
+                                Text(
+                                    text = buildAnnotatedString {
+                                        if (showVoiceCallAudioTagAnnotations) {
+                                            appendVoiceCallAudioTagAwareText(item.text, colorScheme)
+                                        } else {
+                                            append(item.text)
+                                        }
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = colorScheme.onSurfaceVariant,
+                                )
                             }
-                            Spacer(Modifier.height(6.dp))
+                        }
+
+                        is VoiceCallDisplayItem.Text -> {
                             Text(
-                                text = buildAnnotatedString {
-                                    if (showVoiceCallAudioTagAnnotations) {
-                                        appendVoiceCallAudioTagAwareText(item.text, colorScheme)
-                                    } else {
-                                        append(item.text)
-                                    }
+                                text = item.text,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = if (isUser) {
+                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
                                 },
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = colorScheme.onSurfaceVariant,
                             )
                         }
                     }
 
-                    is VoiceCallDisplayItem.Text -> {
-                        Text(
-                            text = item.text,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = if (isUser) {
+                    if (onTranslate != null && onClearTranslation != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 14.dp, top = 2.dp, end = 14.dp, bottom = 4.dp),
+                        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
+                    ) {
+                        TranslateMessageButton(
+                            onTranslate = onTranslate,
+                            onClearTranslation = onClearTranslation,
+                            showLabel = true,
+                            defaultLanguage = Locale.SIMPLIFIED_CHINESE,
+                            tint = if (isUser) {
                                 MaterialTheme.colorScheme.onPrimaryContainer
                             } else {
-                                MaterialTheme.colorScheme.onSurface
+                                MaterialTheme.colorScheme.onSurfaceVariant
                             },
                         )
+                    }
+                    }
+
+                    translation?.takeIf { it.isNotBlank() }?.let { content ->
+                    CollapsibleTranslationText(
+                        content = content,
+                        onClickCitation = {},
+                        modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
+                        showHeader = false,
+                        showCollapseControl = false,
+                    )
+                    }
                     }
                 }
             }
@@ -1030,10 +1115,12 @@ private fun voiceCallTitle(
     hasChatModel: Boolean,
     micPermissionGranted: Boolean,
     ttsAvailable: Boolean,
+    ttsProviderReady: Boolean,
     keyboardCaptureActive: Boolean,
     loading: Boolean,
 ): String = when {
     !hasChatModel -> "请先选择聊天模型"
+    !ttsProviderReady -> "正在连接语音模型"
     !ttsAvailable -> "请先到「设置 > 语音服务 > 文本转语音」选择语音模型"
     !micPermissionGranted -> "请允许麦克风权限"
     keyboardCaptureActive -> "等待输入法语音"

@@ -99,13 +99,13 @@ import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.modifier.shimmer
 import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.context.LocalTTSState
+import me.rerere.rikkahub.ui.hooks.rememberChatTtsPlayback
 import me.rerere.rikkahub.ui.theme.LocalChatFontFamily
 import me.rerere.rikkahub.ui.theme.rememberChatFontFamily
 import me.rerere.rikkahub.ui.theme.extendColors
+import me.rerere.rikkahub.utils.toChatTtsText
 import me.rerere.rikkahub.utils.JsonInstant
 import me.rerere.rikkahub.utils.base64Encode
-import me.rerere.rikkahub.utils.extractQuotedContentAsText
-import me.rerere.rikkahub.utils.keepEnglishOnlyForTts
 import me.rerere.rikkahub.utils.openUrl
 import me.rerere.rikkahub.utils.stripMarkdown
 import me.rerere.rikkahub.utils.urlDecode
@@ -133,6 +133,7 @@ fun ChatMessage(
     onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
     onOpenVoiceCallRecord: ((String) -> Unit)? = null,
+    onUpdateTtsMessage: (messageId: kotlin.uuid.Uuid, transform: (UIMessage) -> UIMessage) -> Unit = { _, _ -> },
 ) {
     val message = node.messages[node.selectIndex]
     val voiceCallRecord = message.voiceCallRecord()
@@ -161,6 +162,7 @@ fun ChatMessage(
     }
     val appSettings = LocalSettings.current
     val settings = appSettings.displaySetting
+    val chatTts = rememberChatTtsPlayback()
     val chatFontFamily = LocalChatFontFamily.current ?: rememberChatFontFamily(settings)
     val textStyle = LocalTextStyle.current.copy(
         fontSize = LocalTextStyle.current.fontSize * settings.fontSizeRatio,
@@ -215,6 +217,17 @@ fun ChatMessage(
                 onToolApproval = onToolApproval,
                 onToolAnswer = onToolAnswer,
                 onUserMessageClick = if (message.role == MessageRole.USER) onEdit else null,
+                onTtsSpeak = if (message.role == MessageRole.ASSISTANT) {
+                    { text ->
+                        chatTts.speak(
+                            message = message,
+                            text = text,
+                            onUpdateMessage = onUpdateTtsMessage,
+                        )
+                    }
+                } else {
+                    null
+                },
             )
 
             message.translation?.let { translation ->
@@ -246,6 +259,13 @@ fun ChatMessage(
                     onUpdate = onUpdate,
                     onOpenActionSheet = {
                         showActionsSheet = true
+                    },
+                    onTtsSpeak = { text ->
+                        chatTts.speak(
+                            message = message,
+                            text = text,
+                            onUpdateMessage = onUpdateTtsMessage,
+                        )
                     },
                     onTranslate = onTranslate,
                     onClearTranslation = onClearTranslation
@@ -299,7 +319,6 @@ fun ChatMessage(
         )
     }
 }
-
 @OptIn(FlowPreview::class)
 @Composable
 private fun MessagePartsBlock(
@@ -313,6 +332,7 @@ private fun MessagePartsBlock(
     onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
     onUserMessageClick: (() -> Unit)? = null,
+    onTtsSpeak: ((String) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
@@ -448,6 +468,7 @@ private fun MessagePartsBlock(
                                     showParagraphTtsButtons = settings.displaySetting.showParagraphTtsButtons,
                                     paragraphBubbleMode = true,
                                     modifier = Modifier.animateContentSize(),
+                                    onTtsSpeak = onTtsSpeak,
                                 )
                             } else if (settings.displaySetting.showAssistantBubble) {
                                 Surface(
@@ -463,6 +484,7 @@ private fun MessagePartsBlock(
                                             showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
                                             showParagraphTtsButtons = settings.displaySetting.showParagraphTtsButtons,
                                             paragraphBubbleMode = false,
+                                            onTtsSpeak = onTtsSpeak,
                                         )
                                     }
                                 }
@@ -475,7 +497,8 @@ private fun MessagePartsBlock(
                                     showParagraphTtsButtons = settings.displaySetting.showParagraphTtsButtons,
                                     paragraphBubbleMode = false,
                                     modifier = Modifier
-                                        .animateContentSize()
+                                        .animateContentSize(),
+                                    onTtsSpeak = onTtsSpeak,
                                 )
                             }
                         }
@@ -630,7 +653,8 @@ private fun MessagePartsBlock(
     }
 
     // Annotations (always rendered at the end)
-    if (annotations.isNotEmpty()) {
+    val citationAnnotations = annotations.filterIsInstance<UIMessageAnnotation.UrlCitation>()
+    if (citationAnnotations.isNotEmpty()) {
         Column(
             modifier = Modifier.animateContentSize(),
         ) {
@@ -654,24 +678,19 @@ private fun MessagePartsBlock(
                             .padding(4.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        annotations.fastForEachIndexed { index, annotation ->
-                            when (annotation) {
-                                is UIMessageAnnotation.VoiceCallRecord -> Unit
-                                is UIMessageAnnotation.UrlCitation -> {
-                                    Row(
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Favicon(annotation.url, modifier = Modifier.size(20.dp))
-                                        Text(
-                                            text = buildAnnotatedString {
-                                                append("${index + 1}. ")
-                                                withLink(LinkAnnotation.Url(annotation.url)) {
-                                                    append(annotation.title.urlDecode())
-                                                }
-                                            }
-                                        )
+                        citationAnnotations.fastForEachIndexed { index, annotation ->
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Favicon(annotation.url, modifier = Modifier.size(20.dp))
+                                Text(
+                                    text = buildAnnotatedString {
+                                        append("${index + 1}. ")
+                                        withLink(LinkAnnotation.Url(annotation.url)) {
+                                            append(annotation.title.urlDecode())
+                                        }
                                     }
-                                }
+                                )
                             }
                         }
                     }
@@ -682,12 +701,11 @@ private fun MessagePartsBlock(
                     expand = !expand
                 }
             ) {
-                Text(stringResource(R.string.citations_count, annotations.size))
+                Text(stringResource(R.string.citations_count, citationAnnotations.size))
             }
         }
     }
 }
-
 @Composable
 private fun UserTextParagraphs(
     content: String,
@@ -768,6 +786,7 @@ private fun AssistantTextContent(
     showParagraphTtsButtons: Boolean,
     paragraphBubbleMode: Boolean,
     modifier: Modifier = Modifier,
+    onTtsSpeak: ((String) -> Unit)? = null,
 ) {
     if (paragraphBubbleMode) {
         AssistantTextParagraphs(
@@ -778,6 +797,7 @@ private fun AssistantTextContent(
             showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
             showParagraphTtsButtons = showParagraphTtsButtons,
             paragraphBubbleMode = true,
+            onTtsSpeak = onTtsSpeak,
         )
     } else if (showParagraphTtsButtons) {
         AssistantTextParagraphs(
@@ -788,6 +808,7 @@ private fun AssistantTextContent(
             showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
             showParagraphTtsButtons = true,
             paragraphBubbleMode = false,
+            onTtsSpeak = onTtsSpeak,
         )
     } else if (selectionEnabled) {
         SelectionContainer(modifier = modifier) {
@@ -816,6 +837,7 @@ private fun AssistantTextParagraphs(
     showElevenLabsAudioTagAnnotations: Boolean,
     showParagraphTtsButtons: Boolean,
     paragraphBubbleMode: Boolean,
+    onTtsSpeak: ((String) -> Unit)? = null,
 ) {
     val tts = LocalTTSState.current
     val isAvailable by tts.isAvailable.collectAsState()
@@ -850,7 +872,7 @@ private fun AssistantTextParagraphs(
                         displaySetting.ttsOnlyReadQuoted,
                         displaySetting.ttsEnglishOnly,
                     ) {
-                        segment.text.toAssistantTtsText(
+                        segment.text.toChatTtsText(
                             ttsOnlyReadQuoted = displaySetting.ttsOnlyReadQuoted,
                             ttsEnglishOnly = displaySetting.ttsEnglishOnly,
                         )
@@ -889,7 +911,7 @@ private fun AssistantTextParagraphs(
                                 IconButton(
                                     enabled = canSpeak,
                                     onClick = {
-                                        tts.speak(textToSpeak)
+                                        onTtsSpeak?.invoke(textToSpeak)
                                     },
                                     modifier = Modifier.size(32.dp)
                                 ) {
@@ -980,21 +1002,4 @@ private fun formatVoiceCallDuration(totalSeconds: Int): String {
     } else {
         "%02d:%02d".format(seconds / 60, seconds % 60)
     }
-}
-
-private fun String.toAssistantTtsText(
-    ttsOnlyReadQuoted: Boolean,
-    ttsEnglishOnly: Boolean,
-): String {
-    val quotedText = if (ttsOnlyReadQuoted) {
-        extractQuotedContentAsText() ?: this
-    } else {
-        this
-    }
-    val plainText = quotedText.stripMarkdown()
-    return if (ttsEnglishOnly) {
-        plainText.keepEnglishOnlyForTts()
-    } else {
-        plainText
-    }.trim()
 }

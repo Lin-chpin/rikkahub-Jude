@@ -294,10 +294,15 @@ class SettingsStore(
                     ttsProviders.add(defaultTTSProvider.copyProvider())
                 }
             }
+            val ttsSelection = resolveTtsProviderSelection(
+                providers = ttsProviders,
+                selectedProviderId = it.selectedTTSProviderId,
+            )
             it.copy(
                 providers = providers,
                 assistants = assistants,
-                ttsProviders = ttsProviders,
+                ttsProviders = ttsSelection.providers,
+                selectedTTSProviderId = ttsSelection.selectedProviderId ?: DEFAULT_SYSTEM_TTS_ID,
             )
         }
         .map { settings ->
@@ -717,9 +722,8 @@ fun Settings.getQuickMessagesOfAssistant(assistant: Assistant) =
     quickMessages.filter { it.id in assistant.quickMessageIds }
 
 fun Settings.getSelectedTTSProvider(): TTSProviderSetting? {
-    return selectedTTSProviderId?.let { id ->
-        ttsProviders.find { it.id == id }
-    } ?: ttsProviders.firstOrNull()
+    return ttsProviders.firstOrNull { it.id == selectedTTSProviderId }
+        ?: ttsProviders.firstOrNull()
 }
 
 fun Settings.getSelectedASRProvider(): ASRProviderSetting? {

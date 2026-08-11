@@ -27,7 +27,8 @@ data class UIMessage(
     val finishedAt: LocalDateTime? = null,
     val modelId: Uuid? = null,
     val usage: TokenUsage? = null,
-    val translation: String? = null
+    val translation: String? = null,
+    val voiceCallTranslations: Map<String, String> = emptyMap()
 ) {
     private fun appendChunk(chunk: MessageChunk): UIMessage {
         val choice = chunk.choices.getOrNull(0)
@@ -785,6 +786,18 @@ sealed class UIMessageAnnotation {
         val messageIds: Set<String> = emptySet(),
         val audioSegmentsByMessageId: Map<String, List<VoiceCallAudioSegment>> = emptyMap(),
         val pendingEndedEvent: Boolean = false,
+    ) : UIMessageAnnotation()
+
+    @Serializable
+    @SerialName("tts_audio")
+    data class TtsAudio(
+        val requestText: String,
+        val chunkText: String,
+        val audioUri: String,
+        val format: String,
+        val sampleRate: Int? = null,
+        val chunkIndex: Int = 0,
+        val totalChunks: Int = 1,
     ) : UIMessageAnnotation()
 }
 

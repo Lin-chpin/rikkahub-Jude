@@ -6,6 +6,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.util.InstantSerializer
 import me.rerere.rikkahub.data.datastore.DEFAULT_ASSISTANT_ID
@@ -35,10 +36,18 @@ data class Conversation(
     val newConversation: Boolean = false
 ) {
     val files: List<Uri>
-        get() = messageNodes
-            .flatMap { node -> node.messages.flatMap { it.parts } }
-            .collectAllParts()
-            .mapNotNull { it.fileUri() }
+        get() {
+            val messages = messageNodes.flatMap { it.messages }
+            val partFiles = messages
+                .flatMap { it.parts }
+                .collectAllParts()
+                .mapNotNull { it.fileUri() }
+            val ttsFiles = messages
+                .flatMap { it.annotations }
+                .filterIsInstance<UIMessageAnnotation.TtsAudio>()
+                .map { it.audioUri.toUri() }
+            return (partFiles + ttsFiles).distinct()
+        }
 
     /**
      *  当前选中的 message

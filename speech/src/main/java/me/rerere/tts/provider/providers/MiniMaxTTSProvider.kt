@@ -72,6 +72,10 @@ class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
             put("stream_options", buildJsonObject {
                 put("exclude_aggregated_audio", true)
             })
+            providerSetting.languageBoost
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { put("language_boost", it) }
             put("voice_setting", buildJsonObject {
                 put("voice_id", voiceId)
                 put("speed", providerSetting.speed)

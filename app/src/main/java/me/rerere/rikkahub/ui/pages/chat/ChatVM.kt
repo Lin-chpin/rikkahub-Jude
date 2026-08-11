@@ -389,6 +389,21 @@ class ChatVM(
         chatService.translateMessage(_conversationId, message, targetLanguage)
     }
 
+    fun translateVoiceCallBubble(
+        message: UIMessage,
+        bubbleKey: String,
+        sourceText: String,
+        targetLanguage: Locale,
+    ) {
+        chatService.translateVoiceCallBubble(
+            conversationId = _conversationId,
+            message = message,
+            bubbleKey = bubbleKey,
+            sourceText = sourceText,
+            targetLanguage = targetLanguage,
+        )
+    }
+
     fun generateTitle(conversation: Conversation, force: Boolean = false) {
         viewModelScope.launch {
             val conversationFull = conversationRepo.getConversationById(conversation.id) ?: return@launch
@@ -406,10 +421,38 @@ class ChatVM(
         chatService.clearTranslationField(_conversationId, messageId)
     }
 
+    fun clearVoiceCallTranslation(messageId: Uuid, bubbleKey: String, clearLegacyTranslation: Boolean) {
+        chatService.clearVoiceCallTranslation(
+            conversationId = _conversationId,
+            messageId = messageId,
+            bubbleKey = bubbleKey,
+            clearLegacyTranslation = clearLegacyTranslation,
+        )
+    }
+
     fun updateConversation(newConversation: Conversation) {
         chatService.updateConversationState(_conversationId) {
             newConversation
         }
+    }
+
+    fun updateMessage(messageId: Uuid, transform: (UIMessage) -> UIMessage) {
+        chatService.updateConversationState(_conversationId) { currentConversation ->
+            currentConversation.copy(
+                messageNodes = currentConversation.messageNodes.map { node ->
+                    if (node.messages.any { it.id == messageId }) {
+                        node.copy(
+                            messages = node.messages.map { message ->
+                                if (message.id == messageId) transform(message) else message
+                            }
+                        )
+                    } else {
+                        node
+                    }
+                }
+            )
+        }
+        saveConversationAsync()
     }
 
     fun toggleMessageFavorite(node: MessageNode) {

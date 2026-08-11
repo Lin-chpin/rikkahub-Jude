@@ -17,6 +17,18 @@ internal sealed interface VoiceCallDisplayItem {
     data object Loading : VoiceCallDisplayItem
 }
 
+internal val VoiceCallDisplayItem.translationText: String?
+    get() = when (this) {
+        is VoiceCallDisplayItem.Text -> text
+        is VoiceCallDisplayItem.Voice -> text
+        VoiceCallDisplayItem.Loading -> null
+    }
+
+internal fun VoiceCallDisplayItem.translationKey(index: Int): String? {
+    if (translationText == null) return null
+    return "voice-call-bubble:$index"
+}
+
 internal fun UIMessage.voiceCallDisplayItems(
     audioSegmentsOverride: List<VoiceCallAudioSegment> = emptyList(),
     currentAssistantId: String?,

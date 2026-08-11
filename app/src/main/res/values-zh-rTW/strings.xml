@@ -79,6 +79,8 @@
   <string name="assistant_page_enter_image_url">輸入圖片URL</string>
   <string name="assistant_page_global_memory">全域記憶體</string>
   <string name="assistant_page_global_memory_desc">使用全域共享記憶體，而非助理隔離記憶體。啟用後，所有助理將共用同一份記憶體儲存空間</string>
+  <string name="assistant_page_conversation_memory">對話記憶</string>
+  <string name="assistant_page_conversation_memory_desc">僅在目前聊天視窗中使用對話記憶，不同對話之間不會共用這部分記憶；管理記憶中的內容仍對該助理的所有對話通用。</string>
   <string name="assistant_page_header_name">Header 名稱</string>
   <string name="assistant_page_header_value">Header 值</string>
   <string name="assistant_page_image_url">圖片URL</string>

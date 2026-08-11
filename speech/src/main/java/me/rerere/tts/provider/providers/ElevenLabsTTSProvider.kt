@@ -82,6 +82,12 @@ class ElevenLabsTTSProvider : TTSProvider<TTSProviderSetting.ElevenLabs> {
             if (modelId.isNotBlank()) {
                 put("model_id", modelId)
             }
+            if (modelId != "eleven_multilingual_v2") {
+                providerSetting.languageCode
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.let { put("language_code", it) }
+            }
             put(
                 "voice_settings",
                 JSONObject().apply {

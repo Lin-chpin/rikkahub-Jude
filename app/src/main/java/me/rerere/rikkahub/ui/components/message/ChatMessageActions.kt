@@ -50,7 +50,6 @@ import me.rerere.hugeicons.stroke.Refresh03
 import me.rerere.hugeicons.stroke.Share04
 import me.rerere.hugeicons.stroke.StopCircle
 import me.rerere.hugeicons.stroke.TextSelection
-import me.rerere.hugeicons.stroke.Translate
 import me.rerere.hugeicons.stroke.VolumeHigh
 import me.rerere.hugeicons.stroke.WebDesign01
 import me.rerere.rikkahub.R
@@ -58,8 +57,8 @@ import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.ui.components.ui.RikkaConfirmDialog
 import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.context.LocalTTSState
+import me.rerere.rikkahub.utils.toChatTtsText
 import me.rerere.rikkahub.utils.copyMessageToClipboard
-import me.rerere.rikkahub.utils.extractQuotedContentAsText
 import me.rerere.rikkahub.utils.toLocalString
 import java.util.Locale
 
@@ -70,12 +69,12 @@ fun ColumnScope.ChatMessageActionButtons(
     onUpdate: (MessageNode) -> Unit,
     onRegenerate: () -> Unit,
     onOpenActionSheet: () -> Unit,
+    onTtsSpeak: (String) -> Unit = {},
     onTranslate: ((UIMessage, Locale) -> Unit)? = null,
     onClearTranslation: (UIMessage) -> Unit = {},
 ) {
     val context = LocalContext.current
     var isPendingDelete by remember { mutableStateOf(false) }
-    var showTranslateDialog by remember { mutableStateOf(false) }
     var showRegenerateConfirm by remember { mutableStateOf(false) }
 
     LaunchedEffect(isPendingDelete) {
@@ -136,12 +135,11 @@ fun ColumnScope.ChatMessageActionButtons(
                         onClick = {
                             if (!isSpeaking) {
                                 val text = message.toText()
-                                val textToSpeak = if (settings.displaySetting.ttsOnlyReadQuoted) {
-                                    text.extractQuotedContentAsText() ?: text
-                                } else {
-                                    text
-                                }
-                                tts.speak(textToSpeak)
+                                val textToSpeak = text.toChatTtsText(
+                                    ttsOnlyReadQuoted = settings.displaySetting.ttsOnlyReadQuoted,
+                                    ttsEnglishOnly = settings.displaySetting.ttsEnglishOnly,
+                                )
+                                onTtsSpeak(textToSpeak)
                             } else {
                                 tts.stop()
                             }
@@ -154,21 +152,10 @@ fun ColumnScope.ChatMessageActionButtons(
 
             // Translation button
             if (onTranslate != null) {
-                Icon(
-                    imageVector = HugeIcons.Translate,
-                    contentDescription = stringResource(R.string.translate),
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = LocalIndication.current,
-                            onClick = {
-                                showTranslateDialog = true
-                            }
-                        )
-                        .padding(8.dp)
-                        .size(16.dp),
-                    tint = actionIconColor
+                TranslateMessageButton(
+                    onTranslate = { language -> onTranslate(message, language) },
+                    onClearTranslation = { onClearTranslation(message) },
+                    tint = actionIconColor,
                 )
             }
         }
@@ -193,23 +180,6 @@ fun ColumnScope.ChatMessageActionButtons(
         ChatMessageBranchSelector(
             node = node,
             onUpdate = onUpdate,
-        )
-    }
-
-    // Translation dialog
-    if (showTranslateDialog && onTranslate != null) {
-        LanguageSelectionDialog(
-            onLanguageSelected = { language ->
-                showTranslateDialog = false
-                onTranslate(message, language)
-            },
-            onClearTranslation = {
-                showTranslateDialog = false
-                onClearTranslation(message)
-            },
-            onDismissRequest = {
-                showTranslateDialog = false
-            },
         )
     }
 

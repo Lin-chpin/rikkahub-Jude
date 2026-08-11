@@ -14,12 +14,24 @@
 - Included modules: `highlight`, `ai`, `search`, `speech`, `common`, `document`, `web`, `material3`, `usage-tracker`, `weather`.
 - User-facing fork/release repo: `https://github.com/innna327-source/rikkahub-Jude`.
 
+## Local build memory
+
+- Gradle 9.4.1 uses the cached distribution at `C:\Users\zlsss\.gradle\wrapper\dists\gradle-9.4.1-bin\arn2x92ynaizyzdaamcbpbhtj\gradle-9.4.1\bin\gradle.bat` with JDK 21 at `C:\Users\zlsss\.gradle\jdks\jetbrains_s_r_o_-21-amd64-windows.2`.
+- The project intentionally does not use the Foojay toolchain resolver: compilation requires the local JDK 21 above, so no external JDK/plugin provisioning is needed.
+- Set `GRADLE_USER_HOME=C:\Users\zlsss\.gradle` when invoking Gradle so plugin metadata and transformed artifacts are read from the same local user cache; `settings.gradle.kts` maps the Android/Kotlin/Google plugin IDs to their cached implementation modules and does not require plugin-marker downloads.
+- If the local Gradle distribution, JDK, or another required cached plugin/dependency is missing, report the exact item instead of silently going online or copying dependencies into the repository.
+- All compilation and packaging must use the local cached Gradle distribution and local JDK above; set `JAVA_HOME` explicitly before invoking Gradle or a packaging script, and never silently fall back to a wrapper download.
+- Treat locally cached plugins, dependencies, and toolchains as the default build source. If a required item is missing, locked, or incomplete and cannot be repaired in the local user cache, stop and tell the user the exact item and why the local build cannot continue.
+- If the local cache can be repaired without changing project source (for example, stopping Gradle daemons or warming an existing user-level cache), do that first. Do not silently switch to network resolution, copy dependencies into the repository, or add build workarounds; report the limitation before proceeding.
+
 ## User Preferences
 
 - Keep changes narrow and grounded in the current repo. Do not rewrite unrelated code.
+- Complex logic should be decomposed by responsibility into focused files and layers; avoid putting unrelated state machines, transformations, and orchestration into one file.
 - Do not commit, build APKs, or upload releases unless the user explicitly asks.
 - After code changes, do not build/package APKs by default. Run compile/tests for verification, but only package an APK when the user explicitly asks to build/package after the change.
 - When the user explicitly asks to commit, push the current branch to GitHub after a successful commit.
+- For Personal packaging, use `scripts/personal/build-personal-universal-debug-apk.ps1`; keep only the timestamped universal APK `RikkaHub-personal-universal-debug-YYYYMMDD-HHMMSS.apk` and do not retain or deliver fixed-name, arm64, or x86_64 APK outputs.
 - When the user explicitly asks to build/package/update an APK, default to the universal debug APK workflow unless they ask for another variant:
   `E:/rikkahub2.0/app/build/outputs/apk/debug/app-universal-debug.apk`
 - When the user asks to build/package/update an APK, do not run unit tests as a separate pre-step unless the user explicitly asks for tests in that same turn. The packaging build's own compilation checks are enough for a packaging request.

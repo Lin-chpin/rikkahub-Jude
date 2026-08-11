@@ -82,6 +82,8 @@
   <string name="assistant_page_enter_image_url">输入图片URL</string>
   <string name="assistant_page_global_memory">全局记忆</string>
   <string name="assistant_page_global_memory_desc">使用全局共享内存而非助手隔离内存。启用后，所有助手共享同一内存存储</string>
+  <string name="assistant_page_conversation_memory">会话记忆</string>
+  <string name="assistant_page_conversation_memory_desc">仅在当前聊天窗口中使用会话记忆，不同会话之间不会共享这部分记忆；管理记忆中的内容仍对该助手的所有会话通用。</string>
   <string name="assistant_page_header_name">Header 名称</string>
   <string name="assistant_page_header_value">Header 值</string>
   <string name="assistant_page_image_url">图片URL</string>
@@ -1123,4 +1125,3 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="setting_page_preferences_ui">界面偏好设置</string>
   <string name="setting_page_preferences_ui_desc">消息显示、字体、代码块</string>
 </resources>
-

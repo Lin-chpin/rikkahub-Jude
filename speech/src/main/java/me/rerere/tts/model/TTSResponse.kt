@@ -35,6 +35,12 @@ data class TTSResponse(
     }
 }
 
+data class CachedAudioSource(
+    val audioUri: String,
+    val format: AudioFormat,
+    val sampleRate: Int? = null,
+)
+
 @Serializable
 data class AudioChunk(
     val data: ByteArray,
