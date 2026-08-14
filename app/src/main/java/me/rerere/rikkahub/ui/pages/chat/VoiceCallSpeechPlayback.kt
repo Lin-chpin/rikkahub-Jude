@@ -39,6 +39,8 @@ internal class VoiceCallSpeechPlaybackState(initialReplyPending: Boolean) {
 
     private var spokenMessageId by mutableStateOf<String?>(null)
     private var queuedTextLength by mutableStateOf(0)
+    private var queuedSpeechTextLength by mutableStateOf(0)
+    private var queuedIncludesUnfinishedTail by mutableStateOf(false)
     private val queuedSpeechSegments = mutableStateListOf<VoiceCallSpeechSegment>()
     private val interruptedVisibleTextLengths = mutableStateMapOf<String, Int>()
     private val audioSegmentsByMessageId = mutableStateMapOf<String, List<VoiceCallAudioSegment>>()
@@ -88,15 +90,28 @@ internal class VoiceCallSpeechPlaybackState(initialReplyPending: Boolean) {
         }
     }
 
-    fun queueReply(displayText: String, speechText: String) {
-        val displaySegments = displayText.voiceCallDisplaySegments()
+    fun queueReply(
+        displayText: String,
+        speechText: String,
+        includeUnfinishedTail: Boolean,
+    ) {
+        val displaySegments = displayText.voiceCallDisplaySegments(includeUnfinishedTail)
         if (displaySegments.isEmpty()) return
-        val speechSegments = speechText
+        val effectiveSpeechText = speechText.ifBlank {
+            displayText.takeIf { includeUnfinishedTail }.orEmpty()
+        }
+        val speechSegments = effectiveSpeechText
             .sanitizeVoiceCallTextForSpeech()
-            .voiceCallDisplaySegments()
-        if (queuedTextLength == displayText.length && queuedSpeechSegments.isNotEmpty()) return
+            .voiceCallDisplaySegments(includeUnfinishedTail)
+        if (queuedTextLength == displayText.length &&
+            queuedSpeechTextLength == effectiveSpeechText.length &&
+            queuedIncludesUnfinishedTail == includeUnfinishedTail &&
+            queuedSpeechSegments.isNotEmpty()
+        ) return
 
         queuedTextLength = displayText.length
+        queuedSpeechTextLength = effectiveSpeechText.length
+        queuedIncludesUnfinishedTail = includeUnfinishedTail
         queuedSpeechSegments.clear()
         queuedSpeechSegments += displaySegments.mapIndexed { index, displaySegment ->
             VoiceCallSpeechSegment(
@@ -132,6 +147,8 @@ internal class VoiceCallSpeechPlaybackState(initialReplyPending: Boolean) {
     private fun resetProgress(messageId: String?) {
         spokenMessageId = messageId
         queuedTextLength = 0
+        queuedSpeechTextLength = 0
+        queuedIncludesUnfinishedTail = false
         visibleTextLength = 0
         queuedSpeechSegments.clear()
     }
@@ -151,6 +168,7 @@ internal fun BindVoiceCallSpeechPlayback(
     currentAssistantId: String?,
     currentAssistantDisplayText: String,
     currentAssistantSpeechText: String,
+    currentAssistantEmotion: String?,
     loadingJob: Job?,
     useWholeReplyTts: Boolean,
     tts: CustomTtsState,
@@ -159,6 +177,7 @@ internal fun BindVoiceCallSpeechPlayback(
 ) {
     val latestAssistantDisplayText by rememberUpdatedState(currentAssistantDisplayText)
     val latestAssistantSpeechText by rememberUpdatedState(currentAssistantSpeechText)
+    val latestAssistantEmotion by rememberUpdatedState(currentAssistantEmotion)
     val latestLoadingJob by rememberUpdatedState(loadingJob)
 
     LaunchedEffect(state.replyPending, currentAssistantId) {
@@ -174,13 +193,26 @@ internal fun BindVoiceCallSpeechPlayback(
         currentAssistantId,
         currentAssistantDisplayText,
         currentAssistantSpeechText,
+        currentAssistantEmotion,
         loadingJob,
         useWholeReplyTts,
     ) {
         if (!state.replyPending || currentAssistantId == null) return@LaunchedEffect
         state.synchronizeMessage(currentAssistantId)
-        if (loadingJob != null) return@LaunchedEffect
-        state.queueReply(currentAssistantDisplayText, currentAssistantSpeechText)
+        // Sentence-based providers can synthesize while the text model is still
+        // producing later sentences. Whole-reply v3 remains completion-bound.
+        if (loadingJob != null && useWholeReplyTts) return@LaunchedEffect
+        recordFlow(
+            "TTS队列更新 displayLength=" + currentAssistantDisplayText.length +
+                ", speechLength=" + currentAssistantSpeechText.length +
+                ", loading=" + (loadingJob != null) +
+                ", includeTail=" + (loadingJob == null)
+        )
+        state.queueReply(
+            displayText = currentAssistantDisplayText,
+            speechText = currentAssistantSpeechText,
+            includeUnfinishedTail = loadingJob == null,
+        )
     }
 
     LaunchedEffect(state.activeMessageId()) {
@@ -193,6 +225,11 @@ internal fun BindVoiceCallSpeechPlayback(
                     state.completeReply()
                     break
                 }
+                delay(60)
+                continue
+            }
+
+            if (segment.waitsForSpeechProjection(latestLoadingJob != null)) {
                 delay(60)
                 continue
             }
@@ -217,6 +254,7 @@ internal fun BindVoiceCallSpeechPlayback(
                 text = ttsText,
                 flushCalled = true,
                 chunked = false,
+                emotion = latestAssistantEmotion,
                 onAudioReady = { response ->
                     recordFlow(
                         "收到TTS音频回调 messageId=" + messageId +
@@ -258,8 +296,9 @@ internal fun BindVoiceCallSpeechPlayback(
                 "调用tts.speak messageId=" + messageId +
                     ", textLength=" + ttsText.length +
                     ", mode=" + (if (useWholeReplyTts) "whole_reply" else "sentence") +
-                    ", chunked=false" +
-                    ", text=" + ttsText.take(80)
+                        ", chunked=false" +
+                        ", emotion=" + (latestAssistantEmotion ?: "none") +
+                        ", text=" + ttsText.take(80)
             )
 
             val startState = withTimeoutOrNull(20_000) {
@@ -334,7 +373,9 @@ internal data class VoiceCallSpeechSegment(
     val endLength: Int,
 )
 
-internal fun String.voiceCallDisplaySegments(): List<VoiceCallSpeechSegment> {
+internal fun String.voiceCallDisplaySegments(
+    includeUnfinishedTail: Boolean = true,
+): List<VoiceCallSpeechSegment> {
     val result = mutableListOf<VoiceCallSpeechSegment>()
     var start = 0
     var index = 0
@@ -355,8 +396,10 @@ internal fun String.voiceCallDisplaySegments(): List<VoiceCallSpeechSegment> {
             index++
         }
     }
-    val tail = if (start < length) substring(start).trim() else ""
-    if (tail.isNotBlank()) result += VoiceCallSpeechSegment(tail, length)
+    if (includeUnfinishedTail) {
+        val tail = if (start < length) substring(start).trim() else ""
+        if (tail.isNotBlank()) result += VoiceCallSpeechSegment(tail, length)
+    }
     return result
 }
 

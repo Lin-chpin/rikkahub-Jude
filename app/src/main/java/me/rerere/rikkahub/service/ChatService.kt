@@ -107,8 +107,12 @@ import me.rerere.rikkahub.data.voice.selectVoiceCallAudioTaggingSegmentIndexes
 import me.rerere.rikkahub.data.voice.parseVoiceCallAudioTagResponse
 import me.rerere.rikkahub.data.voice.voiceCallAudioTagFormatOrNull
 import me.rerere.rikkahub.data.voice.VoiceCallAudioTagAssignment
+import me.rerere.rikkahub.data.voice.VoiceCallAudioTagMode
+import me.rerere.rikkahub.data.voice.forVoiceCallProvider
 import me.rerere.rikkahub.data.voice.VoiceCallTagSelectionSource
 import me.rerere.rikkahub.data.voice.withSelectedVoiceCallAudioTagAssignments
+import me.rerere.rikkahub.data.voice.voiceCallAudioTagAssignmentsOrEmpty
+import me.rerere.rikkahub.data.voice.withIncrementalVoiceCallAudioTagAssignments
 import me.rerere.rikkahub.data.voice.withoutVoiceCallAudioTagsForNormalContext
 import me.rerere.rikkahub.data.voice.sanitizeVoiceCallTextForTranslation
 import me.rerere.rikkahub.data.model.AssistantAffectScope
@@ -143,14 +147,13 @@ import kotlin.uuid.Uuid
 private const val TAG = "ChatService"
 private const val MIN_COMPRESSION_CHUNK_TOKENS = 8000
 private const val COMPRESSION_CHUNK_TOKENS_PER_TARGET_TOKEN = 8
-private const val VOICE_CALL_SYSTEM_PROMPT = """
+private const val VOICE_CALL_SYSTEM_PROMPT_COMMON = """
 你正在语音通话模式中回复用户。
 不要再次发起、邀请、请求或切换到另一通语音通话，也不要调用打电话工具。
 如果用户的表达暗示想打电话，只需在当前通话中继续回应，不要把它当成新的拨号请求。
 请像真实电话聊天一样自然、简短、连贯地说话。
 每一句都尽量短，适合一句一句朗读。
 每一句都必须用句号、问号或感叹号结束。
-不要输出任何音频标签、情绪标签或声音指示（例如 [laughs]、[pause] 这类内容），只输出会被朗读的纯文本。
 只回答当前最需要回应的内容，通常使用一个短段落；内容已经完整时立即结束，不要为了凑长度继续展开。
 不使用 Markdown 表格，不写长列表。
 如果需要解释复杂问题，分成几个容易朗读的小块。
@@ -162,16 +165,13 @@ private const val VOICE_CALL_SYSTEM_PROMPT = """
 
 private val VOICE_CALL_ACTIVE_TOOL_STATUS = """
     Voice-call state: ACTIVE. The call is connected.
-    Never output any audio tags, emotion labels, or sound directions of any kind. Do not write
-    [laughs], (laughs), [pause], [sighs], or similar markers, and never describe the performance
-    inside brackets or parentheses. Reply with plain spoken text only; tags are added automatically
-    by a separate process.
+    Follow the current voice-call system instructions for audio-tag output. Do not invent a second
+    tag policy in this tool result.
 """.trimIndent()
 
 private val VOICE_CALL_ENDED_TOOL_STATUS = """
     Voice-call state: ENDED. The call has been disconnected.
-    Never output audio or emotion tags in any reply, inside or outside a call; tags are added
-    automatically by a separate process.
+    The call-specific audio-tag policy no longer applies after hangup.
 """.trimIndent()
 
 private const val PROACTIVE_VOICE_CALL_SYSTEM_PROMPT = """
@@ -837,6 +837,14 @@ class ChatService(
             checkInvalidMessages(conversationId)
             val conversation = getConversationFlow(conversationId).value
             val voiceCallRuntimeContext = buildVoiceCallRuntimeContext(voiceCallRuntimeState)
+            val voiceCallAudioTagFormat = settings.getSelectedTTSProvider()
+                ?.voiceCallAudioTagFormatOrNull()
+                ?.takeIf {
+                    allowVoiceCallAudioTags && requestMode == ChatRequestMode.VoiceCall
+                }
+            val voiceCallAudioTagMode = settings.voiceCallAudioTagMode.forVoiceCallProvider(
+                settings.getSelectedTTSProvider(),
+            )
 
             // start generating
             val session = getOrCreateSession(conversationId)
@@ -845,6 +853,9 @@ class ChatService(
                     ChatRequestMode.Normal ->
                         messages.map(UIMessage::withoutVoiceCallAudioTagsForNormalContext)
 
+                    // Voice-call directions are injected through extraSystemPrompt below.
+                    // Keep persisted/UI messages untouched so temporary protocol text
+                    // can never leak into the user's bubble.
                     ChatRequestMode.VoiceCall -> messages
                 }
             }
@@ -860,11 +871,6 @@ class ChatService(
                     it == LocalToolOption.VoiceCall
             }
             val voiceCallConfigured = settings.getSelectedTTSProvider() != null
-            val voiceCallAudioTagFormat = settings.getSelectedTTSProvider()
-                ?.voiceCallAudioTagFormatOrNull()
-                ?.takeIf {
-                    allowVoiceCallAudioTags && requestMode == ChatRequestMode.VoiceCall
-                }
             val proactiveVoiceCallEnabled = voiceCallToolEnabled
             val momentScopeId = conversation.momentScopeId(assistant)
             val anonymousQuestionScopeId = conversation.personaScopeId(assistant)
@@ -898,7 +904,10 @@ class ChatService(
                 extraSystemPrompt = listOfNotNull(
                     when (requestMode) {
                         ChatRequestMode.Normal -> null
-                        ChatRequestMode.VoiceCall -> VOICE_CALL_SYSTEM_PROMPT.trimIndent()
+                        ChatRequestMode.VoiceCall -> listOf(
+                            VOICE_CALL_SYSTEM_PROMPT_COMMON.trimIndent(),
+                            buildVoiceCallAudioTagPrompt(voiceCallAudioTagMode, voiceCallAudioTagFormat),
+                        ).joinToString("\n\n")
                     },
                     PROACTIVE_VOICE_CALL_SYSTEM_PROMPT.trimIndent().takeIf { proactiveVoiceCallEnabled },
                     momentContextPrompt,
@@ -969,59 +978,176 @@ class ChatService(
                 },
             )
             var latestPrimaryMessages: List<UIMessage>? = null
-            generationFlow.onCompletion {
-                // 取消 Live Update 通知
-                cancelLiveUpdateNotification(conversationId)
+            val incrementalVoiceCallTagging =
+                requestMode == ChatRequestMode.VoiceCall &&
+                    voiceCallAudioTagMode == VoiceCallAudioTagMode.SECOND_PASS &&
+                    voiceCallAudioTagFormat != null
+            val tagAssignmentsByMessageId = mutableMapOf<kotlin.uuid.Uuid, MutableMap<Int, VoiceCallAudioTagAssignment?>>()
+            val nextTagIndexByMessageId = mutableMapOf<kotlin.uuid.Uuid, Int>()
+            val tagProjectionLock = Any()
 
-                // 可能被取消了，或者意外结束，兜底更新
-                val updatedConversation = getConversationFlow(conversationId).value.copy(
-                    messageNodes = getConversationFlow(conversationId).value.messageNodes.map { node ->
-                        node.copy(messages = node.messages.map { it.finishReasoning() })
-                    },
-                    updateAt = Instant.now()
-                )
-                updateConversation(conversationId, updatedConversation)
-
-                // Show notification if app is not in foreground
-                if (!isForeground.value && settings.displaySetting.enableNotificationOnMessageGeneration) {
-                    sendGenerationDoneNotification(conversationId, senderName)
-                }
-            }.collect { chunk ->
-                when (chunk) {
-                    is GenerationChunk.Messages -> {
-                        val chunkMessages = chunk.messages
-                        latestPrimaryMessages = chunkMessages
-                        val updatedConversation = getConversationFlow(conversationId).value
-                            .updateCurrentMessages(chunkMessages)
-                        updateConversation(conversationId, updatedConversation)
-
-                        if (!voiceCallFailureReported && requestMode == ChatRequestMode.Normal && chunkMessages.any { message ->
-                                message.parts.any { part ->
-                                    part is UIMessagePart.Tool &&
-                                        part.toolName == REQUEST_VOICE_CALL_TOOL_NAME &&
-                                        part.output.any { output ->
-                                            output is UIMessagePart.Text &&
-                                                output.text.contains(VOICE_CALL_UNAVAILABLE_MESSAGE)
-                                        }
+            coroutineScope {
+                val tagJobs = mutableListOf<Job>()
+                fun enqueueVoiceCallTagging(messages: List<UIMessage>, includeUnfinishedTail: Boolean) {
+                    if (!incrementalVoiceCallTagging) return
+                    val primaryReply = messages.lastOrNull { it.role == MessageRole.ASSISTANT && it.toText().isNotBlank() }
+                        ?: return
+                    val segments = splitVoiceCallAudioTaggingSegments(primaryReply.toText().trim())
+                    val lastEligibleIndex = if (includeUnfinishedTail) {
+                        segments.lastIndex
+                    } else {
+                        segments.indexOfLast { segment ->
+                            segment.lastOrNull() in setOf('。', '.', '！', '!', '？', '?', '；', ';', '\n')
+                        }
+                    }
+                    if (lastEligibleIndex < 0) return
+                    val nextIndex = synchronized(tagProjectionLock) {
+                        nextTagIndexByMessageId[primaryReply.id] ?: 0
+                    }
+                    if (nextIndex > lastEligibleIndex) return
+                    for (index in nextIndex..lastEligibleIndex) {
+                        val sentence = segments.getOrNull(index) ?: continue
+                        synchronized(tagProjectionLock) {
+                            nextTagIndexByMessageId[primaryReply.id] = index + 1
+                        }
+                        tagJobs += launch {
+                            val assignmentResult = try {
+                                Result.success(
+                                    tagVoiceCallSentence(
+                                        settings = settings,
+                                        model = model,
+                                        assistant = assistant,
+                                        processingStatus = session.processingStatus,
+                                        primaryReply = primaryReply,
+                                        sentence = sentence,
+                                        format = voiceCallAudioTagFormat!!,
+                                    )
+                                )
+                            } catch (error: CancellationException) {
+                                throw error
+                            } catch (error: Exception) {
+                                Result.failure(error)
+                            }
+                            if (assignmentResult.isFailure) {
+                                Logging.log(TAG, "sentence voice-call tagging failed; using no-tag fallback: ${assignmentResult.exceptionOrNull()}")
+                            }
+                            synchronized(tagProjectionLock) {
+                                tagAssignmentsByMessageId
+                                    .getOrPut(primaryReply.id) { mutableMapOf() }[index] = assignmentResult.getOrNull()
+                                val currentConversation = getConversationFlow(conversationId).value
+                                val currentReply = currentConversation.currentMessages
+                                    .firstOrNull { it.id == primaryReply.id }
+                                if (currentReply != null) {
+                                    val projectedReply = currentReply.withIncrementalVoiceCallAudioTagAssignments(
+                                        assignments = tagAssignmentsByMessageId.getValue(primaryReply.id),
+                                        format = voiceCallAudioTagFormat,
+                                    )
+                                    updateConversation(
+                                        conversationId,
+                                        currentConversation.updateCurrentMessages(listOf(projectedReply)),
+                                    )
                                 }
-                            }) {
-                            voiceCallFailureReported = true
-                            addError(
-                                IllegalStateException(VOICE_CALL_UNAVAILABLE_MESSAGE),
-                                conversationId,
-                                title = context.getString(R.string.error_title_voice_call),
-                            )
+                            }
                         }
+                    }
+                }
 
-                        // 如果应用不在前台，发送 Live Update 通知
-                        if (!isForeground.value && settings.displaySetting.enableNotificationOnMessageGeneration && settings.displaySetting.enableLiveUpdateNotification) {
-                            sendLiveUpdateNotification(conversationId, chunkMessages, senderName)
+                generationFlow.onCompletion {
+                    // 取消 Live Update 通知
+                    cancelLiveUpdateNotification(conversationId)
+
+                    // 可能被取消了，或者意外结束，兜底更新
+                    val updatedConversation = getConversationFlow(conversationId).value.copy(
+                        messageNodes = getConversationFlow(conversationId).value.messageNodes.map { node ->
+                            node.copy(messages = node.messages.map { it.finishReasoning() })
+                        },
+                        updateAt = Instant.now()
+                    )
+                    updateConversation(conversationId, updatedConversation)
+
+                    // Show notification if app is not in foreground
+                    if (!isForeground.value && settings.displaySetting.enableNotificationOnMessageGeneration) {
+                        sendGenerationDoneNotification(conversationId, senderName)
+                    }
+                }.collect { chunk ->
+                    when (chunk) {
+                        is GenerationChunk.Messages -> {
+                            val chunkMessages = chunk.messages
+                            latestPrimaryMessages = chunkMessages
+                            val projectedMessages = synchronized(tagProjectionLock) {
+                                if (!incrementalVoiceCallTagging) {
+                                    chunkMessages
+                                } else {
+                                    chunkMessages.map { message ->
+                                        tagAssignmentsByMessageId[message.id]?.let { assignments ->
+                                            message.withIncrementalVoiceCallAudioTagAssignments(
+                                                assignments = assignments,
+                                                format = voiceCallAudioTagFormat!!,
+                                            )
+                                        } ?: message
+                                    }
+                                }
+                            }
+                            synchronized(tagProjectionLock) {
+                                val updatedConversation = getConversationFlow(conversationId).value
+                                    .updateCurrentMessages(projectedMessages)
+                                updateConversation(conversationId, updatedConversation)
+                            }
+                            enqueueVoiceCallTagging(chunkMessages, includeUnfinishedTail = false)
+
+                            if (!voiceCallFailureReported && requestMode == ChatRequestMode.Normal && chunkMessages.any { message ->
+                                    message.parts.any { part ->
+                                        part is UIMessagePart.Tool &&
+                                            part.toolName == REQUEST_VOICE_CALL_TOOL_NAME &&
+                                            part.output.any { output ->
+                                                output is UIMessagePart.Text &&
+                                                    output.text.contains(VOICE_CALL_UNAVAILABLE_MESSAGE)
+                                            }
+                                    }
+                                }) {
+                                voiceCallFailureReported = true
+                                addError(
+                                    IllegalStateException(VOICE_CALL_UNAVAILABLE_MESSAGE),
+                                    conversationId,
+                                    title = context.getString(R.string.error_title_voice_call),
+                                )
+                            }
+
+                            // 如果应用不在前台，发送 Live Update 通知
+                            if (!isForeground.value && settings.displaySetting.enableNotificationOnMessageGeneration && settings.displaySetting.enableLiveUpdateNotification) {
+                                sendLiveUpdateNotification(conversationId, chunkMessages, senderName)
+                            }
                         }
+                    }
+                }
+
+                if (incrementalVoiceCallTagging) {
+                    enqueueVoiceCallTagging(
+                        getConversationFlow(conversationId).value.currentMessages,
+                        includeUnfinishedTail = true,
+                    )
+                }
+                tagJobs.forEach { it.join() }
+                if (incrementalVoiceCallTagging) {
+                    synchronized(tagProjectionLock) {
+                        val currentConversation = getConversationFlow(conversationId).value
+                        val projectedMessages = currentConversation.currentMessages.map { message ->
+                            tagAssignmentsByMessageId[message.id]?.let { assignments ->
+                                message.withIncrementalVoiceCallAudioTagAssignments(
+                                    assignments = assignments,
+                                    format = voiceCallAudioTagFormat!!,
+                                )
+                            } ?: message
+                        }
+                        updateConversation(
+                            conversationId,
+                            currentConversation.updateCurrentMessages(projectedMessages),
+                        )
                     }
                 }
             }
 
-            if (voiceCallAudioTagFormat != null) {
+            if (!incrementalVoiceCallTagging && voiceCallAudioTagMode == VoiceCallAudioTagMode.SECOND_PASS && voiceCallAudioTagFormat != null) {
                 val primaryMessages = latestPrimaryMessages
                     ?: getConversationFlow(conversationId).value.currentMessages
                 val taggedMessages = applySecondPassVoiceCallAudioTags(
@@ -1059,6 +1185,29 @@ class ChatService(
                 generateSuggestion(conversationId, finalConversation)
             }
         }
+    }
+
+    private suspend fun tagVoiceCallSentence(
+        settings: Settings,
+        model: Model,
+        assistant: Assistant,
+        processingStatus: MutableStateFlow<String?>,
+        primaryReply: UIMessage,
+        sentence: String,
+        format: VoiceCallAudioTagFormat,
+    ): VoiceCallAudioTagAssignment? {
+        val sentenceMessage = primaryReply.copy(
+            parts = listOf(UIMessagePart.Text(sentence)),
+        )
+        val taggedMessage = applySecondPassVoiceCallAudioTags(
+            settings = settings,
+            model = model,
+            assistant = assistant,
+            processingStatus = processingStatus,
+            primaryMessages = listOf(sentenceMessage),
+            format = format,
+        ).firstOrNull()
+        return taggedMessage?.voiceCallAudioTagAssignmentsOrEmpty()?.firstOrNull()
     }
 
     private suspend fun applySecondPassVoiceCallAudioTags(

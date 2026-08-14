@@ -23,7 +23,7 @@ class TtsSynthesizer(
     ): Flow<AudioChunk> {
         return ttsManager.generateStreamingSpeech(
             setting,
-            TTSRequest(text = chunk.text),
+            TTSRequest(text = chunk.text, emotion = chunk.emotion),
         )
     }
 
@@ -32,7 +32,7 @@ class TtsSynthesizer(
         chunk: TtsChunk
     ): TTSResponse = withContext(Dispatchers.IO) {
         collectToResponse(
-            ttsManager.generateSpeech(setting, TTSRequest(text = chunk.text))
+            ttsManager.generateSpeech(setting, TTSRequest(text = chunk.text, emotion = chunk.emotion))
         )
     }
 

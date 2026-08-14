@@ -87,11 +87,17 @@ import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.voice.VoiceCallCompletion
 import me.rerere.rikkahub.data.voice.VoiceCallAudioTagFormat
+import me.rerere.rikkahub.data.voice.VoiceCallAudioTagMode
+import me.rerere.rikkahub.data.voice.forVoiceCallProvider
+import me.rerere.rikkahub.data.voice.displayName
 import me.rerere.rikkahub.data.voice.voiceCallRecord
 import me.rerere.rikkahub.data.voice.VOICE_CALL_UNAVAILABLE_MESSAGE
 import me.rerere.rikkahub.data.voice.voiceCallAudioTagFormatOrNull
+import me.rerere.rikkahub.data.voice.hasVoiceCallAudioTagMetadata
 import me.rerere.rikkahub.data.voice.voiceCallDisplayTextOrPlainText
 import me.rerere.rikkahub.data.voice.voiceCallSpeechTextOrPlainText
+import me.rerere.rikkahub.data.voice.withOnlyKnownVoiceCallAudioTags
+import me.rerere.rikkahub.data.voice.withoutVoiceCallRealtimeEmotionMarker
 import me.rerere.rikkahub.data.voice.sanitizeVoiceCallTextForTranslation
 import me.rerere.rikkahub.service.ChatRequestMode
 import me.rerere.rikkahub.ui.components.richtext.appendVoiceCallAudioTagAwareText
@@ -152,6 +158,13 @@ fun VoiceCallOverlay(
     val ttsError by tts.error.collectAsState()
     val playbackState by tts.playbackState.collectAsState()
     val selectedTtsProvider = settings.getSelectedTTSProvider()
+    val voiceCallAudioTagFormat = selectedTtsProvider?.voiceCallAudioTagFormatOrNull()
+    val voiceCallAudioTagMode = settings.voiceCallAudioTagMode.forVoiceCallProvider(selectedTtsProvider)
+    val showVoiceCallTags = !isHistory &&
+        voiceCallAudioTagMode != VoiceCallAudioTagMode.DISABLED &&
+        voiceCallAudioTagFormat != null
+    val showRealtimeVoiceCallTags = voiceCallAudioTagMode == VoiceCallAudioTagMode.REALTIME_MODEL &&
+        voiceCallAudioTagFormat != null
     // 整段合成只保留给 ElevenLabs v3；MiniMax 全部模型一律按句切片、逐句合成并逐句播放。
     val useWholeReplyTts = selectedTtsProvider is TTSProviderSetting.ElevenLabs &&
         selectedTtsProvider.voiceCallAudioTagFormatOrNull() == VoiceCallAudioTagFormat.ELEVEN_LABS_V3
@@ -237,8 +250,41 @@ fun VoiceCallOverlay(
             loadingJob != null || it.toText().isNotBlank()
         }
     val currentAssistantId = currentAssistantMessage?.id?.toString()
-    val currentAssistantText = currentAssistantMessage?.voiceCallDisplayTextOrPlainText().orEmpty()
-    val currentAssistantSpeechText = currentAssistantMessage?.voiceCallSpeechTextOrPlainText().orEmpty()
+    val currentAssistantRawText = currentAssistantMessage?.toText().orEmpty()
+    val currentAssistantText = if (showRealtimeVoiceCallTags) {
+        currentAssistantRawText.withoutVoiceCallRealtimeEmotionMarker()
+    } else {
+        currentAssistantMessage?.voiceCallDisplayTextOrPlainText()
+            ?.withoutVoiceCallRealtimeEmotionMarker()
+            .orEmpty()
+    }
+    val currentAssistantSpeechText = if (showRealtimeVoiceCallTags) {
+        when (voiceCallAudioTagFormat) {
+            VoiceCallAudioTagFormat.ELEVEN_LABS_V3 -> currentAssistantRawText
+                .withOnlyKnownVoiceCallAudioTags()
+                .withoutVoiceCallRealtimeEmotionMarker()
+            VoiceCallAudioTagFormat.MINIMAX_SPEECH_2_8 -> currentAssistantRawText
+                .withoutVoiceCallRealtimeEmotionMarker()
+            null -> currentAssistantRawText
+        }
+    } else if (showVoiceCallTags) {
+        currentAssistantMessage?.let { message ->
+            if (message.hasVoiceCallAudioTagMetadata()) {
+                message.voiceCallSpeechTextOrPlainText()
+            } else if (loadingJob == null) {
+                currentAssistantRawText
+            } else {
+                ""
+            }
+        }.orEmpty()
+    } else {
+        currentAssistantMessage?.voiceCallSpeechTextOrPlainText()
+            ?.withoutVoiceCallRealtimeEmotionMarker()
+            .orEmpty()
+    }
+    // MiniMax is intentionally disabled for the voice-call marker protocol;
+    // no overall emotion parameter is sent to TTS.
+    val currentAssistantEmotion: String? = null
     val pendingUserInputText = keyboardInput.trim()
     val pendingBubbleText = pendingUserInputText.ifBlank { submittedKeyboardInput }
     LaunchedEffect(visibleMessages.size, currentAssistantText, pendingBubbleText) {
@@ -520,6 +566,7 @@ fun VoiceCallOverlay(
         currentAssistantId = currentAssistantId,
         currentAssistantDisplayText = currentAssistantText,
         currentAssistantSpeechText = currentAssistantSpeechText,
+        currentAssistantEmotion = currentAssistantEmotion,
         loadingJob = loadingJob,
         useWholeReplyTts = useWholeReplyTts,
         tts = tts,
@@ -668,6 +715,15 @@ fun VoiceCallOverlay(
                                 textAlign = TextAlign.Center,
                             )
 
+                            if (!isHistory) {
+                                Text(
+                                    text = "情绪标签：${voiceCallAudioTagMode.displayName}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textAlign = TextAlign.Center,
+                                )
+                            }
+
                             Spacer(Modifier.height(8.dp))
 
                             Text(
@@ -712,6 +768,7 @@ fun VoiceCallOverlay(
                                 voiceReplyPending = speechPlayback.replyPending,
                                 visibleTextLength = speechPlayback.visibleTextLength,
                                 visibleTextOverride = speechPlayback.visibleTextOverride(message.id.toString()),
+                                showAudioTags = showVoiceCallTags,
                             )
                             displayItems.forEachIndexed { index, item ->
                                 val bubbleKey = item.translationKey(index)
@@ -954,8 +1011,11 @@ private fun VoiceCallMessageBubble(
 ) {
     val tts = LocalTTSState.current
     val isUser = role == MessageRole.USER
+    val selectedTtsProvider = LocalSettings.current.getSelectedTTSProvider()
     val showVoiceCallAudioTagAnnotations =
-        LocalSettings.current.getSelectedTTSProvider()?.voiceCallAudioTagFormatOrNull() != null
+        LocalSettings.current.voiceCallAudioTagMode
+            .forVoiceCallProvider(selectedTtsProvider) != VoiceCallAudioTagMode.DISABLED &&
+            selectedTtsProvider?.voiceCallAudioTagFormatOrNull() != null
     val colorScheme = MaterialTheme.colorScheme
     Row(
         modifier = Modifier.fillMaxWidth(),

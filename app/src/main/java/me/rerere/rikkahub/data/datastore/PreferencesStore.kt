@@ -41,6 +41,7 @@ import me.rerere.rikkahub.data.model.PromptInjection
 import me.rerere.rikkahub.data.model.QuickMessage
 import me.rerere.rikkahub.data.model.Tag
 import me.rerere.rikkahub.data.sync.s3.S3Config
+import me.rerere.rikkahub.data.voice.VoiceCallAudioTagMode
 import me.rerere.rikkahub.ui.theme.CustomTheme
 import me.rerere.rikkahub.ui.theme.PresetThemes
 import me.rerere.rikkahub.utils.JsonInstant
@@ -545,6 +546,7 @@ data class Settings(
     val compressPrompt: String = DEFAULT_COMPRESS_PROMPT,
     val voiceCallAudioTagConfig: VoiceCallAudioTagConfig = VoiceCallAudioTagConfig(),
     val voiceCallAudioTagModelId: Uuid? = null,
+    val voiceCallAudioTagMode: VoiceCallAudioTagMode = VoiceCallAudioTagMode.SECOND_PASS,
     val compressOpenAIConfig: CompressOpenAIConfig = CompressOpenAIConfig(),
     val assistantId: Uuid = DEFAULT_ASSISTANT_ID,
     val providers: List<ProviderSetting> = DEFAULT_PROVIDERS,

@@ -35,6 +35,7 @@ internal fun UIMessage.voiceCallDisplayItems(
     voiceReplyPending: Boolean,
     visibleTextLength: Int,
     visibleTextOverride: Int?,
+    showAudioTags: Boolean = false,
 ): List<VoiceCallDisplayItem> {
     val audioSegments = audioSegmentsOverride.ifEmpty {
         annotations.filterIsInstance<UIMessageAnnotation.VoiceCallRecord>()
@@ -82,16 +83,24 @@ private fun String.splitVoiceCallDisplayItems(
     // Call-only tag metadata is removed after hang-up, but cached audio keeps
     // the exact TTS text. Match without the tag before positional fallback.
     return displaySegments.mapIndexed { displayIndex, segment ->
-        val audioSegmentIndex = audioSegments.indices.firstOrNull { audioIndex ->
-            audioIndex !in usedAudioSegmentIndexes &&
-                audioSegments[audioIndex].text.matchesVoiceCallDisplayText(segment.text)
-        } ?: when {
-            displayIndex == 0 && audioSegments.size == 1 -> 0
+        // v3 is synthesized as one whole-reply file. Keep that cached file
+        // attached to every visible bubble so each bubble retains a replay
+        // button instead of losing the button after sentence splitting.
+        val audioSegmentIndex = if (audioSegments.size == 1) {
+            0
+        } else {
+            audioSegments.indices.firstOrNull { audioIndex ->
+                audioIndex !in usedAudioSegmentIndexes &&
+                    audioSegments[audioIndex].text.matchesVoiceCallDisplayText(segment.text)
+            } ?: when {
             audioSegments.size == displaySegments.size && displayIndex !in usedAudioSegmentIndexes -> displayIndex
             else -> null
+            }
         }
         val audioSegment = audioSegmentIndex?.let { index ->
-            usedAudioSegmentIndexes += index
+            if (audioSegments.size != 1) {
+                usedAudioSegmentIndexes += index
+            }
             audioSegments[index]
         }
         segment.text.toVoiceCallDisplayItem(asVoice, audioSegment)

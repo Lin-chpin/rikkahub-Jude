@@ -85,6 +85,12 @@
 - Backups should include local image files as well as existing uploaded files, fonts, and skills.
 - Usage reminder messages are stored in settings config and can be imported from JSON; the old bundled asset JSON was removed.
 
+## Feature Change Boundaries
+
+- Keep feature logic decoupled by responsibility. Do not repeatedly append state machines, prompt construction, parsing, queue management, TTS orchestration, and UI projection into one existing file such as `ChatService.kt` or a call-screen composable.
+- When a feature has more than one independent concern, place them in focused, domain-named files and keep the higher-level file responsible only for orchestration. In particular, voice-call prompt contracts, tag/emotion parsing, second-pass tagging, speech queue state, and call-screen presentation must remain separately maintainable.
+- Before extending a recently changed feature, inspect its current helper boundaries and extract the next responsibility into a focused file instead of adding another branch to the largest file. Verify each boundary with a compile/build before packaging.
+
 ## Build Output Caution
 
 Normal `.\gradlew :app:assembleDebug` builds all configured debug split APK outputs, including universal and x86_64 variants. Use `scripts\build-universal-debug-apk.ps1` for the default package/update request because it refreshes the stable universal APK and creates a timestamped copy:

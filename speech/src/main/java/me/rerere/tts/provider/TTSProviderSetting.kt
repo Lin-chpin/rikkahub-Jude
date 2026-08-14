@@ -272,6 +272,10 @@ fun TTSProviderSetting.MiniMax.isSpeech26Model(): Boolean {
     return model.trim().lowercase() in TTSProviderSetting.MiniMax.SPEECH_2_6_MODELS
 }
 
+fun TTSProviderSetting.MiniMax.isSpeech28Model(): Boolean {
+    return model.trim().lowercase() in setOf("speech-2.8-hd", "speech-2.8-turbo")
+}
+
 fun TTSProviderSetting.isElevenLabsV3(): Boolean {
     if (this !is TTSProviderSetting.ElevenLabs) return false
     return model.trim().equals("eleven_v3", ignoreCase = true) ||

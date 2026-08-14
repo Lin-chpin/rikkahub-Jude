@@ -103,6 +103,7 @@ interface CustomTtsState {
         chunked: Boolean = true,
         onAudioReady: (suspend (TTSResponse) -> Unit)? = null,
         onAudioReadyWithChunk: (suspend (String, Int, Int, TTSResponse) -> Unit)? = null,
+        emotion: String? = null,
     )
 
     /** Stops the current speech and clears the queue. */
@@ -162,6 +163,7 @@ private class CustomTtsStateImpl(
         chunked: Boolean,
         onAudioReady: (suspend (TTSResponse) -> Unit)?,
         onAudioReadyWithChunk: (suspend (String, Int, Int, TTSResponse) -> Unit)?,
+        emotion: String?,
     ) {
         val settings = settingsStore.settingsFlow.value
         val processed = text.stripMarkdown().let {
@@ -172,15 +174,16 @@ private class CustomTtsStateImpl(
             }
         }
         controller.speak(
-            processed,
-            flushCalled,
-            chunked,
-            onAudioReady,
-            onAudioReadyWithChunk?.let { callback ->
+            text = processed,
+            flush = flushCalled,
+            chunked = chunked,
+            onAudioReady = onAudioReady,
+            onAudioReadyWithChunk = onAudioReadyWithChunk?.let { callback ->
                 { chunk, chunkIndex, totalChunks, response ->
                     callback(chunk.text, chunkIndex, totalChunks, response)
                 }
             },
+            emotion = emotion,
         )
     }
 

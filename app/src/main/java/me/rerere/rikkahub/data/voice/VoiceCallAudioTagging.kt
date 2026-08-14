@@ -8,6 +8,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
@@ -368,6 +369,79 @@ internal fun UIMessage.withSelectedVoiceCallAudioTagAssignments(
 
 internal fun UIMessage.voiceCallSpeechTextOrPlainText(): String {
     return voiceCallMetadataText(SPEECH_TEXT_KEY) ?: toText()
+}
+
+internal fun UIMessage.hasVoiceCallAudioTagMetadata(): Boolean {
+    return parts.any { part ->
+        part is UIMessagePart.Text && part.metadata?.containsKey(VOICE_CALL_METADATA_KEY) == true
+    }
+}
+
+internal fun UIMessage.voiceCallAudioTagAssignmentsOrEmpty(): List<VoiceCallAudioTagAssignment?> {
+    val segments = parts.filterIsInstance<UIMessagePart.Text>()
+        .firstNotNullOfOrNull { part ->
+            part.metadata
+                ?.get(VOICE_CALL_METADATA_KEY)
+                ?.let { metadata -> runCatching { metadata.jsonObject }.getOrNull() }
+                ?.get(SEGMENTS_KEY)
+                ?.let { segments -> runCatching { segments.jsonArray }.getOrNull() }
+        }
+        ?: return emptyList()
+    return segments.map { segment ->
+        segment.jsonObject[TAG_ID_KEY]
+            ?.jsonPrimitive
+            ?.contentOrNull
+            ?.let { tagId -> VoiceCallAudioTagAssignment(tagId = tagId) }
+    }
+}
+
+/** Applies only the assignments already returned by the tagger. */
+internal fun UIMessage.withIncrementalVoiceCallAudioTagAssignments(
+    assignments: Map<Int, VoiceCallAudioTagAssignment?>,
+    format: VoiceCallAudioTagFormat,
+): UIMessage {
+    if (assignments.isEmpty()) return this
+    val originalText = parts.filterIsInstance<UIMessagePart.Text>()
+        .joinToString("\n") { it.text }
+        .trim()
+    if (originalText.isBlank()) return this
+
+    val originalSegments = splitVoiceCallAudioTaggingSegments(originalText)
+    val parsedSegments = originalSegments.mapIndexed { index, text ->
+        val assignment = assignments[index]
+        ParsedVoiceCallSegment(
+            tag = assignment?.tagId?.let(VoiceCallAudioTag::fromId),
+            text = text,
+            selectionSource = VoiceCallTagSelectionSource.STRUCTURED,
+            replacementText = assignment?.replacementText,
+        )
+    }
+    val displayProjection = buildParsedVoiceCallResponse(parsedSegments, format)
+    val contiguousSpeechSegments = buildList {
+        for (index in originalSegments.indices) {
+            if (index !in assignments) break
+            add(parsedSegments[index])
+        }
+    }
+    val speechProjection = buildParsedVoiceCallResponse(contiguousSpeechSegments, format)
+    val acceptedProjection = displayProjection.copy(speechText = speechProjection.speechText)
+
+    var taggedTextPart = false
+    return copy(
+        parts = parts.map { part ->
+            if (part is UIMessagePart.Text && !taggedTextPart) {
+                taggedTextPart = true
+                part.copy(
+                    text = originalText,
+                    metadata = part.metadata.withVoiceCallSpeechMetadata(acceptedProjection, format),
+                )
+            } else if (part is UIMessagePart.Text) {
+                part.copy(text = "")
+            } else {
+                part
+            }
+        }
+    )
 }
 
 internal fun UIMessage.voiceCallDisplayTextOrPlainText(): String {

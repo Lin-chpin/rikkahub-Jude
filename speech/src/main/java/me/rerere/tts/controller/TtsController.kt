@@ -120,6 +120,7 @@ class TtsController(
         chunked: Boolean = true,
         onAudioReady: (suspend (TTSResponse) -> Unit)? = null,
         onAudioReadyWithChunk: (suspend (TtsChunk, Int, Int, TTSResponse) -> Unit)? = null,
+        emotion: String? = null,
     ) {
         if (text.isBlank()) return
         val provider = currentProvider
@@ -129,9 +130,9 @@ class TtsController(
         }
 
         val newChunks = if (chunked) {
-            chunker.split(text)
+            chunker.split(text).map { chunk -> chunk.copy(emotion = emotion) }
         } else {
-            listOf(TtsChunk(text = text.trim(), index = 0))
+            listOf(TtsChunk(text = text.trim(), index = 0, emotion = emotion))
         }
         if (newChunks.isEmpty()) return
 

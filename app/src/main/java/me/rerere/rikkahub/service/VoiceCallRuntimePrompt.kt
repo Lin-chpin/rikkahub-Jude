@@ -3,6 +3,9 @@ package me.rerere.rikkahub.service
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.rikkahub.data.voice.VoiceCallAudioTagFormat
+import me.rerere.rikkahub.data.voice.VoiceCallAudioTagMode
+import me.rerere.rikkahub.data.ai.prompts.buildVoiceCallRealtimeAudioTagPrompt
 
 private const val ACTIVE_VOICE_CALL_REPLY_CHARACTER_LIMIT = 200
 
@@ -15,6 +18,29 @@ internal enum class VoiceCallRuntimeState {
 internal data class VoiceCallRuntimeContext(
     val systemPrompt: String,
 )
+
+internal fun buildVoiceCallAudioTagPrompt(
+    mode: VoiceCallAudioTagMode,
+    format: VoiceCallAudioTagFormat?,
+): String = when {
+    mode == VoiceCallAudioTagMode.REALTIME_MODEL && format != null ->
+        buildVoiceCallRealtimeAudioTagPrompt(format)
+
+    else -> """
+        [VOICE_CALL_AUDIO_TAG_MODE]
+        mode=${mode.name}
+        Do not output audio tags, emotion labels, sound directions, protocol markers, or JSON. Reply with spoken text only.
+    """.trimIndent()
+}
+
+internal fun buildVoiceCallToolTagStatus(
+    mode: VoiceCallAudioTagMode,
+    format: VoiceCallAudioTagFormat?,
+): String = """
+    Voice-call state: ACTIVE. The call is connected.
+    Follow the current voice-call audio-tag mode exactly: ${mode.name}.
+    ${buildVoiceCallAudioTagPrompt(mode, format)}
+""".trimIndent()
 
 internal fun ChatRequestMode.defaultVoiceCallRuntimeState(): VoiceCallRuntimeState =
     when (this) {

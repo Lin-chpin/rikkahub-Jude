@@ -16,6 +16,7 @@ import me.rerere.tts.model.TTSRequest
 import me.rerere.tts.provider.TTSProvider
 import me.rerere.tts.provider.TTSProviderSetting
 import me.rerere.tts.provider.isSpeech26Model
+import me.rerere.tts.provider.isSpeech28Model
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -79,9 +80,12 @@ class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
             put("voice_setting", buildJsonObject {
                 put("voice_id", voiceId)
                 put("speed", providerSetting.speed)
-                providerSetting.emotion
+                (request.emotion ?: providerSetting.emotion)
                     ?.trim()
-                    ?.takeIf { it.isNotEmpty() && providerSetting.isSpeech26Model() }
+                    ?.takeIf {
+                        it.isNotEmpty() &&
+                            (providerSetting.isSpeech26Model() || providerSetting.isSpeech28Model())
+                    }
                     ?.let { put("emotion", it) }
             })
         }

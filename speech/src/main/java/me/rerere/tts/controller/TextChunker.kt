@@ -40,6 +40,7 @@ class TextChunker(
 data class TtsChunk(
     val id: java.util.UUID = java.util.UUID.randomUUID(),
     val index: Int,
-    val text: String
+    val text: String,
+    val emotion: String? = null,
 )
 

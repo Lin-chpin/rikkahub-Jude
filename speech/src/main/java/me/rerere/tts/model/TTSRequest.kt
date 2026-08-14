@@ -4,7 +4,8 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class TTSRequest(
-    val text: String
+    val text: String,
+    val emotion: String? = null,
 )
 
 @Serializable
