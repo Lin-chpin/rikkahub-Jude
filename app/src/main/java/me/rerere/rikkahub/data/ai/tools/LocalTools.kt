@@ -27,6 +27,7 @@ import me.rerere.rikkahub.data.event.AppEventBus
 import me.rerere.rikkahub.data.repository.MomentRepository
 import me.rerere.rikkahub.data.repository.AnonymousQuestionRepository
 import me.rerere.rikkahub.data.voice.VOICE_CALL_UNAVAILABLE_MESSAGE
+import me.rerere.rikkahub.local.LocalBuildIntegration
 import me.rerere.rikkahub.service.UsageReminderService
 import me.rerere.rikkahub.utils.readClipboardText
 import me.rerere.rikkahub.utils.writeClipboardText
@@ -952,6 +953,8 @@ class LocalTools(
         voiceCallConfigured: Boolean = false,
         momentAssistantId: Uuid? = null,
         anonymousQuestionScopeId: Uuid? = null,
+        includeBuildTools: Boolean = false,
+        buildToolAssistantId: Uuid? = null,
     ): List<Tool> {
         val tools = mutableListOf<Tool>()
         if (options.contains(LocalToolOption.JavascriptEngine)) {
@@ -988,6 +991,9 @@ class LocalTools(
         if (anonymousQuestionScopeId != null) {
             tools.add(postAnonymousQuestionTool(anonymousQuestionScopeId))
             tools.add(deleteAnonymousQuestionTool(anonymousQuestionScopeId))
+        }
+        if (includeBuildTools) {
+            tools.addAll(LocalBuildIntegration.additionalTools(context, buildToolAssistantId))
         }
         return tools
     }

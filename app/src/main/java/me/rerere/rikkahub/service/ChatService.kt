@@ -121,7 +121,6 @@ import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.data.model.momentScopeId
 import me.rerere.rikkahub.data.model.messagesForGeneration
 import me.rerere.rikkahub.data.model.personaScopeId
-import me.rerere.rikkahub.data.model.memoryScope
 import me.rerere.rikkahub.data.model.MemoryScope
 import me.rerere.rikkahub.data.model.replaceRegexes
 import me.rerere.rikkahub.data.model.toMessageNode
@@ -918,16 +917,8 @@ class ChatService(
                     additionalSystemPrompt,
                 ).joinToString("\n\n").takeIf { it.isNotBlank() },
                 memories = buildList {
-                    // 管理记忆属于助手本身，所有会话都应读取；Conversation 只增加当前会话的记忆。
-                    addAll(memoryRepository.getMemories(assistant.memoryScope))
-                    if (assistant.useConversationMemory) {
-                        val managedMemoryIds = map { it.id }.toSet()
-                        addAll(
-                            memoryRepository
-                                .getMemories(MemoryScope.conversation(conversation.id))
-                                .filterNot { it.id in managedMemoryIds }
-                        )
-                    }
+                    // 本地记忆工具记录统一属于助手，所有会话都读取同一份记忆。
+                    addAll(memoryRepository.getMemories(MemoryScope.assistant(assistant.id)))
                 },
                 inputTransformers = buildList {
                     addAll(inputTransformers)
@@ -951,6 +942,8 @@ class ChatService(
                                 requestMode == ChatRequestMode.Normal && assistant.anonymousQuestionBoxEnabled -> anonymousQuestionScopeId
                                 else -> null
                             },
+                            includeBuildTools = requestMode == ChatRequestMode.Normal,
+                            buildToolAssistantId = assistant.id,
                         )
                     )
                     if (assistant.enabledSkills.isNotEmpty()) {

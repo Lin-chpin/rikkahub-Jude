@@ -17,13 +17,30 @@ import me.rerere.common.http.await
 import me.rerere.rikkahub.BuildConfig
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
+import java.io.IOException
 import java.util.Locale
 
-private const val API_URL = "https://api.github.com/repos/innna327-source/rikkahub-Jude/releases/latest"
+private const val API_URL = "https://api.github.com/repos/Lin-chpin/rikkahub-Jude/releases/latest"
+const val UPDATE_RELEASES_URL = "https://github.com/Lin-chpin/rikkahub-Jude/releases"
 private val UPDATE_ASSET_NAMES = listOf(
     "app-universal-debug.apk",
     "app-arm64-v8a-debug.apk",
 )
+
+enum class UpdateFailureReason {
+    RateLimited,
+    Network,
+    SourceUnavailable,
+    ServiceUnavailable,
+    Unknown,
+}
+
+class UpdateCheckException(
+    val reason: UpdateFailureReason,
+    val statusCode: Int? = null,
+    cause: Throwable? = null,
+) : Exception(null, cause)
 
 class UpdateChecker(private val client: OkHttpClient) {
     private val json = Json { ignoreUnknownKeys = true }
@@ -43,13 +60,25 @@ class UpdateChecker(private val client: OkHttpClient) {
                             )
                             .build()
                     ).await()
-                    if (response.isSuccessful) {
-                        json.decodeFromString<GithubRelease>(response.body.string()).toUpdateInfo()
-                    } else {
-                        throw Exception("Failed to fetch update info")
+                    response.use {
+                        if (!it.isSuccessful) {
+                            throw it.toUpdateCheckException()
+                        }
+                        runCatching {
+                            json.decodeFromString<GithubRelease>(it.body.string()).toUpdateInfo()
+                        }.getOrElse { cause ->
+                            throw UpdateCheckException(
+                                reason = UpdateFailureReason.SourceUnavailable,
+                                cause = cause,
+                            )
+                        }
                     }
+                } catch (e: UpdateCheckException) {
+                    throw e
+                } catch (e: IOException) {
+                    throw UpdateCheckException(UpdateFailureReason.Network, cause = e)
                 } catch (e: Exception) {
-                    throw Exception("Failed to fetch update info", e)
+                    throw UpdateCheckException(UpdateFailureReason.Unknown, cause = e)
                 }
             )
         )
@@ -78,8 +107,20 @@ class UpdateChecker(private val client: OkHttpClient) {
             // 你可以保存返回的downloadId到本地，以便后续查询下载进度或状态
         }.onFailure {
             Toast.makeText(context, "Failed to update", Toast.LENGTH_SHORT).show()
-            context.openUrl(download.url) // 跳转到下载页面
+            context.openUrl(UPDATE_RELEASES_URL) // 下载失败时打开 Release 页面兜底
         }
+    }
+}
+
+private fun Response.toUpdateCheckException(): UpdateCheckException {
+    val responseBody = body.string()
+    val rateLimitRemaining = header("X-RateLimit-Remaining")
+    val isRateLimited = code == 429 ||
+        (code == 403 && (rateLimitRemaining == "0" || responseBody.contains("rate limit", ignoreCase = true)))
+    return when {
+        isRateLimited -> UpdateCheckException(UpdateFailureReason.RateLimited, statusCode = code)
+        code in 500..599 -> UpdateCheckException(UpdateFailureReason.ServiceUnavailable, statusCode = code)
+        else -> UpdateCheckException(UpdateFailureReason.SourceUnavailable, statusCode = code)
     }
 }
 

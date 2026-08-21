@@ -28,6 +28,7 @@ class TTSManager(private val context: Context) {
     fun supportsStreaming(providerSetting: TTSProviderSetting): Boolean {
         return when (val normalizedSetting = providerSetting.normalizeKnownProvider()) {
             is TTSProviderSetting.ElevenLabs -> elevenLabsProvider.supportsStreaming(normalizedSetting)
+            is TTSProviderSetting.MiniMax -> miniMaxProvider.supportsStreaming(normalizedSetting)
             else -> false
         }
     }

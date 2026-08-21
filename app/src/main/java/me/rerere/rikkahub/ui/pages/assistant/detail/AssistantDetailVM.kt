@@ -22,7 +22,7 @@ import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.AssistantMemory
 import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.model.Tag
-import me.rerere.rikkahub.data.model.memoryScope
+import me.rerere.rikkahub.data.model.MemoryScope
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import kotlin.uuid.Uuid
 
@@ -64,9 +64,9 @@ class AssistantDetailVM(
             scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = Assistant()
         )
 
-    // 管理记忆始终使用助手级作用域；Conversation 开关只影响聊天窗口新增的会话记忆。
+    // 本地记忆工具记录统一使用助手级作用域，与会话/全局开关无关。
     val memories = assistant.flatMapLatest { currentAssistant ->
-        memoryRepository.observeMemories(currentAssistant.memoryScope)
+        memoryRepository.observeMemories(MemoryScope.assistant(currentAssistant.id))
     }
         .stateIn(
             scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = emptyList()
@@ -167,7 +167,7 @@ class AssistantDetailVM(
     fun addMemory(memory: AssistantMemory) {
         viewModelScope.launch {
             memoryRepository.addMemory(
-                scope = assistant.value.memoryScope,
+                scope = MemoryScope.assistant(assistant.value.id),
                 content = memory.content
             )
         }
@@ -175,13 +175,17 @@ class AssistantDetailVM(
 
     fun updateMemory(memory: AssistantMemory) {
         viewModelScope.launch {
-            memoryRepository.updateMemory(assistant.value.memoryScope, memory.id, memory.content)
+            memoryRepository.updateMemory(
+                MemoryScope.assistant(assistant.value.id),
+                memory.id,
+                memory.content,
+            )
         }
     }
 
     fun deleteMemory(memory: AssistantMemory) {
         viewModelScope.launch {
-            memoryRepository.deleteMemory(assistant.value.memoryScope, memory.id)
+            memoryRepository.deleteMemory(MemoryScope.assistant(assistant.value.id), memory.id)
         }
     }
 

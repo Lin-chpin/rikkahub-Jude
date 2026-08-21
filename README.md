@@ -17,7 +17,7 @@ Click to join our Discord server 👉 [【RikkaHub】](https://discord.gg/9weBqx
 > This is an **unofficial community-maintained fork** of [RikkaHub](https://github.com/rikkahub/rikkahub).
 > It is not an official RikkaHub release. The fork keeps the upstream Git history while adding and maintaining
 > features such as automatic rolling summaries, context compression, Moments, and the anonymous question box.
-> The version shown on this fork's [Releases page](https://github.com/innna327-source/rikkahub-Jude/releases)
+> The version shown on this fork's [Releases page](https://github.com/Lin-chpin/rikkahub-Jude/releases)
 > is the source of truth for downloadable builds.
 
 <div align="center">
@@ -27,7 +27,7 @@ Click to join our Discord server 👉 [【RikkaHub】](https://discord.gg/9weBqx
 
 ## 🚀 Download this fork
 
-🔗 **[Download APK from GitHub Releases](https://github.com/innna327-source/rikkahub-Jude/releases)**
+🔗 **[Download APK from GitHub Releases](https://github.com/Lin-chpin/rikkahub-Jude/releases)**
 
 Do not use **Code → Download ZIP** if you only want to install the app; that downloads source code, not an APK.
 
@@ -61,7 +61,7 @@ Unless a release note says otherwise, this fork retains the upstream RikkaHub fe
 
 ## 🧭 Ownership and attribution
 
-This repository is maintained by **[innna327-source](https://github.com/innna327-source)**. It is a personal/community
+This repository is maintained by **[Lin-chpin](https://github.com/Lin-chpin)**. It is a personal/community
 fork, not the official RikkaHub repository and not a claim that every part of the codebase was written from scratch by
 the fork maintainer.
 
@@ -74,8 +74,8 @@ in this repository.
 For clarity:
 
 - **Upstream project:** [rikkahub/rikkahub](https://github.com/rikkahub/rikkahub)
-- **This fork:** [innna327-source/rikkahub-Jude](https://github.com/innna327-source/rikkahub-Jude)
-- **Fork maintainer:** [innna327-source](https://github.com/innna327-source)
+- **This fork:** [Lin-chpin/rikkahub-Jude](https://github.com/Lin-chpin/rikkahub-Jude)
+- **Fork maintainer:** [Lin-chpin](https://github.com/Lin-chpin)
 
 ## 💖 Sponsors
 

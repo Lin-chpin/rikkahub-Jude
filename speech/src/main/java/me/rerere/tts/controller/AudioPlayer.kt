@@ -87,10 +87,6 @@ class AudioPlayer(context: Context) {
         durationMs: Long?,
     ) = suspendCancellableCoroutine<Unit> { cont ->
         Log.i(TAG, "Preparing ExoPlayer media source: durationMs=" + durationMs)
-        player.setMediaSource(mediaSource)
-        player.prepare()
-        player.play()
-
         _playbackState.update {
             it.copy(
                 status = PlaybackStatus.Buffering,
@@ -154,6 +150,13 @@ class AudioPlayer(context: Context) {
             }
         }
         player.addListener(listener)
+
+        // Register before prepare/play. ExoPlayer can reach READY immediately on
+        // the main looper; registering afterwards leaves callers stuck in Buffering.
+        player.setMediaSource(mediaSource)
+        player.prepare()
+        player.play()
+
         cont.invokeOnCancellation {
             player.removeListener(listener)
             player.stop()

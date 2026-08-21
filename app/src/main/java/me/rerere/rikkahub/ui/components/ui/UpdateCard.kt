@@ -10,11 +10,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -41,9 +43,13 @@ import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.hooks.useThrottle
 import me.rerere.rikkahub.ui.pages.chat.ChatVM
 import me.rerere.rikkahub.utils.UpdateDownload
+import me.rerere.rikkahub.utils.UpdateCheckException
+import me.rerere.rikkahub.utils.UpdateFailureReason
+import me.rerere.rikkahub.utils.UPDATE_RELEASES_URL
 import me.rerere.rikkahub.utils.Version
 import me.rerere.rikkahub.utils.onError
 import me.rerere.rikkahub.utils.onSuccess
+import me.rerere.rikkahub.utils.openUrl
 import me.rerere.rikkahub.utils.toLocalDateTime
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -56,6 +62,21 @@ fun UpdateCard(vm: ChatVM) {
     val context = LocalContext.current
     val toaster = LocalToaster.current
     state.onError {
+        val failure = it as? UpdateCheckException
+        val title = when (failure?.reason) {
+            UpdateFailureReason.RateLimited -> stringResource(R.string.update_card_rate_limited_title)
+            UpdateFailureReason.Network -> stringResource(R.string.update_card_network_title)
+            UpdateFailureReason.SourceUnavailable -> stringResource(R.string.update_card_source_title)
+            UpdateFailureReason.ServiceUnavailable -> stringResource(R.string.update_card_service_title)
+            UpdateFailureReason.Unknown, null -> stringResource(R.string.update_card_check_failed)
+        }
+        val message = when (failure?.reason) {
+            UpdateFailureReason.RateLimited -> stringResource(R.string.update_card_rate_limited_message)
+            UpdateFailureReason.Network -> stringResource(R.string.update_card_network_message)
+            UpdateFailureReason.SourceUnavailable -> stringResource(R.string.update_card_source_message)
+            UpdateFailureReason.ServiceUnavailable -> stringResource(R.string.update_card_service_message)
+            UpdateFailureReason.Unknown, null -> stringResource(R.string.update_card_unknown_error)
+        }
         Card {
             Column(
                 modifier = Modifier
@@ -64,15 +85,32 @@ fun UpdateCard(vm: ChatVM) {
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(
-                    text = stringResource(R.string.update_card_check_failed),
+                    text = title,
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.error
                 )
                 Text(
-                    text = it.message ?: stringResource(R.string.update_card_unknown_error),
+                    text = message,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.error
                 )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = vm::retryUpdateCheck,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(stringResource(R.string.update_card_retry))
+                    }
+                    Button(
+                        onClick = { context.openUrl(UPDATE_RELEASES_URL) },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(stringResource(R.string.update_card_open_release))
+                    }
+                }
             }
         }
     }

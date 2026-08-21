@@ -1102,6 +1102,16 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="update_card_close">关闭</string>
   <string name="update_card_downloading">正在下载，请在状态栏查看进度</string>
   <string name="update_card_new_version_found">发现新版本 %s</string>
+  <string name="update_card_rate_limited_title">更新检查次数受限</string>
+  <string name="update_card_rate_limited_message">更新检查次数过多，当前 VPN 出口 IP 可能被 GitHub 限流。请稍后重试或切换网络。</string>
+  <string name="update_card_network_title">无法访问 GitHub</string>
+  <string name="update_card_network_message">当前网络或 VPN 暂时无法访问 GitHub，请检查连接后重试。</string>
+  <string name="update_card_source_title">更新源不可用</string>
+  <string name="update_card_source_message">GitHub Release 暂时不可用，或当前版本没有可下载的 APK。</string>
+  <string name="update_card_service_title">更新服务暂不可用</string>
+  <string name="update_card_service_message">GitHub 暂时无法响应，请稍后重试，或打开 Release 页面手动下载。</string>
+  <string name="update_card_retry">重试</string>
+  <string name="update_card_open_release">打开 Release 页面</string>
   <string name="update_card_unknown_error">未知错误</string>
   <string name="upload_file">上传文件</string>
   <string name="use_web_search">网络搜索</string>

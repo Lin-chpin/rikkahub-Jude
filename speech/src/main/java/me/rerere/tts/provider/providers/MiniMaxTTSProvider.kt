@@ -47,6 +47,10 @@ class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
         encodeDefaults = true
     }
 
+    override fun supportsStreaming(providerSetting: TTSProviderSetting.MiniMax): Boolean {
+        return providerSetting.isSpeech26Model() || providerSetting.isSpeech28Model()
+    }
+
     override fun generateSpeech(
         context: Context,
         providerSetting: TTSProviderSetting.MiniMax,

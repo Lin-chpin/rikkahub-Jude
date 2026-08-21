@@ -14,9 +14,12 @@ import androidx.lifecycle.viewModelScope
 import com.google.firebase.analytics.FirebaseAnalytics
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import me.rerere.ai.provider.Model
@@ -183,8 +186,15 @@ class ChatVM(
     }
 
     // Update checker
-    val updateState =
-        updateChecker.checkUpdate().stateIn(viewModelScope, SharingStarted.Eagerly, UiState.Loading)
+    private val updateCheckRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val updateState = updateCheckRequests
+        .onStart { emit(Unit) }
+        .flatMapLatest { updateChecker.checkUpdate() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, UiState.Loading)
+
+    fun retryUpdateCheck() {
+        updateCheckRequests.tryEmit(Unit)
+    }
 
     /**
      * 处理消息发送

@@ -1072,6 +1072,16 @@
   <string name="update_card_close">關閉</string>
   <string name="update_card_downloading">正在下載，請查看狀態列以瞭解進度</string>
   <string name="update_card_new_version_found">發現新版本 %s</string>
+  <string name="update_card_rate_limited_title">更新檢查次數受限</string>
+  <string name="update_card_rate_limited_message">更新檢查次數過多，目前 VPN 出口 IP 可能受到 GitHub 限流。請稍後重試或切換網路。</string>
+  <string name="update_card_network_title">無法連線至 GitHub</string>
+  <string name="update_card_network_message">目前網路或 VPN 暫時無法連線至 GitHub，請檢查連線後重試。</string>
+  <string name="update_card_source_title">更新來源無法使用</string>
+  <string name="update_card_source_message">GitHub Release 暫時無法使用，或目前版本沒有可下載的 APK。</string>
+  <string name="update_card_service_title">更新服務暫時無法使用</string>
+  <string name="update_card_service_message">GitHub 暫時無法回應，請稍後重試，或開啟 Release 頁面手動下載。</string>
+  <string name="update_card_retry">重試</string>
+  <string name="update_card_open_release">開啟 Release 頁面</string>
   <string name="update_card_unknown_error">未知錯誤</string>
   <string name="upload_file">上傳檔案</string>
   <string name="use_web_search">網路搜尋</string>

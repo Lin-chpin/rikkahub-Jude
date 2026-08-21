@@ -43,7 +43,7 @@ class VoiceCallAudioTagPromptTest {
     fun prefersOneMiniMaxTagPerSegmentButKeepsNoneAsFallback() {
         val prompt = buildVoiceCallAudioTagPrompt(VoiceCallAudioTagFormat.MINIMAX_SPEECH_2_8)
 
-        assertTrue(prompt.contains("choose one tag for every segment whenever"))
+        assertTrue(prompt.contains("Choose one tag for every segment whenever"))
         assertTrue(prompt.contains("including segments with no leading interjection"))
         assertTrue(prompt.contains("do not fall back to NONE merely because there is no word to replace"))
         assertTrue(prompt.contains("only when no supported tag is natural"))

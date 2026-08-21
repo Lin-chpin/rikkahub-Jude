@@ -217,6 +217,7 @@ internal fun BindVoiceCallSpeechPlayback(
 
     LaunchedEffect(state.activeMessageId()) {
         val messageId = state.activeMessageId() ?: return@LaunchedEffect
+        val speechQueue = VoiceCallSpeechQueue()
         var nextSpeechIndex = 0
         while (state.activeMessageId() == messageId) {
             val segment = state.queuedSegment(nextSpeechIndex)
@@ -250,9 +251,10 @@ internal fun BindVoiceCallSpeechPlayback(
                 continue
             }
 
+            val flushCalled = speechQueue.flushForNextSegment()
             tts.speak(
                 text = ttsText,
-                flushCalled = true,
+                flushCalled = flushCalled,
                 chunked = false,
                 emotion = latestAssistantEmotion,
                 onAudioReady = { response ->
@@ -296,6 +298,7 @@ internal fun BindVoiceCallSpeechPlayback(
                 "调用tts.speak messageId=" + messageId +
                     ", textLength=" + ttsText.length +
                     ", mode=" + (if (useWholeReplyTts) "whole_reply" else "sentence") +
+                        ", flush=" + flushCalled +
                         ", chunked=false" +
                         ", emotion=" + (latestAssistantEmotion ?: "none") +
                         ", text=" + ttsText.take(80)

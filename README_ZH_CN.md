@@ -15,7 +15,7 @@
 > [!IMPORTANT]
 > 这是基于 [RikkaHub](https://github.com/rikkahub/rikkahub) 的**非官方社区维护 fork**，不是 RikkaHub 官方版本。
 > 本仓库保留上游 Git 历史，并持续维护自动滚动摘要、上下文压缩、朋友圈和匿名提问箱等功能。
-> 可下载版本以本 fork 的 [Releases 页面](https://github.com/innna327-source/rikkahub-Jude/releases) 为准。
+> 可下载版本以本 fork 的 [Releases 页面](https://github.com/Lin-chpin/rikkahub-Jude/releases) 为准。
 
 <div align="center">
   <img src="docs/img/chat.png" alt="聊天界面" width="150" />
@@ -24,7 +24,7 @@
 
 ## 🚀 下载本 fork
 
-🔗 **[前往 GitHub Releases 下载 APK](https://github.com/innna327-source/rikkahub-Jude/releases)**
+🔗 **[前往 GitHub Releases 下载 APK](https://github.com/Lin-chpin/rikkahub-Jude/releases)**
 
 如果只是安装应用，请不要点击 **Code → Download ZIP**，那里下载的是源代码，不是 APK。
 
@@ -48,15 +48,15 @@
 
 ## 🧭 仓库归属与贡献说明
 
-本仓库由 **[innna327-source](https://github.com/innna327-source)** 维护，是个人/社区 fork，不是官方 RikkaHub 仓库，也不表示代码库的每一部分都是维护者从零编写的。
+本仓库由 **[Lin-chpin](https://github.com/Lin-chpin)** 维护，是个人/社区 fork，不是官方 RikkaHub 仓库，也不表示代码库的每一部分都是维护者从零编写的。
 
 本仓库保留了历史 Git 提交。因此，GitHub 在查看文件历史或提交作者时，可能显示 `RikkaHub Public Release` 等上游或继承的提交身份。这些名称只代表对应的 Git 元数据，不代表本仓库的所有者或维护者。上游项目及其贡献者的原始工作仍应得到相应署名；本仓库实际维护范围见上面的“本 fork 维护和新增的内容”。
 
 为避免混淆：
 
 - **上游项目：** [rikkahub/rikkahub](https://github.com/rikkahub/rikkahub)
-- **本 fork：** [innna327-source/rikkahub-Jude](https://github.com/innna327-source/rikkahub-Jude)
-- **本 fork 维护者：** [innna327-source](https://github.com/innna327-source)
+- **本 fork：** [Lin-chpin/rikkahub-Jude](https://github.com/Lin-chpin/rikkahub-Jude)
+- **本 fork 维护者：** [Lin-chpin](https://github.com/Lin-chpin)
 
 ## 💖 赞助商
 

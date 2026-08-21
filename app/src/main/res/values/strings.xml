@@ -1149,6 +1149,16 @@
   <string name="update_card_close">Close</string>
   <string name="update_card_downloading">Downloading, please check status bar for progress</string>
   <string name="update_card_new_version_found">New version found %s</string>
+  <string name="update_card_rate_limited_title">Update checks temporarily limited</string>
+  <string name="update_card_rate_limited_message">Too many update checks were made. The current VPN exit IP may be rate-limited by GitHub. Please wait or switch networks.</string>
+  <string name="update_card_network_title">Cannot reach GitHub</string>
+  <string name="update_card_network_message">The network or VPN cannot reach GitHub right now. Check your connection and try again.</string>
+  <string name="update_card_source_title">Update source unavailable</string>
+  <string name="update_card_source_message">The GitHub Release source is unavailable or has no downloadable APK.</string>
+  <string name="update_card_service_title">Update service unavailable</string>
+  <string name="update_card_service_message">GitHub is temporarily unavailable. Please try again later or open the Release page.</string>
+  <string name="update_card_retry">Retry</string>
+  <string name="update_card_open_release">Open Release page</string>
   <string name="update_card_unknown_error">Unknown error</string>
   <string name="upload_file">Upload File</string>
   <string name="use_web_search">Web Search</string>

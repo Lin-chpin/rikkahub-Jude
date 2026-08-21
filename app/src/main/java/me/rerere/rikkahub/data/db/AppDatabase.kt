@@ -28,11 +28,12 @@ import me.rerere.rikkahub.data.db.entity.AnonymousQuestionEntity
 import me.rerere.rikkahub.data.db.entity.AnonymousQuestionReplyEntity
 import me.rerere.rikkahub.data.db.entity.AnonymousQuestionProfileEntity
 import me.rerere.rikkahub.data.db.entity.WorkspaceEntity
+import me.rerere.rikkahub.data.db.migrations.Migration_26_27
 import me.rerere.rikkahub.data.db.migrations.Migration_16_17
 import me.rerere.rikkahub.data.db.migrations.Migration_8_9
 import me.rerere.rikkahub.utils.JsonInstant
 
-const val APP_DATABASE_VERSION = 26
+const val APP_DATABASE_VERSION = 27
 
 @Database(
     entities = [

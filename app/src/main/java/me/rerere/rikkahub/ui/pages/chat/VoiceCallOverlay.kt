@@ -100,6 +100,7 @@ import me.rerere.rikkahub.data.voice.withOnlyKnownVoiceCallAudioTags
 import me.rerere.rikkahub.data.voice.withoutVoiceCallRealtimeEmotionMarker
 import me.rerere.rikkahub.data.voice.sanitizeVoiceCallTextForTranslation
 import me.rerere.rikkahub.service.ChatRequestMode
+import me.rerere.rikkahub.service.VoiceCallSessionRegistry
 import me.rerere.rikkahub.ui.components.richtext.appendVoiceCallAudioTagAwareText
 import me.rerere.rikkahub.ui.components.message.CollapsibleTranslationText
 import me.rerere.rikkahub.ui.components.message.TranslateMessageButton
@@ -189,6 +190,17 @@ fun VoiceCallOverlay(
     var callElapsedMillis by remember { mutableStateOf(0L) }
     val callStartMessageCount = remember { conversation.currentMessages.size }
     var voiceRequestStartMessageCount by remember { mutableStateOf(conversation.currentMessages.size) }
+
+    DisposableEffect(callId, isHistory) {
+        if (!isHistory) {
+            VoiceCallSessionRegistry.register(callId)
+        }
+        onDispose {
+            if (!isHistory) {
+                VoiceCallSessionRegistry.unregister(callId)
+            }
+        }
+    }
     val clipboardManager = remember(context) {
         context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
     }
@@ -385,7 +397,6 @@ fun VoiceCallOverlay(
     LaunchedEffect(visible, ttsProviderReady, ttsAvailable) {
         if (!isHistory && visible && ttsProviderReady && !ttsAvailable) {
             toaster.show(VOICE_CALL_UNAVAILABLE_MESSAGE, type = ToastType.Error)
-            hangUp(VOICE_CALL_UNAVAILABLE_MESSAGE)
         }
     }
 
@@ -577,7 +588,6 @@ fun VoiceCallOverlay(
     LaunchedEffect(ttsError) {
         if (!isHistory && visible && ttsError?.isNotBlank() == true) {
             toaster.show(VOICE_CALL_UNAVAILABLE_MESSAGE, type = ToastType.Error)
-            hangUp(VOICE_CALL_UNAVAILABLE_MESSAGE)
         }
     }
 

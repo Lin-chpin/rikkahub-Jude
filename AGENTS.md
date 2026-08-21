@@ -23,6 +23,8 @@
 - All compilation and packaging must use the local cached Gradle distribution and local JDK above; set `JAVA_HOME` explicitly before invoking Gradle or a packaging script, and never silently fall back to a wrapper download.
 - Treat locally cached plugins, dependencies, and toolchains as the default build source. If a required item is missing, locked, or incomplete and cannot be repaired in the local user cache, stop and tell the user the exact item and why the local build cannot continue.
 - If the local cache can be repaired without changing project source (for example, stopping Gradle daemons or warming an existing user-level cache), do that first. Do not silently switch to network resolution, copy dependencies into the repository, or add build workarounds; report the limitation before proceeding.
+- Gradle 9.4.1 may fail before configuration with `Failed to load native library 'native-platform.dll'` when the user-level native cache directory is missing or not writable by the current process. This is an environment/cache permission issue, not a project source issue: stop daemons, ensure `C:\Users\zlsss\.gradle\native\<hash>\windows-amd64` exists and is writable, then let the local Gradle distribution recreate `native-platform.dll`; do not copy the DLL into the repository or switch to network resolution.
+- This project has `public` and `personal` flavors, so `:app:compileDebugKotlin` and `:app:testDebugUnitTest` are ambiguous on Gradle 9.4.1. Use `:app:compilePublicDebugKotlin` / `:app:testPublicDebugUnitTest` or `:app:compilePersonalDebugKotlin` / `:app:testPersonalDebugUnitTest` explicitly.
 
 ## User Preferences
 
@@ -44,9 +46,9 @@
 - Check status:
   `git status --short`
 - Compile app Kotlin:
-  `.\gradlew :app:compileDebugKotlin`
+  `:app:compilePublicDebugKotlin` or `:app:compilePersonalDebugKotlin` (use the desired flavor)
 - Run app unit tests:
-  `.\gradlew :app:testDebugUnitTest`
+  `:app:testPublicDebugUnitTest` or `:app:testPersonalDebugUnitTest` (use the desired flavor)
 - Build the default universal debug APK and timestamped copy:
   `powershell -ExecutionPolicy Bypass -File scripts\build-universal-debug-apk.ps1`
 - Force rebuild the default universal debug APK and timestamped copy:
