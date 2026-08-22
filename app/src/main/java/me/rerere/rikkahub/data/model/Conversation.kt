@@ -46,7 +46,13 @@ data class Conversation(
                 .flatMap { it.annotations }
                 .filterIsInstance<UIMessageAnnotation.TtsAudio>()
                 .map { it.audioUri.toUri() }
-            return (partFiles + ttsFiles).distinct()
+            val chatVoiceFiles = messages
+                .flatMap { it.annotations }
+                .filterIsInstance<UIMessageAnnotation.ChatVoiceReply>()
+                .flatMap { reply -> reply.segments }
+                .flatMap { segment -> segment.audioSegments }
+                .map { it.audioUri.toUri() }
+            return (partFiles + ttsFiles + chatVoiceFiles).distinct()
         }
 
     /**

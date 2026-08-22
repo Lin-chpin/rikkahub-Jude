@@ -21,6 +21,7 @@ import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,6 +45,8 @@ import me.rerere.rikkahub.ui.hooks.useThrottle
 import me.rerere.rikkahub.ui.pages.chat.ChatVM
 import me.rerere.rikkahub.utils.UpdateDownload
 import me.rerere.rikkahub.utils.UpdateCheckException
+import me.rerere.rikkahub.utils.UpdateDownloadFailureReason
+import me.rerere.rikkahub.utils.UpdateDownloadState
 import me.rerere.rikkahub.utils.UpdateFailureReason
 import me.rerere.rikkahub.utils.UPDATE_RELEASES_URL
 import me.rerere.rikkahub.utils.Version
@@ -59,8 +62,82 @@ import kotlin.time.toJavaInstant
 @Composable
 fun UpdateCard(vm: ChatVM) {
     val state by vm.updateState.collectAsStateWithLifecycle()
+    val downloadState by vm.updateDownloadState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val toaster = LocalToaster.current
+
+    LaunchedEffect(downloadState) {
+        if (downloadState is UpdateDownloadState.Completed) {
+            toaster.show(context.getString(R.string.update_download_completed), type = ToastType.Success)
+            vm.clearUpdateDownloadState()
+        }
+    }
+
+    val downloadFailure = downloadState as? UpdateDownloadState.Failed
+    if (downloadFailure != null) {
+        val failureMessage = when (downloadFailure.reason) {
+            UpdateDownloadFailureReason.Network -> stringResource(R.string.update_download_network_message)
+            UpdateDownloadFailureReason.ResourceUnavailable -> stringResource(R.string.update_download_resource_message)
+            UpdateDownloadFailureReason.ServiceUnavailable -> stringResource(R.string.update_download_service_message)
+            UpdateDownloadFailureReason.TooManyRedirects -> stringResource(R.string.update_download_redirect_message)
+            UpdateDownloadFailureReason.InsufficientSpace -> stringResource(R.string.update_download_space_message)
+            UpdateDownloadFailureReason.FileAlreadyExists -> stringResource(R.string.update_download_file_exists_message)
+            UpdateDownloadFailureReason.CannotResume -> stringResource(R.string.update_download_resume_message)
+            UpdateDownloadFailureReason.StorageUnavailable -> stringResource(R.string.update_download_storage_message)
+            UpdateDownloadFailureReason.Unknown -> stringResource(R.string.update_download_unknown_message)
+        }
+        Card {
+            Column(
+                modifier = Modifier
+                    .padding(8.dp)
+                    .fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = stringResource(R.string.update_download_failed_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = vm::clearUpdateDownloadState) {
+                        Icon(
+                            imageVector = HugeIcons.Cancel01,
+                            contentDescription = stringResource(R.string.update_download_close),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                Text(
+                    text = failureMessage,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = { vm.retryUpdateDownload(downloadFailure) },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(stringResource(R.string.update_download_retry))
+                    }
+                    Button(
+                        onClick = { context.openUrl(UPDATE_RELEASES_URL) },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(stringResource(R.string.update_download_open_release))
+                    }
+                }
+            }
+        }
+    }
+
     state.onError {
         val failure = it as? UpdateCheckException
         val title = when (failure?.reason) {

@@ -49,6 +49,7 @@ import me.rerere.rikkahub.ui.hooks.writeStringPreference
 import me.rerere.rikkahub.ui.hooks.ChatInputState
 import me.rerere.rikkahub.utils.UiState
 import me.rerere.rikkahub.utils.UpdateChecker
+import me.rerere.rikkahub.utils.UpdateDownloadState
 import java.util.Locale
 import kotlin.uuid.Uuid
 
@@ -100,6 +101,7 @@ class ChatVM(
 
         // 记住对话ID, 方便下次启动恢复
         context.writeStringPreference("lastConversationId", _conversationId.toString())
+        updateChecker.restoreDownloadState(context)
 
         viewModelScope.launch {
             settingsStore.update { settings ->
@@ -192,8 +194,18 @@ class ChatVM(
         .flatMapLatest { updateChecker.checkUpdate() }
         .stateIn(viewModelScope, SharingStarted.Eagerly, UiState.Loading)
 
+    val updateDownloadState: StateFlow<UpdateDownloadState?> = updateChecker.downloadState
+
     fun retryUpdateCheck() {
         updateCheckRequests.tryEmit(Unit)
+    }
+
+    fun retryUpdateDownload(failure: UpdateDownloadState.Failed) {
+        updateChecker.retryDownload(context, failure)
+    }
+
+    fun clearUpdateDownloadState() {
+        updateChecker.clearDownloadState(context)
     }
 
     /**
@@ -414,6 +426,21 @@ class ChatVM(
         )
     }
 
+    fun translateChatVoiceSegment(
+        message: UIMessage,
+        segmentIndex: Int,
+        sourceText: String,
+        targetLanguage: Locale,
+    ) {
+        chatService.translateChatVoiceSegment(
+            conversationId = _conversationId,
+            message = message,
+            segmentIndex = segmentIndex,
+            sourceText = sourceText,
+            targetLanguage = targetLanguage,
+        )
+    }
+
     fun generateTitle(conversation: Conversation, force: Boolean = false) {
         viewModelScope.launch {
             val conversationFull = conversationRepo.getConversationById(conversation.id) ?: return@launch
@@ -437,6 +464,14 @@ class ChatVM(
             messageId = messageId,
             bubbleKey = bubbleKey,
             clearLegacyTranslation = clearLegacyTranslation,
+        )
+    }
+
+    fun clearChatVoiceSegmentTranslation(messageId: Uuid, segmentIndex: Int) {
+        chatService.clearChatVoiceSegmentTranslation(
+            conversationId = _conversationId,
+            messageId = messageId,
+            segmentIndex = segmentIndex,
         )
     }
 

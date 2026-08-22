@@ -1,17 +1,25 @@
 package me.rerere.rikkahub.utils
 
 import android.app.DownloadManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.database.Cursor
+import android.os.Build
 import android.os.Environment
-import android.widget.Toast
 import androidx.core.net.toUri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import me.rerere.common.http.await
 import me.rerere.rikkahub.BuildConfig
@@ -25,6 +33,7 @@ private const val API_URL = "https://api.github.com/repos/Lin-chpin/rikkahub-Jud
 const val UPDATE_RELEASES_URL = "https://github.com/Lin-chpin/rikkahub-Jude/releases"
 private val UPDATE_ASSET_NAMES = listOf(
     "app-universal-debug.apk",
+    "app-public-universal-debug.apk",
     "app-arm64-v8a-debug.apk",
 )
 
@@ -42,8 +51,60 @@ class UpdateCheckException(
     cause: Throwable? = null,
 ) : Exception(null, cause)
 
+enum class UpdateDownloadFailureReason {
+    Network,
+    ResourceUnavailable,
+    ServiceUnavailable,
+    TooManyRedirects,
+    InsufficientSpace,
+    FileAlreadyExists,
+    CannotResume,
+    StorageUnavailable,
+    Unknown,
+}
+
+sealed interface UpdateDownloadState {
+    data class Downloading(
+        val id: Long,
+        val download: UpdateDownload,
+    ) : UpdateDownloadState
+
+    data class Completed(
+        val id: Long,
+        val download: UpdateDownload,
+    ) : UpdateDownloadState
+
+    data class Failed(
+        val id: Long,
+        val download: UpdateDownload,
+        val reason: UpdateDownloadFailureReason,
+        val httpStatusCode: Int? = null,
+        val systemReason: Int? = null,
+    ) : UpdateDownloadState
+}
+
 class UpdateChecker(private val client: OkHttpClient) {
     private val json = Json { ignoreUnknownKeys = true }
+    private val downloadLock = Any()
+    private val trackedDownloads = mutableMapOf<Long, UpdateDownload>()
+    private var downloadReceiverRegistered = false
+    private val _downloadState = MutableStateFlow<UpdateDownloadState?>(null)
+    val downloadState: StateFlow<UpdateDownloadState?> = _downloadState.asStateFlow()
+
+    private val downloadReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
+            val downloadId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, INVALID_DOWNLOAD_ID)
+            if (downloadId == INVALID_DOWNLOAD_ID) return
+            val download = synchronized(downloadLock) {
+                trackedDownloads[downloadId]
+            } ?: readPendingDownload(context.applicationContext)
+                ?.takeIf { it.id == downloadId }
+                ?.download
+                ?: return
+            inspectDownload(context.applicationContext, downloadId, download)
+        }
+    }
 
     fun checkUpdate(): Flow<UiState<UpdateInfo>> = flow {
         emit(UiState.Loading)
@@ -65,7 +126,9 @@ class UpdateChecker(private val client: OkHttpClient) {
                             throw it.toUpdateCheckException()
                         }
                         runCatching {
-                            json.decodeFromString<GithubRelease>(it.body.string()).toUpdateInfo()
+                            val release = json.decodeFromString<GithubRelease>(it.body.string())
+                            val hasNewerVersion = Version(release.tagName) > Version(BuildConfig.VERSION_NAME)
+                            release.toUpdateInfo(requireDownloadAsset = hasNewerVersion)
                         }.getOrElse { cause ->
                             throw UpdateCheckException(
                                 reason = UpdateFailureReason.SourceUnavailable,
@@ -87,6 +150,8 @@ class UpdateChecker(private val client: OkHttpClient) {
     }.flowOn(Dispatchers.IO)
 
     fun downloadUpdate(context: Context, download: UpdateDownload) {
+        val appContext = context.applicationContext
+        ensureDownloadReceiver(appContext)
         runCatching {
             val request = DownloadManager.Request(download.url.toUri()).apply {
                 // 设置下载时通知栏的标题和描述
@@ -102,13 +167,190 @@ class UpdateChecker(private val client: OkHttpClient) {
                 setMimeType("application/vnd.android.package-archive")
             }
             // 获取系统的DownloadManager
-            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            dm.enqueue(request)
-            // 你可以保存返回的downloadId到本地，以便后续查询下载进度或状态
+            val dm = appContext.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            val downloadId = dm.enqueue(request)
+            synchronized(downloadLock) {
+                trackedDownloads[downloadId] = download
+            }
+            savePendingDownload(appContext, downloadId, download)
+            _downloadState.value = UpdateDownloadState.Downloading(downloadId, download)
         }.onFailure {
-            Toast.makeText(context, "Failed to update", Toast.LENGTH_SHORT).show()
-            context.openUrl(UPDATE_RELEASES_URL) // 下载失败时打开 Release 页面兜底
+            _downloadState.value = UpdateDownloadState.Failed(
+                id = INVALID_DOWNLOAD_ID,
+                download = download,
+                reason = classifyImmediateDownloadFailure(it),
+            )
         }
+    }
+
+    fun retryDownload(context: Context, failure: UpdateDownloadState.Failed) {
+        val appContext = context.applicationContext
+        val dm = appContext.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        if (failure.id != INVALID_DOWNLOAD_ID) {
+            runCatching { dm.remove(failure.id) }
+        }
+        clearPendingDownload(appContext)
+        synchronized(downloadLock) {
+            trackedDownloads.remove(failure.id)
+        }
+        downloadUpdate(appContext, failure.download)
+    }
+
+    fun restoreDownloadState(context: Context) {
+        val appContext = context.applicationContext
+        val pending = readPendingDownload(appContext) ?: return
+        ensureDownloadReceiver(appContext)
+        inspectDownload(appContext, pending.id, pending.download)
+    }
+
+    fun clearDownloadState(context: Context) {
+        clearPendingDownload(context.applicationContext)
+        _downloadState.value = null
+    }
+
+    private fun ensureDownloadReceiver(context: Context) {
+        synchronized(downloadLock) {
+            if (downloadReceiverRegistered) return
+            val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                // DownloadManager broadcasts from the system download provider, not this app.
+                context.registerReceiver(downloadReceiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                @Suppress("DEPRECATION")
+                context.registerReceiver(downloadReceiver, filter)
+            }
+            downloadReceiverRegistered = true
+        }
+    }
+
+    private fun inspectDownload(context: Context, downloadId: Long, download: UpdateDownload) {
+        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val snapshot = dm.query(DownloadManager.Query().setFilterById(downloadId)).use { cursor ->
+            if (!cursor.moveToFirst()) {
+                null
+            } else {
+                DownloadSnapshot(
+                    status = cursor.getRequiredInt(DOWNLOAD_STATUS_COLUMN),
+                    reason = cursor.getOptionalInt(DOWNLOAD_REASON_COLUMN),
+                    httpStatusCode = cursor.getOptionalInt(DOWNLOAD_HTTP_STATUS_COLUMN),
+                )
+            }
+        }
+
+        if (snapshot == null) {
+            clearPendingDownload(context)
+            _downloadState.value = UpdateDownloadState.Failed(
+                id = downloadId,
+                download = download,
+                reason = UpdateDownloadFailureReason.Unknown,
+            )
+            return
+        }
+
+        when (snapshot.status) {
+            DownloadManager.STATUS_SUCCESSFUL -> {
+                clearPendingDownload(context)
+                synchronized(downloadLock) {
+                    trackedDownloads.remove(downloadId)
+                }
+                _downloadState.value = UpdateDownloadState.Completed(downloadId, download)
+            }
+
+            DownloadManager.STATUS_FAILED -> {
+                _downloadState.value = UpdateDownloadState.Failed(
+                    id = downloadId,
+                    download = download,
+                    reason = classifyDownloadFailure(snapshot.reason, snapshot.httpStatusCode),
+                    httpStatusCode = snapshot.httpStatusCode,
+                    systemReason = snapshot.reason,
+                )
+            }
+
+            else -> {
+                _downloadState.value = UpdateDownloadState.Downloading(downloadId, download)
+            }
+        }
+    }
+
+    private fun savePendingDownload(context: Context, downloadId: Long, download: UpdateDownload) {
+        context.getSharedPreferences(DOWNLOAD_PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putLong(DOWNLOAD_ID_KEY, downloadId)
+            .putString(DOWNLOAD_INFO_KEY, json.encodeToString(download))
+            .apply()
+    }
+
+    private fun readPendingDownload(context: Context): PendingDownload? {
+        val preferences = context.getSharedPreferences(DOWNLOAD_PREFS, Context.MODE_PRIVATE)
+        val id = preferences.getLong(DOWNLOAD_ID_KEY, INVALID_DOWNLOAD_ID)
+        val encodedDownload = preferences.getString(DOWNLOAD_INFO_KEY, null) ?: return null
+        if (id == INVALID_DOWNLOAD_ID) return null
+        return runCatching {
+            PendingDownload(id, json.decodeFromString<UpdateDownload>(encodedDownload))
+        }.getOrNull()
+    }
+
+    private fun clearPendingDownload(context: Context) {
+        context.getSharedPreferences(DOWNLOAD_PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .clear()
+            .apply()
+    }
+}
+
+private data class PendingDownload(
+    val id: Long,
+    val download: UpdateDownload,
+)
+
+private data class DownloadSnapshot(
+    val status: Int,
+    val reason: Int?,
+    val httpStatusCode: Int?,
+)
+
+private const val DOWNLOAD_PREFS = "update_download_state"
+private const val DOWNLOAD_ID_KEY = "download_id"
+private const val DOWNLOAD_INFO_KEY = "download_info"
+private const val INVALID_DOWNLOAD_ID = -1L
+private const val DOWNLOAD_STATUS_COLUMN = "status"
+private const val DOWNLOAD_REASON_COLUMN = "reason"
+private const val DOWNLOAD_HTTP_STATUS_COLUMN = "http_status_code"
+
+private fun Cursor.getRequiredInt(columnName: String): Int {
+    val index = getColumnIndex(columnName)
+    check(index >= 0) { "DownloadManager column is missing: $columnName" }
+    return getInt(index)
+}
+
+private fun Cursor.getOptionalInt(columnName: String): Int? {
+    val index = getColumnIndex(columnName)
+    if (index < 0 || isNull(index)) return null
+    return getInt(index).takeIf { it > 0 }
+}
+
+internal fun classifyDownloadFailure(reason: Int?, httpStatusCode: Int?): UpdateDownloadFailureReason {
+    return when {
+        httpStatusCode in 500..599 -> UpdateDownloadFailureReason.ServiceUnavailable
+        httpStatusCode == 401 || httpStatusCode == 403 || httpStatusCode == 404 ->
+            UpdateDownloadFailureReason.ResourceUnavailable
+        reason == DownloadManager.ERROR_INSUFFICIENT_SPACE -> UpdateDownloadFailureReason.InsufficientSpace
+        reason == DownloadManager.ERROR_FILE_ALREADY_EXISTS -> UpdateDownloadFailureReason.FileAlreadyExists
+        reason == DownloadManager.ERROR_CANNOT_RESUME -> UpdateDownloadFailureReason.CannotResume
+        reason == DownloadManager.ERROR_TOO_MANY_REDIRECTS -> UpdateDownloadFailureReason.TooManyRedirects
+        reason == DownloadManager.ERROR_UNHANDLED_HTTP_CODE -> UpdateDownloadFailureReason.ResourceUnavailable
+        reason == DownloadManager.ERROR_HTTP_DATA_ERROR -> UpdateDownloadFailureReason.Network
+        reason == DownloadManager.ERROR_DEVICE_NOT_FOUND || reason == DownloadManager.ERROR_FILE_ERROR ->
+            UpdateDownloadFailureReason.StorageUnavailable
+        else -> UpdateDownloadFailureReason.Unknown
+    }
+}
+
+private fun classifyImmediateDownloadFailure(error: Throwable): UpdateDownloadFailureReason {
+    return when (error) {
+        is SecurityException -> UpdateDownloadFailureReason.StorageUnavailable
+        is IOException -> UpdateDownloadFailureReason.Network
+        else -> UpdateDownloadFailureReason.Unknown
     }
 }
 
@@ -157,21 +399,26 @@ private data class GithubReleaseAsset(
     val size: Long = 0L,
 )
 
-private fun GithubRelease.toUpdateInfo(): UpdateInfo {
+private fun GithubRelease.toUpdateInfo(requireDownloadAsset: Boolean): UpdateInfo {
     val asset = UPDATE_ASSET_NAMES.firstNotNullOfOrNull { assetName ->
         assets.firstOrNull { it.name == assetName }
-    } ?: error("Update asset not found: ${UPDATE_ASSET_NAMES.joinToString()}")
+    }
+    if (requireDownloadAsset && asset == null) {
+        error("Update asset not found: ${UPDATE_ASSET_NAMES.joinToString()}")
+    }
     return UpdateInfo(
         version = tagName.removePrefix("v"),
         publishedAt = publishedAt,
         changelog = body?.takeIf { it.isNotBlank() } ?: "No changelog provided.",
-        downloads = listOf(
-            UpdateDownload(
-                name = asset.name,
-                url = asset.browserDownloadUrl,
-                size = formatBytes(asset.size),
+        downloads = asset?.let {
+            listOf(
+                UpdateDownload(
+                    name = it.name,
+                    url = it.browserDownloadUrl,
+                    size = formatBytes(it.size),
+                )
             )
-        ),
+        } ?: emptyList(),
     )
 }
 

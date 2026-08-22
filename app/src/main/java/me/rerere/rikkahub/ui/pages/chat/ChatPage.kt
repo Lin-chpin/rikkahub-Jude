@@ -564,6 +564,12 @@ private fun ChatPageContent(
                 onClearTranslation = { message ->
                     vm.clearTranslationField(message.id)
                 },
+                onTranslateChatVoiceSegment = { message, segmentIndex, sourceText, locale ->
+                    vm.translateChatVoiceSegment(message, segmentIndex, sourceText, locale)
+                },
+                onClearChatVoiceSegmentTranslation = { message, segmentIndex ->
+                    vm.clearChatVoiceSegmentTranslation(message.id, segmentIndex)
+                },
                 onJumpToMessage = { index ->
                     previewMode = false
                     scope.launch {

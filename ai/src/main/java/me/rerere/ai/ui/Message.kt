@@ -799,7 +799,35 @@ sealed class UIMessageAnnotation {
         val chunkIndex: Int = 0,
         val totalChunks: Int = 1,
     ) : UIMessageAnnotation()
+
+    @Serializable
+    @SerialName("chat_voice_reply")
+    data class ChatVoiceReply(
+        val segments: List<ChatVoiceReplySegment>,
+    ) : UIMessageAnnotation()
 }
+
+@Serializable
+enum class ChatVoiceReplySegmentType {
+    TEXT,
+    VOICE,
+}
+
+@Serializable
+data class ChatVoiceReplySegment(
+    val type: ChatVoiceReplySegmentType,
+    val text: String,
+    val audioSegments: List<ChatVoiceAudioSegment> = emptyList(),
+    val translation: String? = null,
+)
+
+@Serializable
+data class ChatVoiceAudioSegment(
+    val text: String,
+    val audioUri: String,
+    val format: String,
+    val sampleRate: Int? = null,
+)
 
 @Serializable
 data class VoiceCallAudioSegment(

@@ -10,6 +10,8 @@ import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.ai.AILoggingManager
 import me.rerere.rikkahub.data.ai.tools.LocalTools
 import me.rerere.rikkahub.data.event.AppEventBus
+import me.rerere.rikkahub.data.voice.ChatVoiceReplyAudioGenerator
+import me.rerere.rikkahub.data.voice.ChatVoiceReplyMaterializer
 import me.rerere.rikkahub.service.ChatService
 import me.rerere.rikkahub.utils.EmojiData
 import me.rerere.rikkahub.utils.EmojiUtils
@@ -33,7 +35,7 @@ val appModule = module {
     }
 
     single {
-        LocalTools(get(), get(), get(), get(), get(), get())
+        LocalTools(get(), get(), get(), get(), get())
     }
 
     single {
@@ -54,6 +56,14 @@ val appModule = module {
 
     single {
         TTSManager(get())
+    }
+
+    single {
+        ChatVoiceReplyAudioGenerator(get(), get())
+    }
+
+    single {
+        ChatVoiceReplyMaterializer(get())
     }
 
     single {
@@ -91,7 +101,8 @@ val appModule = module {
             filesManager = get(),
             skillManager = get(),
             momentRepository = get(),
-            anonymousQuestionRepository = get()
+            anonymousQuestionRepository = get(),
+            chatVoiceReplyMaterializer = get(),
         )
     }
 

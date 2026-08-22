@@ -93,6 +93,9 @@ import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.voice.VOICE_CALL_UNAVAILABLE_MESSAGE
+import me.rerere.rikkahub.data.voice.ChatVoiceReplyMaterializer
+import me.rerere.rikkahub.data.voice.chatVoiceReply
+import me.rerere.rikkahub.data.voice.updateChatVoiceReplySegment
 import me.rerere.rikkahub.data.voice.VoiceCallCompletion
 import me.rerere.rikkahub.data.voice.isStandaloneVoiceCallRecord
 import me.rerere.rikkahub.data.voice.voiceCallRecord
@@ -240,6 +243,7 @@ class ChatService(
     private val skillManager: SkillManager,
     private val momentRepository: MomentRepository,
     private val anonymousQuestionRepository: AnonymousQuestionRepository,
+    private val chatVoiceReplyMaterializer: ChatVoiceReplyMaterializer,
 ) {
     // 统一会话管理
     private val sessions = ConcurrentHashMap<Uuid, ConversationSession>()
@@ -858,6 +862,7 @@ class ChatService(
                     ChatRequestMode.VoiceCall -> messages
                 }
             }
+            val generationBaseMessageIds = generationMessages.mapTo(mutableSetOf()) { it.id }
             val transientLastContextMessage = voiceCallUserEventState?.let { eventState ->
                 generationMessages.lastOrNull()
                     ?.takeIf { it.role == MessageRole.USER }
@@ -865,11 +870,11 @@ class ChatService(
             }
             val voiceCallToolEnabled = LocalToolOption.VoiceCall in assistant.localTools &&
                 voiceCallRuntimeState == VoiceCallRuntimeState.INACTIVE
-            val localToolOptions = assistant.localTools.filterNot {
-                voiceCallRuntimeState != VoiceCallRuntimeState.INACTIVE &&
-                    it == LocalToolOption.VoiceCall
-            }
             val voiceCallConfigured = settings.getSelectedTTSProvider() != null
+            val localToolOptions = assistant.localTools.filterNot {
+                (voiceCallRuntimeState != VoiceCallRuntimeState.INACTIVE && it == LocalToolOption.VoiceCall) ||
+                    (it == LocalToolOption.Tts && (requestMode != ChatRequestMode.Normal || !voiceCallConfigured))
+            }
             val proactiveVoiceCallEnabled = voiceCallToolEnabled
             val momentScopeId = conversation.momentScopeId(assistant)
             val anonymousQuestionScopeId = conversation.personaScopeId(assistant)
@@ -1154,6 +1159,15 @@ class ChatService(
                 val taggedConversation = getConversationFlow(conversationId).value
                     .updateCurrentMessages(taggedMessages)
                 updateConversation(conversationId, taggedConversation)
+            }
+
+            if (requestMode == ChatRequestMode.Normal) {
+                chatVoiceReplyMaterializer.materialize(
+                    conversation = getConversationFlow(conversationId).value,
+                    generationBaseMessageIds = generationBaseMessageIds,
+                    settings = settings,
+                    onUpdate = { updateConversation(conversationId, it) },
+                )
             }
         }.onFailure {
             // 取消 Live Update 通知
@@ -2237,6 +2251,62 @@ class ChatService(
         }
     }
 
+    fun translateChatVoiceSegment(
+        conversationId: Uuid,
+        message: UIMessage,
+        segmentIndex: Int,
+        sourceText: String,
+        targetLanguage: Locale,
+    ) {
+        appScope.launch(Dispatchers.IO) {
+            try {
+                val settings = settingsStore.settingsFlow.first()
+                val loadingText = context.getString(R.string.translating)
+                val currentMessage = getConversationFlow(conversationId).value.messageNodes
+                    .asSequence()
+                    .flatMap { it.messages.asSequence() }
+                    .firstOrNull { it.id == message.id }
+                val cachedTranslation = currentMessage
+                    ?.chatVoiceReply()
+                    ?.segments
+                    ?.getOrNull(segmentIndex)
+                    ?.translation
+                if (cachedTranslation?.isNotBlank() == true && cachedTranslation != loadingText) {
+                    return@launch
+                }
+                if (sourceText.isBlank()) return@launch
+
+                updateChatVoiceSegmentTranslation(
+                    conversationId = conversationId,
+                    messageId = message.id,
+                    segmentIndex = segmentIndex,
+                    translationText = loadingText,
+                )
+                generationHandler.translateText(
+                    settings = settings,
+                    sourceText = sourceText,
+                    targetLanguage = targetLanguage,
+                ) { translatedText ->
+                    updateChatVoiceSegmentTranslation(
+                        conversationId = conversationId,
+                        messageId = message.id,
+                        segmentIndex = segmentIndex,
+                        translationText = translatedText,
+                    )
+                }.collect { }
+                saveConversation(conversationId, getConversationFlow(conversationId).value)
+            } catch (e: Exception) {
+                updateChatVoiceSegmentTranslation(
+                    conversationId = conversationId,
+                    messageId = message.id,
+                    segmentIndex = segmentIndex,
+                    translationText = null,
+                )
+                addError(e, conversationId, title = context.getString(R.string.error_title_translate_message))
+            }
+        }
+    }
+
     private fun updateTranslationField(
         conversationId: Uuid,
         messageId: Uuid,
@@ -2292,6 +2362,33 @@ class ChatService(
                 )
             } else {
                 node
+            }
+        }
+        updateConversation(conversationId, currentConversation.copy(messageNodes = updatedNodes))
+    }
+
+    private fun updateChatVoiceSegmentTranslation(
+        conversationId: Uuid,
+        messageId: Uuid,
+        segmentIndex: Int,
+        translationText: String?,
+    ) {
+        val currentConversation = getConversationFlow(conversationId).value
+        val updatedNodes = currentConversation.messageNodes.map { node ->
+            if (node.messages.none { it.id == messageId }) {
+                node
+            } else {
+                node.copy(
+                    messages = node.messages.map { message ->
+                        if (message.id == messageId) {
+                            message.updateChatVoiceReplySegment(segmentIndex) { segment ->
+                                segment.copy(translation = translationText?.takeIf { it.isNotBlank() })
+                            }
+                        } else {
+                            message
+                        }
+                    }
+                )
             }
         }
         updateConversation(conversationId, currentConversation.copy(messageNodes = updatedNodes))
@@ -2589,6 +2686,22 @@ class ChatService(
                 bubbleKey = bubbleKey,
                 translationText = null,
                 clearLegacyTranslation = clearLegacyTranslation,
+            )
+            saveConversation(conversationId, getConversationFlow(conversationId).value)
+        }
+    }
+
+    fun clearChatVoiceSegmentTranslation(
+        conversationId: Uuid,
+        messageId: Uuid,
+        segmentIndex: Int,
+    ) {
+        appScope.launch(Dispatchers.IO) {
+            updateChatVoiceSegmentTranslation(
+                conversationId = conversationId,
+                messageId = messageId,
+                segmentIndex = segmentIndex,
+                translationText = null,
             )
             saveConversation(conversationId, getConversationFlow(conversationId).value)
         }

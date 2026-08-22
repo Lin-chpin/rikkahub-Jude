@@ -74,6 +74,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.voice.voiceCallRecord
+import me.rerere.rikkahub.data.voice.chatVoiceReply
 import me.rerere.ai.ui.isEmptyUIMessage
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.File02
@@ -130,12 +131,15 @@ fun ChatMessage(
     onToggleFavorite: (() -> Unit)? = null,
     onTranslate: ((UIMessage, Locale) -> Unit)? = null,
     onClearTranslation: (UIMessage) -> Unit = {},
+    onTranslateChatVoiceSegment: ((UIMessage, Int, String, Locale) -> Unit)? = null,
+    onClearChatVoiceSegmentTranslation: ((UIMessage, Int) -> Unit)? = null,
     onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
     onOpenVoiceCallRecord: ((String) -> Unit)? = null,
     onUpdateTtsMessage: (messageId: kotlin.uuid.Uuid, transform: (UIMessage) -> UIMessage) -> Unit = { _, _ -> },
 ) {
     val message = node.messages[node.selectIndex]
+    val chatVoiceReply = message.chatVoiceReply()
     val voiceCallRecord = message.voiceCallRecord()
     if (voiceCallRecord != null) {
         if (voiceCallRecord.cardAnchor) {
@@ -202,35 +206,48 @@ fun ChatMessage(
             }
         }
         ProvideTextStyle(textStyle) {
-            MessagePartsBlock(
-                assistant = assistant,
-                role = message.role,
-                parts = if (message.role == MessageRole.ASSISTANT) {
-                    message.parts.withoutVoiceCallAudioTagsForChatDisplay()
-                } else {
-                    message.parts
-                },
-                annotations = message.annotations,
-                loading = loading,
-                showElevenLabsAudioTagAnnotations = false,
-                model = model,
-                onToolApproval = onToolApproval,
-                onToolAnswer = onToolAnswer,
-                onUserMessageClick = if (message.role == MessageRole.USER) onEdit else null,
-                onTtsSpeak = if (message.role == MessageRole.ASSISTANT) {
-                    { text ->
-                        chatTts.speak(
-                            message = message,
-                            text = text,
-                            onUpdateMessage = onUpdateTtsMessage,
-                        )
-                    }
-                } else {
-                    null
-                },
-            )
+            val onTtsSpeak: ((String) -> Unit)? = if (message.role == MessageRole.ASSISTANT) {
+                { text ->
+                    chatTts.speak(
+                        message = message,
+                        text = text,
+                        onUpdateMessage = onUpdateTtsMessage,
+                    )
+                }
+            } else {
+                null
+            }
+            if (chatVoiceReply != null && message.role == MessageRole.ASSISTANT) {
+                ChatVoiceReplyContent(
+                    message = message,
+                    reply = chatVoiceReply,
+                    assistant = assistant,
+                    loading = loading,
+                    onTtsSpeak = onTtsSpeak,
+                    onTranslateSegment = onTranslateChatVoiceSegment,
+                    onClearSegmentTranslation = onClearChatVoiceSegmentTranslation,
+                )
+            } else {
+                MessagePartsBlock(
+                    assistant = assistant,
+                    role = message.role,
+                    parts = if (message.role == MessageRole.ASSISTANT) {
+                        message.parts.withoutVoiceCallAudioTagsForChatDisplay()
+                    } else {
+                        message.parts
+                    },
+                    annotations = message.annotations,
+                    loading = loading,
+                    showElevenLabsAudioTagAnnotations = false,
+                    model = model,
+                    onToolApproval = onToolApproval,
+                    onToolAnswer = onToolAnswer,
+                    onUserMessageClick = if (message.role == MessageRole.USER) onEdit else null,
+                    onTtsSpeak = onTtsSpeak,
+                )
+            }
 
-            message.translation?.let { translation ->
+            message.translation?.takeIf { chatVoiceReply == null }?.let { translation ->
                 CollapsibleTranslationText(
                     content = translation,
                     onClickCitation = {}
@@ -267,7 +284,7 @@ fun ChatMessage(
                             onUpdateMessage = onUpdateTtsMessage,
                         )
                     },
-                    onTranslate = onTranslate,
+                    onTranslate = onTranslate.takeIf { chatVoiceReply == null },
                     onClearTranslation = onClearTranslation
                 )
             }
@@ -778,7 +795,7 @@ private fun AssistantMarkdownBlock(
 }
 
 @Composable
-private fun AssistantTextContent(
+internal fun AssistantTextContent(
     content: String,
     onClickCitation: (String) -> Unit,
     selectionEnabled: Boolean,

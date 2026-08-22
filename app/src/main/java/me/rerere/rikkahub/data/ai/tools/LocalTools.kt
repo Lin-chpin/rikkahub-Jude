@@ -22,10 +22,10 @@ import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.datastore.SettingsStore
-import me.rerere.rikkahub.data.event.AppEvent
-import me.rerere.rikkahub.data.event.AppEventBus
 import me.rerere.rikkahub.data.repository.MomentRepository
 import me.rerere.rikkahub.data.repository.AnonymousQuestionRepository
+import me.rerere.rikkahub.data.voice.CHAT_VOICE_REPLY_TOOL_NAME
+import me.rerere.rikkahub.data.voice.CHAT_VOICE_REPLY_TOOL_RESULT_PROMPT
 import me.rerere.rikkahub.data.voice.VOICE_CALL_UNAVAILABLE_MESSAGE
 import me.rerere.rikkahub.local.LocalBuildIntegration
 import me.rerere.rikkahub.service.UsageReminderService
@@ -82,7 +82,6 @@ sealed class LocalToolOption {
 
 class LocalTools(
     private val context: Context,
-    private val eventBus: AppEventBus,
     private val weatherRepository: WeatherRepository,
     private val settingsStore: SettingsStore,
     private val momentRepository: MomentRepository,
@@ -245,32 +244,20 @@ class LocalTools(
 
     val ttsTool by lazy {
         Tool(
-            name = "text_to_speech",
+            name = CHAT_VOICE_REPLY_TOOL_NAME,
             description = """
-                Speak text aloud to the user using the device's text-to-speech engine.
-                Use this when the user asks you to read something aloud, or when audio output is appropriate.
-                The tool returns immediately; audio plays in the background on the device.
-                Provide natural, readable text without markdown formatting.
+                Switch the current reply into voice-message composition mode.
+                Call this tool exactly once when all or part of your reply would feel more natural as one or more voice messages.
+                After calling it, you will receive the formatting instructions for a complete mixed text-and-voice reply.
+                Do not call it merely because the user mentioned audio, and do not call it again for additional voice segments in the same reply.
             """.trimIndent().replace("\n", " "),
             parameters = {
                 InputSchema.Obj(
-                    properties = buildJsonObject {
-                        put("text", buildJsonObject {
-                            put("type", "string")
-                            put("description", "The text to speak aloud")
-                        })
-                    },
-                    required = listOf("text")
+                    properties = buildJsonObject { }
                 )
             },
             execute = {
-                val text = it.jsonObject["text"]?.jsonPrimitive?.contentOrNull
-                    ?: error("text is required")
-                eventBus.emit(AppEvent.Speak(text))
-                val payload = buildJsonObject {
-                    put("success", true)
-                }
-                listOf(UIMessagePart.Text(payload.toString()))
+                listOf(UIMessagePart.Text(CHAT_VOICE_REPLY_TOOL_RESULT_PROMPT.trimIndent()))
             }
         )
     }
