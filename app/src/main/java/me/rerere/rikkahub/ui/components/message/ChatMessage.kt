@@ -9,7 +9,6 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -46,7 +45,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -75,7 +73,9 @@ import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.voice.voiceCallRecord
 import me.rerere.rikkahub.data.voice.chatVoiceReply
-import me.rerere.rikkahub.data.voice.hasPendingChatVoiceReply
+import me.rerere.rikkahub.data.voice.chatVoiceReplyDraft
+import me.rerere.rikkahub.data.voice.hasChatVoiceReplyTool
+import me.rerere.rikkahub.data.voice.hasChatVoiceReplyToolError
 import me.rerere.ai.ui.isEmptyUIMessage
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.File02
@@ -141,7 +141,11 @@ fun ChatMessage(
 ) {
     val message = node.messages[node.selectIndex]
     val chatVoiceReply = message.chatVoiceReply()
-    val pendingChatVoiceReply = message.hasPendingChatVoiceReply()
+    val chatVoiceReplyDraft = message.chatVoiceReplyDraft()
+    val pendingChatVoiceReply = chatVoiceReply == null &&
+        !message.hasChatVoiceReplyToolError() &&
+        ((chatVoiceReplyDraft != null && (message.hasChatVoiceReplyTool() || loading)) ||
+            (message.hasChatVoiceReplyTool() && loading))
     val voiceCallRecord = message.voiceCallRecord()
     if (voiceCallRecord != null) {
         if (voiceCallRecord.cardAnchor) {
@@ -185,7 +189,7 @@ fun ChatMessage(
         horizontalAlignment = if (message.role == MessageRole.USER) Alignment.End else Alignment.Start,
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        if (!pendingChatVoiceReply && !message.parts.isEmptyUIMessage()) {
+        if (!message.parts.isEmptyUIMessage()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth(),
@@ -207,7 +211,7 @@ fun ChatMessage(
                 )
             }
         }
-        if (!pendingChatVoiceReply) ProvideTextStyle(textStyle) {
+        ProvideTextStyle(textStyle) {
             val onTtsSpeak: ((String) -> Unit)? = if (message.role == MessageRole.ASSISTANT) {
                 { text ->
                     chatTts.speak(
@@ -219,37 +223,52 @@ fun ChatMessage(
             } else {
                 null
             }
-            if (chatVoiceReply != null && message.role == MessageRole.ASSISTANT) {
-                ChatVoiceReplyMessageContent(
-                    message = message,
-                    reply = chatVoiceReply,
-                    assistant = assistant,
-                    model = model,
-                    loading = loading,
-                    onTtsSpeak = onTtsSpeak,
-                    onTranslateSegment = onTranslateChatVoiceSegment,
-                    onClearSegmentTranslation = onClearChatVoiceSegmentTranslation,
-                    onToolApproval = onToolApproval,
-                    onToolAnswer = onToolAnswer,
-                )
-            } else {
-                MessagePartsBlock(
-                    assistant = assistant,
-                    role = message.role,
-                    parts = if (message.role == MessageRole.ASSISTANT) {
-                        message.parts.withoutVoiceCallAudioTagsForChatDisplay()
-                    } else {
-                        message.parts
-                    },
-                    annotations = message.annotations,
-                    loading = loading,
-                    showElevenLabsAudioTagAnnotations = false,
-                    model = model,
-                    onToolApproval = onToolApproval,
-                    onToolAnswer = onToolAnswer,
-                    onUserMessageClick = if (message.role == MessageRole.USER) onEdit else null,
-                    onTtsSpeak = onTtsSpeak,
-                )
+            when {
+                chatVoiceReply != null && message.role == MessageRole.ASSISTANT -> {
+                    ChatVoiceReplyMessageContent(
+                        message = message,
+                        reply = chatVoiceReply,
+                        assistant = assistant,
+                        model = model,
+                        loading = loading,
+                        onTtsSpeak = onTtsSpeak,
+                        onTranslateSegment = onTranslateChatVoiceSegment,
+                        onClearSegmentTranslation = onClearChatVoiceSegmentTranslation,
+                        onToolApproval = onToolApproval,
+                        onToolAnswer = onToolAnswer,
+                    )
+                }
+
+                pendingChatVoiceReply && message.role == MessageRole.ASSISTANT -> {
+                    ChatVoiceReplyPendingContent(
+                        textSegments = chatVoiceReplyDraft?.segments.orEmpty().filter {
+                            it.type == me.rerere.ai.ui.ChatVoiceReplySegmentType.TEXT
+                        }.takeIf { loading }.orEmpty(),
+                        assistant = assistant,
+                        loading = loading,
+                        onTtsSpeak = onTtsSpeak,
+                    )
+                }
+
+                else -> {
+                    MessagePartsBlock(
+                        assistant = assistant,
+                        role = message.role,
+                        parts = if (message.role == MessageRole.ASSISTANT) {
+                            message.parts.withoutVoiceCallAudioTagsForChatDisplay()
+                        } else {
+                            message.parts
+                        },
+                        annotations = message.annotations,
+                        loading = loading,
+                        showElevenLabsAudioTagAnnotations = false,
+                        model = model,
+                        onToolApproval = onToolApproval,
+                        onToolAnswer = onToolAnswer,
+                        onUserMessageClick = if (message.role == MessageRole.USER) onEdit else null,
+                        onTtsSpeak = onTtsSpeak,
+                    )
+                }
             }
 
             message.translation?.takeIf { chatVoiceReply == null }?.let { translation ->
@@ -500,7 +519,7 @@ internal fun MessagePartsBlock(
                                 Surface(
                                     modifier = Modifier.animateContentSize(),
                                     shape = RoundedCornerShape(16.dp),
-                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    color = assistantMessageBubbleColor(),
                                 ) {
                                     Column(modifier = Modifier.padding(8.dp)) {
                                         AssistantTextContent(
@@ -868,12 +887,7 @@ private fun AssistantTextParagraphs(
     val tts = LocalTTSState.current
     val isAvailable by tts.isAvailable.collectAsState()
     val displaySetting = LocalSettings.current.displaySetting
-    val isDark = isSystemInDarkTheme()
-    val paragraphBubbleColor = if (isDark) {
-        MaterialTheme.colorScheme.surfaceContainerHigh
-    } else {
-        Color(0xFFFFF7ED)
-    }
+    val paragraphBubbleColor = assistantMessageBubbleColor()
     val segments = remember(content) {
         content.splitAssistantTextSegments()
     }

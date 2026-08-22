@@ -281,8 +281,15 @@
   <string name="chat_message_tool_compose_voice_reply">Compose voice messages</string>
   <string name="chat_voice_reply_play">Play voice message</string>
   <string name="chat_voice_reply_pause">Pause voice message</string>
-  <string name="chat_voice_reply_show_text">Show text</string>
-  <string name="chat_voice_reply_hide_text">Hide text</string>
+    <string name="chat_voice_reply_show_text">Show text</string>
+    <string name="chat_voice_reply_hide_text">Hide text</string>
+    <string name="chat_voice_reply_error_no_provider">No TTS provider is configured. Configure a voice model in Settings first.</string>
+    <string name="chat_voice_reply_error_authentication">The TTS provider rejected authentication. Check the API key and provider settings.</string>
+    <string name="chat_voice_reply_error_balance">The TTS provider has insufficient balance or quota.</string>
+    <string name="chat_voice_reply_error_rate_limit">The TTS provider is rate-limiting requests. Try again later.</string>
+    <string name="chat_voice_reply_error_network">The TTS request failed because of a network problem.</string>
+    <string name="chat_voice_reply_error_generation">The voice message could not be generated. The reply was kept as text.</string>
+    <string name="chat_voice_reply_error_tool_failure">The voice-message tool failed. The reply was kept as text.</string>
   <string name="chat_message_tool_create_memory">Created memory</string>
   <string name="chat_message_tool_delete_memory">Deleted memory</string>
   <string name="chat_message_tool_denied">Denied</string>

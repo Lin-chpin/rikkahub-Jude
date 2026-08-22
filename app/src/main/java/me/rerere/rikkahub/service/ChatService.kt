@@ -94,6 +94,8 @@ import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.voice.VOICE_CALL_UNAVAILABLE_MESSAGE
 import me.rerere.rikkahub.data.voice.ChatVoiceReplyMaterializer
+import me.rerere.rikkahub.data.voice.inspectChatVoiceReplyMaterialization
+import me.rerere.rikkahub.data.voice.toDiagnosticDetails
 import me.rerere.rikkahub.data.voice.chatVoiceReply
 import me.rerere.rikkahub.data.voice.updateChatVoiceReplySegment
 import me.rerere.rikkahub.data.voice.VoiceCallCompletion
@@ -1162,11 +1164,44 @@ class ChatService(
             }
 
             if (requestMode == ChatRequestMode.Normal) {
-                chatVoiceReplyMaterializer.materialize(
+                compressionDiagnostics.record(
+                    conversationId = conversationId,
+                    stage = "voice_reply.materialize.before",
+                    conversation = getConversationFlow(conversationId).value,
+                    details = "generationBaseMessages=${generationBaseMessageIds.size}",
+                )
+                val materializationInspection = inspectChatVoiceReplyMaterialization(
                     conversation = getConversationFlow(conversationId).value,
                     generationBaseMessageIds = generationBaseMessageIds,
-                    settings = settings,
-                    onUpdate = { updateConversation(conversationId, it) },
+                )
+                compressionDiagnostics.record(
+                    conversationId = conversationId,
+                    stage = "voice_reply.materialize.target",
+                    conversation = getConversationFlow(conversationId).value,
+                    details = materializationInspection.toDiagnosticDetails(),
+                )
+                try {
+                    chatVoiceReplyMaterializer.materialize(
+                        conversation = getConversationFlow(conversationId).value,
+                        generationBaseMessageIds = generationBaseMessageIds,
+                        settings = settings,
+                        onUpdate = { updateConversation(conversationId, it) },
+                    )
+                } catch (error: Throwable) {
+                    if (error !is CancellationException) {
+                        compressionDiagnostics.record(
+                            conversationId = conversationId,
+                            stage = "voice_reply.materialize.exception",
+                            conversation = getConversationFlow(conversationId).value,
+                            details = "type=${error.javaClass.simpleName}",
+                        )
+                    }
+                    throw error
+                }
+                compressionDiagnostics.record(
+                    conversationId = conversationId,
+                    stage = "voice_reply.materialize.after",
+                    conversation = getConversationFlow(conversationId).value,
                 )
             }
         }.onFailure {

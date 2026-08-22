@@ -9,6 +9,8 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.voice.CHAT_VOICE_REPLY_TOOL_NAME
+import me.rerere.rikkahub.data.voice.chatVoiceReplyError
 import java.util.Locale
 
 @Composable
@@ -25,7 +27,12 @@ internal fun ChatVoiceReplyMessageContent(
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)?,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        val supportingParts = message.parts.filterNot { it is UIMessagePart.Text }
+        val supportingParts = message.parts.filterNot { part ->
+            part is UIMessagePart.Text ||
+                (part is UIMessagePart.Tool &&
+                    part.toolName == CHAT_VOICE_REPLY_TOOL_NAME &&
+                    part.chatVoiceReplyError() == null)
+        }
         if (supportingParts.isNotEmpty()) {
             MessagePartsBlock(
                 assistant = assistant,

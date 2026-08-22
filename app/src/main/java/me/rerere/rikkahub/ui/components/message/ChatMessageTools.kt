@@ -82,6 +82,8 @@ import me.rerere.rikkahub.data.event.AppEvent
 import me.rerere.rikkahub.data.event.AppEventBus
 import me.rerere.rikkahub.data.model.MemoryScope
 import me.rerere.rikkahub.data.repository.MemoryRepository
+import me.rerere.rikkahub.data.voice.chatVoiceReplyError
+import me.rerere.rikkahub.data.voice.userMessage
 import me.rerere.rikkahub.ui.components.richtext.HighlightCodeBlock
 import me.rerere.rikkahub.ui.components.richtext.MarkdownBlock
 import me.rerere.rikkahub.ui.components.richtext.ZoomableAsyncImage
@@ -155,11 +157,14 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
     }
     var showResult by remember { mutableStateOf(false) }
     var showDenyDialog by remember { mutableStateOf(false) }
-    var expanded by remember(tool.toolName) { mutableStateOf(tool.toolName != ToolNames.TTS) }
     val eventBus: AppEventBus = koinInject()
     val scope = rememberCoroutineScope()
     val isPending = tool.approvalState is ToolApprovalState.Pending
     val isDenied = tool.approvalState is ToolApprovalState.Denied
+    val voiceReplyError = tool.chatVoiceReplyError()
+    var expanded by remember(tool.toolName, voiceReplyError) {
+        mutableStateOf(tool.toolName != ToolNames.TTS || voiceReplyError != null)
+    }
     val arguments = tool.inputAsJson()
     val memoryAction = arguments.getStringContent("action")
     val content = if (tool.isExecuted) {
@@ -214,7 +219,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
             (content?.jsonObject?.get("items")?.jsonArray?.isNotEmpty() == true)
 
         ToolNames.SCRAPE_WEB -> arguments.getStringContent("url") != null
-        ToolNames.TTS -> arguments.getStringContent("text") != null
+        ToolNames.TTS -> arguments.getStringContent("text") != null || voiceReplyError != null
         else -> false
     } || isDenied || images.isNotEmpty()
 
@@ -275,7 +280,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
         } else {
             null
         },
-        onClick = if (content != null || isPending || images.isNotEmpty()) {
+        onClick = if (content != null || voiceReplyError != null || isPending || images.isNotEmpty()) {
             { showResult = true }
         } else {
             null
@@ -335,29 +340,37 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                         )
                     }
                     if (tool.toolName == ToolNames.TTS) {
-                        val text = arguments.getStringContent("text") ?: ""
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
+                        if (voiceReplyError != null) {
                             Text(
-                                text = text,
+                                text = voiceReplyError.userMessage(),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f),
+                                color = MaterialTheme.colorScheme.error,
                             )
-                            FilledTonalIconButton(
-                                onClick = { scope.launch { eventBus.emit(AppEvent.Speak(text)) } },
-                                modifier = Modifier.size(28.dp),
+                        } else {
+                            val text = arguments.getStringContent("text") ?: ""
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
                             ) {
-                                Icon(
-                                    imageVector = HugeIcons.Refresh01,
-                                    contentDescription = "Replay",
-                                    modifier = Modifier.size(14.dp),
+                                Text(
+                                    text = text,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
                                 )
+                                FilledTonalIconButton(
+                                    onClick = { scope.launch { eventBus.emit(AppEvent.Speak(text)) } },
+                                    modifier = Modifier.size(28.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = HugeIcons.Refresh01,
+                                        contentDescription = "Replay",
+                                        modifier = Modifier.size(14.dp),
+                                    )
+                                }
                             }
                         }
                     }

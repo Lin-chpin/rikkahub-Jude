@@ -80,7 +80,7 @@ internal fun ChatVoiceMessageBubble(
 
     Surface(
         shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = assistantMessageBubbleColor(),
     ) {
         Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
             Row(
@@ -160,30 +160,36 @@ internal fun ChatVoiceMessageBubble(
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut(),
             ) {
-                Column {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = segment.text,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    if (onTranslate != null && onClearTranslation != null) {
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            TranslateMessageButton(
-                                onTranslate = onTranslate,
-                                onClearTranslation = onClearTranslation,
-                                showLabel = true,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = segment.text,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (onTranslate != null && onClearTranslation != null) {
+                            Row(modifier = Modifier.fillMaxWidth()) {
+                                TranslateMessageButton(
+                                    onTranslate = onTranslate,
+                                    onClearTranslation = onClearTranslation,
+                                    showLabel = true,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        segment.translation?.takeIf { it.isNotBlank() }?.let { translation ->
+                            CollapsibleTranslationText(
+                                content = translation,
+                                onClickCitation = {},
+                                showHeader = false,
+                                showCollapseControl = false,
                             )
                         }
-                    }
-                    segment.translation?.takeIf { it.isNotBlank() }?.let { translation ->
-                        CollapsibleTranslationText(
-                            content = translation,
-                            onClickCitation = {},
-                            showHeader = false,
-                            showCollapseControl = false,
-                        )
                     }
                 }
             }
