@@ -62,6 +62,20 @@ fun parseChatVoiceReply(text: String): ParsedChatVoiceReply? {
 fun UIMessage.chatVoiceReply(): UIMessageAnnotation.ChatVoiceReply? =
     annotations.filterIsInstance<UIMessageAnnotation.ChatVoiceReply>().firstOrNull()
 
+fun UIMessage.hasPendingChatVoiceReply(): Boolean {
+    if (chatVoiceReply() != null) return false
+    val hasExecutedVoiceTool = parts.any { part ->
+        part is UIMessagePart.Tool &&
+            part.toolName == CHAT_VOICE_REPLY_TOOL_NAME &&
+            part.isExecuted
+    }
+    if (!hasExecutedVoiceTool) return false
+    return parts
+        .filterIsInstance<UIMessagePart.Text>()
+        .joinToString("\n") { it.text }
+        .contains("【语音条】")
+}
+
 fun UIMessage.withChatVoiceReply(reply: ParsedChatVoiceReply): UIMessage {
     var textReplaced = false
     val updatedParts = parts.mapNotNull { part ->

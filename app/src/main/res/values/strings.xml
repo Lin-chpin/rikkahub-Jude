@@ -278,6 +278,11 @@
   <string name="chat_message_tool_call_title">Tool Call</string>
   <string name="chat_message_tool_clipboard_read">Read clipboard</string>
   <string name="chat_message_tool_clipboard_write">Write clipboard</string>
+  <string name="chat_message_tool_compose_voice_reply">Compose voice messages</string>
+  <string name="chat_voice_reply_play">Play voice message</string>
+  <string name="chat_voice_reply_pause">Pause voice message</string>
+  <string name="chat_voice_reply_show_text">Show text</string>
+  <string name="chat_voice_reply_hide_text">Hide text</string>
   <string name="chat_message_tool_create_memory">Created memory</string>
   <string name="chat_message_tool_delete_memory">Deleted memory</string>
   <string name="chat_message_tool_denied">Denied</string>

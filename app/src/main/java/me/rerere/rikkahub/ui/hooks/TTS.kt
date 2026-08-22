@@ -15,7 +15,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicLong
 import me.rerere.tts.model.PlaybackState
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.getSelectedTTSProvider
@@ -93,6 +95,9 @@ interface CustomTtsState {
     /** Unified playback state (status, position, duration, speed, etc.) */
     val playbackState: StateFlow<PlaybackState>
 
+    /** Identifies the latest playback request so message-level controls do not follow another message. */
+    val playbackSessionId: StateFlow<Long>
+
     /**
      * Speaks the given text using the selected TTS provider.
      * Long texts will be automatically chunked and queued unless [chunked] is false.
@@ -109,7 +114,7 @@ interface CustomTtsState {
     /** Stops the current speech and clears the queue. */
     fun stop()
     fun playCachedAudio(audioUri: String, format: String, sampleRate: Int? = null)
-    fun playCachedAudios(audios: List<CachedAudioSource>, flushCalled: Boolean = true)
+    fun playCachedAudios(audios: List<CachedAudioSource>, flushCalled: Boolean = true): Long
 
     /** Pauses the current playback. */
     fun pause()
@@ -152,6 +157,15 @@ private class CustomTtsStateImpl(
     override val currentChunk: StateFlow<Int> get() = controller.currentChunk
     override val totalChunks: StateFlow<Int> get() = controller.totalChunks
     override val playbackState: StateFlow<PlaybackState> get() = controller.playbackState
+    private val playbackSessionCounter = AtomicLong(0L)
+    private val _playbackSessionId = MutableStateFlow(0L)
+    override val playbackSessionId: StateFlow<Long> get() = _playbackSessionId
+
+    private fun beginPlaybackSession(): Long {
+        val sessionId = playbackSessionCounter.incrementAndGet()
+        _playbackSessionId.value = sessionId
+        return sessionId
+    }
 
     fun updateProvider(provider: TTSProviderSetting?) {
         controller.setProvider(provider)
@@ -165,6 +179,7 @@ private class CustomTtsStateImpl(
         onAudioReadyWithChunk: (suspend (String, Int, Int, TTSResponse) -> Unit)?,
         emotion: String?,
     ) {
+        beginPlaybackSession()
         val settings = settingsStore.settingsFlow.value
         val processed = text.stripMarkdown().let {
             if (settings.displaySetting.ttsEnglishOnly) {
@@ -188,10 +203,12 @@ private class CustomTtsStateImpl(
     }
 
     override fun stop() {
+        beginPlaybackSession()
         controller.stop()
     }
 
     override fun playCachedAudio(audioUri: String, format: String, sampleRate: Int?) {
+        beginPlaybackSession()
         Log.i(TAG, "Cached audio playback requested: uri=" + audioUri + ", format=" + format + ", sampleRate=" + sampleRate)
         scope.launch {
             val response = withContext(Dispatchers.IO) {
@@ -226,8 +243,9 @@ private class CustomTtsStateImpl(
         }
     }
 
-    override fun playCachedAudios(audios: List<CachedAudioSource>, flushCalled: Boolean) {
-        if (audios.isEmpty()) return
+    override fun playCachedAudios(audios: List<CachedAudioSource>, flushCalled: Boolean): Long {
+        val sessionId = beginPlaybackSession()
+        if (audios.isEmpty()) return sessionId
         scope.launch {
             val responses = withContext(Dispatchers.IO) {
                 audios.mapNotNull { audio ->
@@ -238,6 +256,7 @@ private class CustomTtsStateImpl(
                 controller.playCachedAudioSequence(responses, flush = flushCalled)
             }
         }
+        return sessionId
     }
 
     private fun readCachedAudio(audioUri: String, format: String, sampleRate: Int?): TTSResponse? = runCatching {

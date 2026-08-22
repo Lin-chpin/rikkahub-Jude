@@ -75,6 +75,7 @@ import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.voice.voiceCallRecord
 import me.rerere.rikkahub.data.voice.chatVoiceReply
+import me.rerere.rikkahub.data.voice.hasPendingChatVoiceReply
 import me.rerere.ai.ui.isEmptyUIMessage
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.File02
@@ -140,6 +141,7 @@ fun ChatMessage(
 ) {
     val message = node.messages[node.selectIndex]
     val chatVoiceReply = message.chatVoiceReply()
+    val pendingChatVoiceReply = message.hasPendingChatVoiceReply()
     val voiceCallRecord = message.voiceCallRecord()
     if (voiceCallRecord != null) {
         if (voiceCallRecord.cardAnchor) {
@@ -183,7 +185,7 @@ fun ChatMessage(
         horizontalAlignment = if (message.role == MessageRole.USER) Alignment.End else Alignment.Start,
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        if (!message.parts.isEmptyUIMessage()) {
+        if (!pendingChatVoiceReply && !message.parts.isEmptyUIMessage()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth(),
@@ -205,7 +207,7 @@ fun ChatMessage(
                 )
             }
         }
-        ProvideTextStyle(textStyle) {
+        if (!pendingChatVoiceReply) ProvideTextStyle(textStyle) {
             val onTtsSpeak: ((String) -> Unit)? = if (message.role == MessageRole.ASSISTANT) {
                 { text ->
                     chatTts.speak(
@@ -218,14 +220,17 @@ fun ChatMessage(
                 null
             }
             if (chatVoiceReply != null && message.role == MessageRole.ASSISTANT) {
-                ChatVoiceReplyContent(
+                ChatVoiceReplyMessageContent(
                     message = message,
                     reply = chatVoiceReply,
                     assistant = assistant,
+                    model = model,
                     loading = loading,
                     onTtsSpeak = onTtsSpeak,
                     onTranslateSegment = onTranslateChatVoiceSegment,
                     onClearSegmentTranslation = onClearChatVoiceSegmentTranslation,
+                    onToolApproval = onToolApproval,
+                    onToolAnswer = onToolAnswer,
                 )
             } else {
                 MessagePartsBlock(
@@ -255,7 +260,9 @@ fun ChatMessage(
             }
         }
 
-        val showActions = if (lastMessage) {
+        val showActions = if (pendingChatVoiceReply) {
+            false
+        } else if (lastMessage) {
             !loading
         } else {
             message.parts.isEmptyUIMessage().not()
@@ -290,8 +297,10 @@ fun ChatMessage(
             }
         }
 
-        ProvideTextStyle(textStyle) {
-            ChatMessageNerdLine(message = message)
+        if (!pendingChatVoiceReply) {
+            ProvideTextStyle(textStyle) {
+                ChatMessageNerdLine(message = message)
+            }
         }
     }
     if (showActionsSheet) {
@@ -338,7 +347,7 @@ fun ChatMessage(
 }
 @OptIn(FlowPreview::class)
 @Composable
-private fun MessagePartsBlock(
+internal fun MessagePartsBlock(
     assistant: Assistant?,
     role: MessageRole,
     model: Model?,

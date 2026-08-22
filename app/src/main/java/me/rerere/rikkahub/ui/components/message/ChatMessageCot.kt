@@ -2,7 +2,6 @@ package me.rerere.rikkahub.ui.components.message
 
 import androidx.compose.ui.util.fastForEachIndexed
 import me.rerere.ai.ui.UIMessagePart
-import me.rerere.rikkahub.data.voice.CHAT_VOICE_REPLY_TOOL_NAME
 
 /**
  * 思考步骤类型，用于分组 Reasoning 和 Tool
@@ -49,9 +48,7 @@ fun List<UIMessagePart>.groupMessageParts(): List<MessagePartBlock> {
             }
 
             is UIMessagePart.Tool -> {
-                if (part.toolName != CHAT_VOICE_REPLY_TOOL_NAME) {
-                    currentThinkingSteps.add(ThinkingStep.ToolStep(part))
-                }
+                currentThinkingSteps.add(ThinkingStep.ToolStep(part))
             }
 
             else -> {

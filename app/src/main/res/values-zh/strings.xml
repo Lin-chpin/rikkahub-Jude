@@ -247,6 +247,11 @@
   <string name="chat_message_tool_call_title">工具调用</string>
   <string name="chat_message_tool_clipboard_read">读取剪贴板</string>
   <string name="chat_message_tool_clipboard_write">写入剪贴板</string>
+  <string name="chat_message_tool_compose_voice_reply">生成语音条回复</string>
+  <string name="chat_voice_reply_play">播放语音消息</string>
+  <string name="chat_voice_reply_pause">暂停语音消息</string>
+  <string name="chat_voice_reply_show_text">显示文字</string>
+  <string name="chat_voice_reply_hide_text">隐藏文字</string>
   <string name="chat_message_tool_create_memory">创建了记忆</string>
   <string name="chat_message_tool_delete_memory">删除了记忆</string>
   <string name="chat_message_tool_denied">已拒绝</string>

@@ -19,54 +19,64 @@ class ChatVoiceReplyMaterializer(
         settings: Settings,
     ) {
         val currentMessages = conversation.currentMessages
-        val toolMessageIndex = currentMessages.indexOfLast { message ->
-            message.id !in generationBaseMessageIds && message.parts.any { part ->
-                part is UIMessagePart.Tool &&
-                    part.toolName == CHAT_VOICE_REPLY_TOOL_NAME &&
-                    part.isExecuted
+        val target = findChatVoiceReplyMaterializationTarget(
+            messages = currentMessages,
+            generationBaseMessageIds = generationBaseMessageIds,
+        ) ?: return
+        val replyMessage = target.replyMessage
+        val parsedReply = target.parsedReply
+        var materialized = conversation.updateReplyMessage(replyMessage.id) { message ->
+            message.withChatVoiceReply(parsedReply)
+        }
+
+        settings.getSelectedTTSProvider()?.let { provider ->
+            parsedReply.segments.forEachIndexed { segmentIndex, segment ->
+                if (segment.type != ChatVoiceReplySegmentType.VOICE) return@forEachIndexed
+                val audioSegments = audioGenerator.generate(
+                    text = segment.text,
+                    provider = provider,
+                    englishOnly = settings.displaySetting.ttsEnglishOnly,
+                )
+                materialized = materialized.updateReplyMessage(replyMessage.id) { message ->
+                    message.updateChatVoiceReplySegment(segmentIndex) { currentSegment ->
+                        currentSegment.copy(audioSegments = audioSegments)
+                    }
+                }
             }
         }
-        if (toolMessageIndex < 0) return
-
-        val replyMessage = currentMessages
-            .drop(toolMessageIndex + 1)
-            .firstOrNull { it.role == MessageRole.ASSISTANT && it.toText().isNotBlank() }
-            ?: return
-        val parsedReply = parseChatVoiceReply(replyMessage.toText()) ?: return
-        val toolMessageId = currentMessages[toolMessageIndex].id
-        var materialized = conversation.copy(
-            messageNodes = conversation.messageNodes.mapNotNull { node ->
-                when {
-                    node.currentMessage.id == toolMessageId -> null
-                    node.messages.any { it.id == replyMessage.id } -> node.copy(
-                        messages = node.messages.map { message ->
-                            if (message.id == replyMessage.id) {
-                                message.withChatVoiceReply(parsedReply)
-                            } else {
-                                message
-                            }
-                        }
-                    )
-                    else -> node
-                }
-            }
-        )
         onUpdate(materialized)
+    }
+}
 
-        val provider = settings.getSelectedTTSProvider() ?: return
-        parsedReply.segments.forEachIndexed { segmentIndex, segment ->
-            if (segment.type != ChatVoiceReplySegmentType.VOICE) return@forEachIndexed
-            val audioSegments = audioGenerator.generate(
-                text = segment.text,
-                provider = provider,
-                englishOnly = settings.displaySetting.ttsEnglishOnly,
+internal data class ChatVoiceReplyMaterializationTarget(
+    val replyMessage: UIMessage,
+    val parsedReply: ParsedChatVoiceReply,
+)
+
+internal fun findChatVoiceReplyMaterializationTarget(
+    messages: List<UIMessage>,
+    generationBaseMessageIds: Set<Uuid>,
+): ChatVoiceReplyMaterializationTarget? {
+    val toolMessageIndex = messages.indexOfLast { message ->
+        message.id !in generationBaseMessageIds && message.parts.any { part ->
+            part is UIMessagePart.Tool &&
+                part.toolName == CHAT_VOICE_REPLY_TOOL_NAME &&
+                part.isExecuted
+        }
+    }
+    if (toolMessageIndex < 0) return null
+
+    val candidates = buildList {
+        add(messages[toolMessageIndex])
+        addAll(messages.drop(toolMessageIndex + 1))
+    }
+    return candidates.firstNotNullOfOrNull { message ->
+        if (message.role != MessageRole.ASSISTANT) return@firstNotNullOfOrNull null
+        parseChatVoiceReply(message.toText())?.let { parsedReply ->
+            ChatVoiceReplyMaterializationTarget(
+                replyMessage = message,
+                parsedReply = parsedReply,
             )
-            materialized = materialized.updateReplyMessage(replyMessage.id) { message ->
-                message.updateChatVoiceReplySegment(segmentIndex) { currentSegment ->
-                    currentSegment.copy(audioSegments = audioSegments)
-                }
-            }
-            onUpdate(materialized)
         }
     }
 }

@@ -155,7 +155,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
     }
     var showResult by remember { mutableStateOf(false) }
     var showDenyDialog by remember { mutableStateOf(false) }
-    var expanded by remember { mutableStateOf(true) }
+    var expanded by remember(tool.toolName) { mutableStateOf(tool.toolName != ToolNames.TTS) }
     val eventBus: AppEventBus = koinInject()
     val scope = rememberCoroutineScope()
     val isPending = tool.approvalState is ToolApprovalState.Pending
@@ -194,12 +194,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
             else -> stringResource(R.string.chat_message_tool_call_generic, tool.toolName)
         }
 
-        ToolNames.TTS -> {
-            val preview = arguments.getStringContent("text")?.let { text ->
-                if (text.length > 24) text.take(24) + "…" else text
-            } ?: ""
-            "Speaking: $preview"
-        }
+        ToolNames.TTS -> stringResource(R.string.chat_message_tool_compose_voice_reply)
 
         ToolNames.USE_SKILL -> {
             val skillName = arguments.getStringContent("name") ?: ""
