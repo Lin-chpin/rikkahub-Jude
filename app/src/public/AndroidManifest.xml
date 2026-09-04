@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
+  <application>
+    <activity
+      android:name=".personal.heartbeat.HeartbeatSettingsActivity"
+      android:exported="false"
+      android:label="@string/heartbeat_settings_title"
+      android:theme="@style/Theme.Rikkahub"
+      android:windowSoftInputMode="adjustResize" />
+
+    <service
+      android:name=".personal.heartbeat.HeartbeatForegroundService"
+      android:exported="false"
+      android:foregroundServiceType="specialUse">
+      <property
+        android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+        android:value="local scheduled personal assistant heartbeat" />
+    </service>
+
+    <receiver
+      android:name=".personal.heartbeat.HeartbeatAlarmReceiver"
+      android:exported="false" />
+
+    <receiver
+      android:name=".personal.heartbeat.HeartbeatBootReceiver"
+      android:exported="false">
+      <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED" />
+        <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+      </intent-filter>
+    </receiver>
+  </application>
+</manifest>
