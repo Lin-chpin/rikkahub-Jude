@@ -11,6 +11,10 @@ import androidx.compose.runtime.tooling.ComposeStackTraceMode
 import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import com.google.firebase.remoteconfig.FirebaseRemoteConfig
 import com.google.firebase.remoteconfig.remoteConfigSettings
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -23,6 +27,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import me.rerere.common.android.appTempFolder
+import okhttp3.ConnectionPool
 import com.whl.quickjs.android.QuickJSLoader
 import me.rerere.rikkahub.di.appModule
 import me.rerere.rikkahub.di.dataSourceModule
@@ -89,6 +94,18 @@ class RikkaHubApp : Application() {
 
         // Start usage reminders if enabled in settings
         startUsageReminderIfEnabled()
+
+        // Clear stale OkHttp connections when returning to foreground. Screen-off / Doze
+        // can silently kill idle HTTP/2 connections; reusing them makes requests hang until
+        // read timeout. Evict the pool on resume so the next request always uses a fresh connection.
+        ProcessLifecycleOwner.get().lifecycle.addObserver(object : LifecycleEventObserver {
+            override fun onStateChanged(source: LifecycleOwner, event: Lifecycle.Event) {
+                if (event == Lifecycle.Event.ON_START) {
+                    runCatching { get<ConnectionPool>().evictAll() }
+                        .onFailure { Log.e(TAG, "evictAll connections failed", it) }
+                }
+            }
+        })
 
         LocalBuildIntegration.onApplicationCreated(this)
 

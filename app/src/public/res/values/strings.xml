@@ -1,6 +1,8 @@
 <resources>
   <string name="heartbeat_settings_title">&#x81EA;&#x4E3B;&#x5524;&#x9192;</string>
   <string name="heartbeat_settings_description">&#x5B9A;&#x65F6;&#x751F;&#x6210;&#x4E3B;&#x52A8;&#x6D88;&#x606F;&#x4E0E;&#x540E;&#x53F0;&#x5B89;&#x5168;&#x5DE5;&#x5177;</string>
+  <string name="heartbeat_current_assistant_label">当前助手</string>
+  <string name="heartbeat_next_trigger_label">下次触发</string>
   <string name="heartbeat_notification_channel">&#x81EA;&#x4E3B;&#x5524;&#x9192;</string>
   <string name="heartbeat_running_title">&#x6B63;&#x5728;&#x751F;&#x6210;&#x4E3B;&#x52A8;&#x6D88;&#x606F;&#x2026;</string>
   <string name="heartbeat_running_content">&#x81EA;&#x4E3B;&#x5524;&#x9192;&#x6B63;&#x5728;&#x6267;&#x884C;&#x6A21;&#x578B;&#x8BF7;&#x6C42;</string>
@@ -40,6 +42,20 @@
   <string name="heartbeat_status_failed">&#x6267;&#x884C;&#x5931;&#x8D25;</string>
   <string name="heartbeat_status_tested">只读测试完成，未发送消息</string>
   <string name="heartbeat_diagnostics_title">运行诊断</string>
+  <string name="heartbeat_run_status_label">运行状态</string>
+  <string name="heartbeat_run_reason_label">原因</string>
+  <string name="heartbeat_trigger_source_label">触发来源</string>
+  <string name="heartbeat_run_updated_at_label">更新时间</string>
+  <string name="heartbeat_run_duration_label">本次耗时</string>
+  <string name="heartbeat_run_detail_label">详情</string>
+  <string name="heartbeat_last_success_label">最近成功运行</string>
+  <string name="heartbeat_last_failure_label">最近失败</string>
+  <string name="heartbeat_last_failure_reason_label">最近失败原因</string>
+  <string name="heartbeat_last_failure_detail_label">最近失败详情</string>
+  <string name="heartbeat_consecutive_failures_label">连续失败</string>
+  <string name="heartbeat_next_retry_label">下次失败重试</string>
+  <string name="heartbeat_last_run_duration_label">最近一次完成耗时</string>
+  <string name="heartbeat_state_recovered_label">状态恢复</string>
   <string name="heartbeat_run_reason">原因：%1$s</string>
   <string name="heartbeat_trigger_source">触发来源：%1$s</string>
   <string name="heartbeat_run_duration">本次耗时：%1$s</string>
@@ -54,8 +70,9 @@
   <string name="heartbeat_no_record">暂无记录</string>
   <string name="heartbeat_state_recovered">已恢复损坏状态：%1$s（%2$s）</string>
   <string name="heartbeat_config_adjustment_warning">部分数值超出允许范围，保存时会自动调整。</string>
-  <string name="heartbeat_read_only_test">只读测试（不发送）</string>
-  <string name="heartbeat_read_only_test_note">会真实调用模型，但只注入只读工具；不会消费自主计划、写入会话、发送通知或改变正式调度。</string>
+  <string name="heartbeat_read_only_test_title">只读测试（仅供测试）</string>
+  <string name="heartbeat_read_only_test">开始只读测试（不发送）</string>
+  <string name="heartbeat_read_only_test_note">这是测试功能：会真实调用模型检查当前配置，但不会发送消息、写入会话、发送通知、消费自主计划，也不会改变正式调度。</string>
   <string name="heartbeat_reason_none">无</string>
   <string name="heartbeat_reason_message_sent">主动消息已成功写入并通知</string>
   <string name="heartbeat_reason_model_pass">模型判断当前无需发送</string>
@@ -83,6 +100,7 @@
   <string name="heartbeat_reason_target_changed">目标助手已切换，已阻止旧助手投递</string>
   <string name="heartbeat_reason_state_recovered">检测到损坏状态并已安全恢复</string>
   <string name="heartbeat_prompt_label">&#x81EA;&#x4E3B;&#x5524;&#x9192;&#x63D0;&#x793A;&#x8BCD;</string>
+  <string name="heartbeat_prompt_placeholder">可自定义自主唤醒提示词（留空也可以）</string>
   <string name="heartbeat_prompt_fixed_rule">&#x56FA;&#x5B9A;&#x89C4;&#x5219;&#xFF1A;&#x6BCF;&#x6B21;&#x81EA;&#x4E3B;&#x5524;&#x9192;&#x90FD;&#x4F1A;&#x53E6;&#x5916;&#x544A;&#x8BC9;&#x52A9;&#x624B;&#xFF0C;&#x8DDD;&#x79BB;&#x7528;&#x6237;&#x4E0A;&#x4E00;&#x6B21;&#x53D1;&#x8A00;&#x5DF2;&#x7ECF;&#x8FC7;&#x53BB;&#x591A;&#x4E45;&#xFF0C;&#x6B64;&#x89C4;&#x5219;&#x4E0D;&#x53D7;&#x4E0A;&#x65B9;&#x63D0;&#x793A;&#x8BCD;&#x4FEE;&#x6539;&#x3002;</string>
   <string name="heartbeat_goodnight_on">晚安模式：开启（已连续 %1$d 次无新使用，3 次后自动关闭）</string>
   <string name="heartbeat_goodnight_off">晚安模式：关闭</string>

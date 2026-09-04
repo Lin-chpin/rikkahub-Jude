@@ -259,7 +259,12 @@ class HeartbeatConfigStore(
             ?: return HeartbeatConfig(assistantId = assistantId)
         return runCatching {
             val decoded = json.decodeFromString<HeartbeatConfig>(raw)
-            decoded.copy(assistantId = assistantId ?: decoded.assistantId).normalized()
+            decoded.copy(
+                assistantId = assistantId ?: decoded.assistantId,
+                heartbeatPrompt = decoded.heartbeatPrompt.takeUnless {
+                    it == HeartbeatConfig.LEGACY_DEFAULT_HEARTBEAT_PROMPT
+                } ?: HeartbeatConfig.DEFAULT_HEARTBEAT_PROMPT,
+            ).normalized()
         }.getOrElse { error ->
             recordStateRecovery("config", CONFIG_KEY, error)
             HeartbeatConfig(assistantId = assistantId)

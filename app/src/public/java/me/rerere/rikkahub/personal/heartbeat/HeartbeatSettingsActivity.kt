@@ -32,16 +32,15 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -89,13 +88,26 @@ class HeartbeatSettingsActivity : ComponentActivity() {
                 } ?: stringResource(R.string.heartbeat_not_scheduled)
 
                 Scaffold(
-                    containerColor = Color.Transparent,
+                    containerColor = MaterialTheme.colorScheme.background,
+                    contentColor = MaterialTheme.colorScheme.onBackground,
                     topBar = {
                         TopAppBar(
                             colors = TopAppBarDefaults.topAppBarColors(
-                                containerColor = Color.Transparent,
+                                containerColor = MaterialTheme.colorScheme.background,
+                                titleContentColor = MaterialTheme.colorScheme.onBackground,
                             ),
-                            title = { Text(stringResource(R.string.heartbeat_settings_title)) },
+                            title = {
+                                Text(
+                                    text = stringResource(R.string.heartbeat_settings_title),
+                                    style = MaterialTheme.typography.headlineMedium,
+                                )
+                            },
+                            actions = {
+                                Switch(
+                                    checked = draft.enabled,
+                                    onCheckedChange = { draft = draft.copy(enabled = it) },
+                                )
+                            },
                         )
                     },
                 ) { innerPadding ->
@@ -108,14 +120,15 @@ class HeartbeatSettingsActivity : ComponentActivity() {
                             .imePadding(),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        ToggleRow(
-                            label = stringResource(R.string.heartbeat_enabled),
-                            checked = draft.enabled,
-                            onCheckedChange = { draft = draft.copy(enabled = it) },
-                        )
                         HeartbeatGlassSection {
-                            Text(stringResource(R.string.heartbeat_current_assistant, currentAssistant.name))
-                            Text(stringResource(R.string.heartbeat_next_trigger, nextTrigger))
+                            HeartbeatInfoRow(
+                                label = stringResource(R.string.heartbeat_current_assistant_label),
+                                value = currentAssistant.name,
+                            )
+                            HeartbeatInfoRow(
+                                label = stringResource(R.string.heartbeat_next_trigger_label),
+                                value = nextTrigger,
+                            )
                             if (visibleRunStatus.phase == HeartbeatRunPhase.QUEUED ||
                                 visibleRunStatus.phase == HeartbeatRunPhase.RUNNING
                             ) {
@@ -138,22 +151,29 @@ class HeartbeatSettingsActivity : ComponentActivity() {
                                 Text(stringResource(R.string.heartbeat_goodnight_off))
                             }
                         }
-                        OutlinedTextField(
-                            value = draft.heartbeatPrompt,
-                            onValueChange = { draft = draft.copy(heartbeatPrompt = it) },
-                            label = { Text(stringResource(R.string.heartbeat_prompt_label)) },
-                            supportingText = { Text(stringResource(R.string.heartbeat_prompt_fixed_rule)) },
-                            modifier = Modifier.fillMaxWidth(),
-                            minLines = 4,
-                            maxLines = 10,
-                            shape = RoundedCornerShape(24.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.80f),
-                                unfocusedContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
-                                focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.70f),
-                                unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.42f),
-                            ),
-                        )
+                        HeartbeatGlassSection {
+                            Text(
+                                text = stringResource(R.string.heartbeat_prompt_label),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            OutlinedTextField(
+                                value = draft.heartbeatPrompt,
+                                onValueChange = { draft = draft.copy(heartbeatPrompt = it) },
+                                placeholder = {
+                                    Text(
+                                        text = stringResource(R.string.heartbeat_prompt_placeholder),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                                    )
+                                },
+                                supportingText = { Text(stringResource(R.string.heartbeat_prompt_fixed_rule)) },
+                                modifier = Modifier.fillMaxWidth(),
+                                minLines = 4,
+                                maxLines = 10,
+                                shape = RoundedCornerShape(18.dp),
+                                colors = heartbeatTextFieldColors(),
+                            )
+                        }
 
                         HeartbeatGlassSection {
                             Text(
@@ -227,28 +247,33 @@ class HeartbeatSettingsActivity : ComponentActivity() {
                                 Text(stringResource(R.string.heartbeat_trigger_now))
                             }
                         }
-                        TextButton(
-                            onClick = {
-                                assistantStore.update(draft.copy(assistantId = currentAssistantId))
-                                HeartbeatScheduler.triggerReadOnlyTest(
-                                    context = this@HeartbeatSettingsActivity,
-                                    assistantId = currentAssistantId,
-                                )
-                            },
-                            enabled = draft.enabled &&
-                                visibleRunStatus.phase != HeartbeatRunPhase.QUEUED &&
-                                visibleRunStatus.phase != HeartbeatRunPhase.RUNNING,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(stringResource(R.string.heartbeat_read_only_test))
+                        HeartbeatGlassSection {
+                            Text(
+                                text = stringResource(R.string.heartbeat_read_only_test_title),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Text(
+                                text = stringResource(R.string.heartbeat_read_only_test_note),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            TextButton(
+                                onClick = {
+                                    assistantStore.update(draft.copy(assistantId = currentAssistantId))
+                                    HeartbeatScheduler.triggerReadOnlyTest(
+                                        context = this@HeartbeatSettingsActivity,
+                                        assistantId = currentAssistantId,
+                                    )
+                                },
+                                enabled = draft.enabled &&
+                                    visibleRunStatus.phase != HeartbeatRunPhase.QUEUED &&
+                                    visibleRunStatus.phase != HeartbeatRunPhase.RUNNING,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(stringResource(R.string.heartbeat_read_only_test))
+                            }
                         }
-                        Text(
-                            text = stringResource(R.string.heartbeat_read_only_test_note),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
                     }
                 }
             }
@@ -290,7 +315,10 @@ private fun ToggleRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label)
+        Text(
+            text = label,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
@@ -313,11 +341,21 @@ private fun NumberField(
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         shape = RoundedCornerShape(18.dp),
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.80f),
-            unfocusedContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
-            focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.70f),
-            unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.42f),
-        ),
+        colors = heartbeatTextFieldColors(),
     )
 }
+
+@Composable
+private fun heartbeatTextFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedTextColor = MaterialTheme.colorScheme.onSurface,
+    unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+    focusedLabelColor = MaterialTheme.colorScheme.primary,
+    unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    focusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    unfocusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    cursorColor = MaterialTheme.colorScheme.primary,
+    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+    focusedBorderColor = MaterialTheme.colorScheme.primary,
+    unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+)

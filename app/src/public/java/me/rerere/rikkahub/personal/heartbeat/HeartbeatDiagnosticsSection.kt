@@ -3,6 +3,8 @@ package me.rerere.rikkahub.personal.heartbeat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -24,22 +26,41 @@ internal fun HeartbeatCurrentDiagnosticsSection(
         Text(
             text = stringResource(R.string.heartbeat_diagnostics_title),
             style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.primary,
         )
-        Text(stringResource(R.string.heartbeat_run_status, runStatus.phase.displayText()))
+        HeartbeatInfoRow(
+            label = stringResource(R.string.heartbeat_run_status_label),
+            value = runStatus.phase.displayText(),
+        )
         if (runStatus.reason != HeartbeatRunReason.NONE) {
-            Text(stringResource(R.string.heartbeat_run_reason, runStatus.reason.displayText()))
+            HeartbeatInfoRow(
+                label = stringResource(R.string.heartbeat_run_reason_label),
+                value = runStatus.reason.displayText(),
+            )
         }
         runStatus.triggerSource?.takeIf(String::isNotBlank)?.let { source ->
-            Text(stringResource(R.string.heartbeat_trigger_source, source))
+            HeartbeatInfoRow(
+                label = stringResource(R.string.heartbeat_trigger_source_label),
+                value = source,
+            )
         }
         runStatus.updatedAtMillis?.let { updatedAt ->
-            Text(stringResource(R.string.heartbeat_run_updated_at, formatTimestamp(updatedAt)))
+            HeartbeatInfoRow(
+                label = stringResource(R.string.heartbeat_run_updated_at_label),
+                value = formatTimestamp(updatedAt),
+            )
         }
         runStatus.durationMillis?.let { duration ->
-            Text(stringResource(R.string.heartbeat_run_duration, formatDuration(duration)))
+            HeartbeatInfoRow(
+                label = stringResource(R.string.heartbeat_run_duration_label),
+                value = formatDuration(duration),
+            )
         }
         runStatus.detail?.takeIf(String::isNotBlank)?.let { detail ->
-            Text(stringResource(R.string.heartbeat_run_detail, detail))
+            HeartbeatInfoRow(
+                label = stringResource(R.string.heartbeat_run_detail_label),
+                value = detail,
+            )
         }
     }
 }
@@ -52,31 +73,31 @@ internal fun HeartbeatHistoryDiagnosticsSection(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text(
-            stringResource(
-                R.string.heartbeat_last_success,
-                diagnostics.lastSuccessfulRunAtMillis?.let(::formatTimestamp)
-                    ?: stringResource(R.string.heartbeat_no_record),
-            ),
+        HeartbeatInfoRow(
+            label = stringResource(R.string.heartbeat_last_success_label),
+            value = diagnostics.lastSuccessfulRunAtMillis?.let(::formatTimestamp)
+                ?: stringResource(R.string.heartbeat_no_record),
         )
-        Text(
-            stringResource(
-                R.string.heartbeat_last_failure,
-                diagnostics.lastFailureAtMillis?.let(::formatTimestamp)
-                    ?: stringResource(R.string.heartbeat_no_record),
-            ),
+        HeartbeatInfoRow(
+            label = stringResource(R.string.heartbeat_last_failure_label),
+            value = diagnostics.lastFailureAtMillis?.let(::formatTimestamp)
+                ?: stringResource(R.string.heartbeat_no_record),
         )
         diagnostics.lastFailureReason?.let { reason ->
-            Text(stringResource(R.string.heartbeat_last_failure_reason, reason.displayText()))
+            HeartbeatInfoRow(
+                label = stringResource(R.string.heartbeat_last_failure_reason_label),
+                value = reason.displayText(),
+            )
         }
         diagnostics.lastFailureDetail?.takeIf(String::isNotBlank)?.let { detail ->
-            Text(stringResource(R.string.heartbeat_last_failure_detail, detail))
+            HeartbeatInfoRow(
+                label = stringResource(R.string.heartbeat_last_failure_detail_label),
+                value = detail,
+            )
         }
-        Text(
-            stringResource(
-                R.string.heartbeat_consecutive_failures,
-                diagnostics.consecutiveFailures,
-            ),
+        HeartbeatInfoRow(
+            label = stringResource(R.string.heartbeat_consecutive_failures_label),
+            value = diagnostics.consecutiveFailures.toString(),
         )
         if (diagnostics.consecutiveFailures >= 3) {
             Text(
@@ -85,20 +106,50 @@ internal fun HeartbeatHistoryDiagnosticsSection(
             )
         }
         diagnostics.nextRetryAtMillis?.let { retryAt ->
-            Text(stringResource(R.string.heartbeat_next_retry, formatTimestamp(retryAt)))
-        }
-        diagnostics.lastRunDurationMillis?.let { duration ->
-            Text(stringResource(R.string.heartbeat_last_run_duration, formatDuration(duration)))
-        }
-        diagnostics.lastStateRecoveryAtMillis?.let { recoveredAt ->
-            Text(
-                stringResource(
-                    R.string.heartbeat_state_recovered,
-                    diagnostics.lastStateRecoveryArea.orEmpty(),
-                    formatTimestamp(recoveredAt),
-                ),
+            HeartbeatInfoRow(
+                label = stringResource(R.string.heartbeat_next_retry_label),
+                value = formatTimestamp(retryAt),
             )
         }
+        diagnostics.lastRunDurationMillis?.let { duration ->
+            HeartbeatInfoRow(
+                label = stringResource(R.string.heartbeat_last_run_duration_label),
+                value = formatDuration(duration),
+            )
+        }
+        diagnostics.lastStateRecoveryAtMillis?.let { recoveredAt ->
+            HeartbeatInfoRow(
+                label = stringResource(R.string.heartbeat_state_recovered_label),
+                value = buildString {
+                    append(diagnostics.lastStateRecoveryArea.orEmpty())
+                    if (isNotEmpty()) append(" · ")
+                    append(formatTimestamp(recoveredAt))
+                },
+            )
+        }
+    }
+}
+
+@Composable
+internal fun HeartbeatInfoRow(
+    label: String,
+    value: String,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.Top,
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.width(112.dp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = value,
+            modifier = Modifier.weight(1f),
+            color = MaterialTheme.colorScheme.onSurface,
+        )
     }
 }
 

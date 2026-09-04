@@ -31,7 +31,8 @@ data class HeartbeatConfig(
     }
 
     companion object {
-        const val DEFAULT_HEARTBEAT_PROMPT =
+        const val DEFAULT_HEARTBEAT_PROMPT = ""
+        const val LEGACY_DEFAULT_HEARTBEAT_PROMPT =
             "Decide whether a brief, natural proactive message would be useful now. " +
                 "If not, reply with exactly [PASS]. Do not mention scheduling, heartbeat, " +
                 "background execution, internal tools, or data sources."
