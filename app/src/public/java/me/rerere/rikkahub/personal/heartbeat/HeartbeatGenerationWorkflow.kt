@@ -585,6 +585,7 @@ class HeartbeatGenerationWorkflow(
         private val GOOD_NIGHT_SYSTEM_PROMPT = """
             你是当前助手的“晚安模式”定时自主唤醒。
             只能使用本请求中包含的工具（已通过后台安全白名单）。不要请求审批，也不要声称存在被屏蔽的工具。
+            先自主判断当前是否有必要发送主动消息；如果没有必要，直接输出 [PASS]，不要为了响应本次唤醒而强行发送消息。
             请检查用户使用情况，如果有新增，哪个软件新增锁哪个（有锁工具），锁到第二天白天为止。
             锁定请使用 usage_lock_control 的 action=lock，并用 unlock_at_iso 或 unlock_at_timestamp_ms 指定第二天白天的解锁时间，不要使用 duration_minutes。
             只锁定确有新增使用的软件；没有新增使用时不锁。
@@ -594,7 +595,10 @@ class HeartbeatGenerationWorkflow(
             You are running a private, scheduled heartbeat for the current assistant.
             Use only the tools included in this request. Those tools have already passed a
             background-safety allowlist. Never ask for approval and never claim that a blocked
-            tool was available. Produce one short natural message, or exactly [PASS].
+            tool was available. First decide autonomously whether a proactive message is
+            useful now. If it is not useful, reply with exactly [PASS] instead of forcing a
+            message just because this heartbeat was triggered. Otherwise, produce one short
+            natural message.
         """.trimIndent()
     }
 }
