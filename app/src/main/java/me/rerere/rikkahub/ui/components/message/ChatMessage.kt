@@ -799,6 +799,22 @@ private fun UserTextParagraphs(
                         }
                     }
                 }
+
+                is AssistantTextSegment.CodeBlock -> {
+                    val codeBlockContent: @Composable () -> Unit = {
+                        MarkdownBlock(
+                            content = segment.text,
+                            onClickCitation = onClickCitation,
+                        )
+                    }
+                    if (selectionEnabled) {
+                        SelectionContainer {
+                            codeBlockContent()
+                        }
+                    } else {
+                        codeBlockContent()
+                    }
+                }
             }
         }
     }
@@ -986,6 +1002,23 @@ private fun AssistantTextParagraphs(
                         )
                     }
                 }
+
+                is AssistantTextSegment.CodeBlock -> {
+                    val codeBlockContent: @Composable () -> Unit = {
+                        AssistantMarkdownBlock(
+                            content = segment.text,
+                            onClickCitation = onClickCitation,
+                            showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
+                        )
+                    }
+                    if (selectionEnabled) {
+                        SelectionContainer {
+                            codeBlockContent()
+                        }
+                    } else {
+                        codeBlockContent()
+                    }
+                }
             }
         }
     }
@@ -993,14 +1026,18 @@ private fun AssistantTextParagraphs(
 
 private sealed interface AssistantTextSegment {
     data class Paragraph(val text: String) : AssistantTextSegment
+    data class CodeBlock(val text: String) : AssistantTextSegment
     data object Divider : AssistantTextSegment
 }
 
 private val markdownDividerLineRegex = Regex("^[\\s\\u200B\\u200C\\u200D]*([-*_])(?:[\\s\\u200B\\u200C\\u200D]*\\1){2,}[\\s\\u200B\\u200C\\u200D]*$")
+private val markdownCodeFenceLineRegex = Regex("^\\s{0,3}(`{3,}|~{3,}).*$")
 
 private fun String.splitAssistantTextSegments(): List<AssistantTextSegment> {
     val segments = mutableListOf<AssistantTextSegment>()
     val paragraph = StringBuilder()
+    val codeBlock = StringBuilder()
+    var codeFence: String? = null
 
     fun flushParagraph() {
         val text = paragraph.toString().trim()
@@ -1010,7 +1047,41 @@ private fun String.splitAssistantTextSegments(): List<AssistantTextSegment> {
         paragraph.clear()
     }
 
+    fun appendLine(builder: StringBuilder, line: String) {
+        if (builder.isNotEmpty()) builder.appendLine()
+        builder.append(line)
+    }
+
+    fun flushCodeBlock() {
+        val text = codeBlock.toString().trimEnd()
+        if (text.isNotBlank()) {
+            segments += AssistantTextSegment.CodeBlock(text)
+        }
+        codeBlock.clear()
+    }
+
     trim().lineSequence().forEach { rawLine ->
+        val fenceMarker = markdownCodeFenceLineRegex.matchEntire(rawLine)?.groupValues?.get(1)
+        val openFence = codeFence
+        if (openFence != null) {
+            appendLine(codeBlock, rawLine)
+            if (fenceMarker != null &&
+                fenceMarker.first() == openFence.first() &&
+                fenceMarker.length >= openFence.length
+            ) {
+                codeFence = null
+                flushCodeBlock()
+            }
+            return@forEach
+        }
+
+        if (fenceMarker != null) {
+            flushParagraph()
+            codeFence = fenceMarker
+            appendLine(codeBlock, rawLine)
+            return@forEach
+        }
+
         val line = rawLine.trim()
         when {
             markdownDividerLineRegex.matches(line) -> {
@@ -1030,7 +1101,11 @@ private fun String.splitAssistantTextSegments(): List<AssistantTextSegment> {
             }
         }
     }
-    flushParagraph()
+    if (codeFence != null) {
+        flushCodeBlock()
+    } else {
+        flushParagraph()
+    }
 
     return segments.ifEmpty { listOf(AssistantTextSegment.Paragraph(this)) }
 }
