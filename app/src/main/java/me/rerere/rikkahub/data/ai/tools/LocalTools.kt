@@ -248,7 +248,7 @@ class LocalTools(
             description = """
                 Switch the current reply into voice-message composition mode.
                 Call this tool exactly once when all or part of your reply would feel more natural as one or more voice messages.
-                After calling it, you will receive the formatting instructions for a complete mixed text-and-voice reply.
+                After calling it, you will receive a hard protocol lock for a complete mixed text-and-voice reply. Your next assistant message is invalid unless it contains at least one 【语音条】 segment.
                 Do not call it merely because the user mentioned audio, and do not call it again for additional voice segments in the same reply.
             """.trimIndent().replace("\n", " "),
             parameters = {

@@ -1,148 +1,106 @@
 <div align="center">
-  <img src="docs/icon.png" alt="App Icon" width="100" />
+  <img src="docs/icon.png" alt="RikkaHub Jude 图标" width="100" />
   <h1>RikkaHub Jude</h1>
+  <p>一个面向多模型、多供应商和长期对话的原生 Android AI 客户端</p>
 
-  [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/rikkahub/rikkahub)
-  [![Ask DeepWiki](https://img.shields.io/badge/zread.ai-blue?style=flat&logo=readthedocs)](https://zread.ai/rikkahub/rikkahub)
+  [![GitHub Releases](https://img.shields.io/github/v/release/Lin-chpin/rikkahub-Jude?display_name=tag)](https://github.com/Lin-chpin/rikkahub-Jude/releases)
+  [![License](https://img.shields.io/github/license/Lin-chpin/rikkahub-Jude)](LICENSE)
 
-A native Android LLM chat client that supports switching between different providers for
-conversations 🤖💬
-
-Click to join our Discord server 👉 [【RikkaHub】](https://discord.gg/9weBqxe5c4)
-
-[简体中文](README_ZH_CN.md) | [繁體中文](README_ZH_TW.md) | English
+  简体中文 | [繁體中文](README_ZH_TW.md)
 </div>
-
-> [!IMPORTANT]
-> This is an **unofficial community-maintained fork** of [RikkaHub](https://github.com/rikkahub/rikkahub).
-> It is not an official RikkaHub release. The fork keeps the upstream Git history while adding and maintaining
-> features such as automatic rolling summaries, context compression, Moments, and the anonymous question box.
-> The version shown on this fork's [Releases page](https://github.com/Lin-chpin/rikkahub-Jude/releases)
-> is the source of truth for downloadable builds.
 
 <div align="center">
-  <img src="docs/img/chat.png" alt="Chat Interface" width="150" />
-  <img src="docs/img/desktop.png" alt="Models Picker" width="450" />
+  <img src="docs/img/chat.png" alt="聊天界面" width="150" />
+  <img src="docs/img/desktop.png" alt="模型选择器" width="450" />
 </div>
 
-## 🚀 Download this fork
+## 这是什么
 
-🔗 **[Download APK from GitHub Releases](https://github.com/Lin-chpin/rikkahub-Jude/releases)**
+RikkaHub Jude 是一个原生 Android AI 聊天客户端。它支持接入不同的模型供应商，使用文字、图片和文档进行对话，也可以通过 Web 端访问同一套本地数据。
 
-Do not use **Code → Download ZIP** if you only want to install the app; that downloads source code, not an APK.
+我们从 RikkaHub 的基础能力出发，持续维护自己的使用体验和功能方向。重点放在长期对话、语音交互、个人信息整理以及本地可控的自动化能力上。
 
-The default debug build is a universal APK. Back up your data before installation. Because this fork and the
-official app may use different signing certificates, Android might not allow installing one directly over the other.
-If Android reports a signature conflict, export a backup before uninstalling any existing version.
+本项目是 [RikkaHub](https://github.com/rikkahub/rikkahub) 的非官方 fork。上游作者和贡献者的原始工作仍然保留署名，本仓库的维护范围以本文档和 Release 说明为准。
 
-For official builds, visit the [upstream RikkaHub project](https://github.com/rikkahub/rikkahub).
+## 我们增加和持续维护的功能
 
-## 🌿 Maintained changes in this fork
+### 长期对话和上下文
 
-- **Automatic rolling summaries and context compression**: keep recent messages while continuously compressing
-  older visible history, with editable summaries and configurable target length.
-- **Long-conversation chunking**: large histories and existing summaries are compressed in bounded chunks instead
-  of being sent as one oversized request.
-- **Dedicated compression API and model**: optionally use a separate OpenAI-compatible endpoint, API key, model,
-  Chat Completions path, or Responses API for compression.
-- **Dedicated OCR API and model**: OCR can use its own OpenAI-compatible endpoint and model without changing the
-  normal chat provider.
-- **Paragraph-level TTS controls**: play assistant replies paragraph by paragraph, with quoted-text-only,
-  English-only, and automatic playback options.
-- **Usage statistics and reminders**: local app-usage views and configurable duration reminders.
-- **Moments**: an assistant-scoped social timeline with AI-generated likes, comments, deletion, date filtering,
-  and manual refresh diagnostics.
-- **Anonymous question box**: assistant-scoped anonymous questions, delayed AI answers, one-time user answers,
-  and follow-up AI comments.
-- **Backup and release maintenance**: compatibility fixes for newer backups, local file restoration, request logs,
-  universal debug APK packaging, and update checks that prefer the universal package.
+- 自动滚动摘要和上下文压缩，减少长对话对模型上下文的占用。
+- 超长历史按容量分块压缩，已有摘要也会参与后续整理。
+- 支持单独配置压缩接口、模型、API Key，以及 Chat Completions 或 Responses API。
+- 支持单独配置 OCR 接口和模型，不影响普通聊天使用的供应商。
+- 摘要可以查看、编辑，并设置目标长度。
 
-Unless a release note says otherwise, this fork retains the upstream RikkaHub features listed below.
+### 语音和通话
 
-## 🧭 Ownership and attribution
+- AI 可以在同一条回复中混排文本和语音条，语音段按完整段落生成和播放。
+- 普通聊天支持分段朗读、只朗读引用、只朗读英文和生成后自动播放。
+- 支持主动语音通话、通话记录、通话时长、翻译和已保存音频回放。
+- 支持 ElevenLabs v3 语音标签和 MiniMax Speech 2.8 整体情绪模式。
+- 通话中的提示词、文本清洗、标签选择、TTS 队列和消息展示按职责拆分，方便继续维护。
 
-This repository is maintained by **[Lin-chpin](https://github.com/Lin-chpin)**. It is a personal/community
-fork, not the official RikkaHub repository and not a claim that every part of the codebase was written from scratch by
-the fork maintainer.
+### 朋友圈和匿名提问箱
 
-The repository preserves historical Git commits. Therefore, GitHub may display upstream or inherited commit identities
-such as `RikkaHub Public Release` when showing file history or commit authors. Those names describe the corresponding
-Git metadata; they do not identify the owner or maintainer of this fork. The upstream project and its contributors
-retain credit for their original work. Changes listed in **Maintained changes in this fork** are the scope maintained
-in this repository.
+- 朋友圈按助手隔离，每个助手拥有自己的动态时间线。
+- 支持 AI 发布、点赞、评论、删除、日期筛选和刷新诊断。
+- 匿名提问箱支持延迟回答、用户一次性回答和 AI 后续评论。
 
-For clarity:
+### 用量和日常提醒
 
-- **Upstream project:** [rikkahub/rikkahub](https://github.com/rikkahub/rikkahub)
-- **This fork:** [Lin-chpin/rikkahub-Jude](https://github.com/Lin-chpin/rikkahub-Jude)
-- **Fork maintainer:** [Lin-chpin](https://github.com/Lin-chpin)
+- 提供本地应用使用统计和时长提醒。
+- 支持用量锁控制，帮助限制指定应用的使用时间。
+- 提醒服务、状态展示和恢复逻辑经过单独维护，减少后台状态卡死。
 
-## 💖 Sponsors
+### 自主唤醒
 
-<div align="center">
-  <img src="app/src/main/assets/icons/aihubmix-color.svg" alt="Aihubmix" width="50" />
-  <p style="font-size: 16px; font-weight: bold;">Aihubmix</p>
-  <p style="font-size: 14px;">Thanks to <a href="https://aihubmix.com?aff=pG7r">aihubmix.com</a> for their financial support. We recommend using aihubmix as a one-stop shop for mainstream models worldwide. (OpenAI, Claude, Google Gemini, DeepSeek, Qwen, and hundreds more).</p>
-</div>
+- 可以让当前助手按计划在后台运行，并决定发送主动消息或跳过本次运行。
+- 支持一次性、固定间隔、每日、工作日和时间窗随机计划。
+- 支持晚安模式、失败分类、指数退避、运行诊断和只读测试。
+- 只读测试会真实调用模型检查配置，但不会发送消息、写入会话、发送通知或改变正式调度。
 
-## ✨ Features
+### 备份、更新和维护体验
 
-- 🎨 Material You Design and 🌙 Dark mode
-- 🔄 Multiple AI Provider Support: custom API / URL / models (all OpenAI, Google, Anthropic compatible api)
-- 🖼️ Multimodal input support (Image, Text Documentation, PDF, Docx)
-- 🖥️ Web access for multi-platform use
-- 🛠️ MCP support
-- 📝 Markdown Rendering (with code highlighting, Latex formulas, tables, Mermaid)
-- 🪾 Message Branching
-- 🔍 Search capabilities (Exa, Tavily, Zhipu, LinkUp, Brave, Perplexity, etc.)
-- 🧩 Prompt variables (model name, time, etc.)
-- 🤳 QR code export and import for providers
-- 🤖 Agent customization
-- 🧠 ChatGPT-like memory feature
-- 📝 AI Translation
-- 🌐 Custom HTTP request headers and request bodies
-- 💌 Silly Tavern character card import
+- 兼容较新的上游备份格式，恢复设置、会话和本地图片等文件。
+- 请求日志提供更明确的阶段和失败原因，便于排查网络与模型问题。
+- 应用内更新检查优先使用 universal APK，并提供下载失败后的重试和 Release 页面入口。
+- 默认提供 public Universal Debug APK 构建流程，方便本地测试和安装。
 
-## ✨ Contributing
+## 上游保留的基础能力
 
-This project is developed using [Android Studio](https://developer.android.com/studio). PRs are
-welcome!
+- 多供应商和自定义 API，兼容 OpenAI、Anthropic、Google 等常见接口。
+- 多模态输入，支持图片、文本、PDF、Docx 等内容。
+- MCP、本地工具、网页搜索和 Web 访问。
+- Markdown、代码高亮、LaTeX、表格和 Mermaid 渲染。
+- 消息分支、助手自定义、Prompt 变量、记忆、AI 翻译和角色卡导入。
+- Material You、深色模式、供应商二维码导入与导出。
 
-Technology stack documentation:
+## 下载
 
-- [Kotlin](https://kotlinlang.org/) (Development language)
-- [Koin](https://insert-koin.io/) (Dependency Injection)
-- [Jetpack Compose](https://developer.android.com/jetpack/compose) (UI framework)
-- [DataStore](https://developer.android.com/topic/libraries/architecture/datastore) (Preference data
-  storage)
-- [Room](https://developer.android.com/training/data-storage/room) (Database)
-- [Coil](https://coil-kt.github.io/coil/) (Image loading)
-- [Material You](https://m3.material.io/) (UI design)
-- [Navigation Compose](https://developer.android.com/develop/ui/compose/navigation) (Navigation)
-- [Okhttp](https://square.github.io/okhttp/) (HTTP client)
-- [kotlinx.serialization](https://github.com/Kotlin/kotlinx.serialization) (JSON serialization)
-- [compose-icons/lucide](https://composeicons.com/icon-libraries/lucide) (Icon library)
+前往 [GitHub Releases](https://github.com/Lin-chpin/rikkahub-Jude/releases) 下载 APK。
 
-> [!TIP]
-> You need a `google-services.json` file at `app` folder to build the app.
+当前版本为 `v1.1.8`。默认 Debug 包是 Universal APK。安装前建议先备份应用数据。由于签名可能不同，Android 可能不允许直接覆盖官方版本或其他构建版本，遇到签名冲突时需要先导出数据再处理旧安装包。
 
-> [!IMPORTANT]  
-> The following PRs will be rejected: 
-> 1. Translation related changes, such as adding new languages or updating existing translations
-> 2. Adding new features, this project is opinionated and will not accept pull requests for new features
-> 3. Large-scale refactoring and changes generated by AI
+## 本地构建
 
-## 💰 Donate
+项目使用 Android Studio、Kotlin、Jetpack Compose、Koin、Room、DataStore 和 Gradle 构建。
 
-* [Patreon](https://patreon.com/rikkahub)
-* [爱发电](https://afdian.com/a/reovo)
+构建 public Universal Debug APK
 
-## ⭐ Star History
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-universal-debug-apk.ps1
+```
 
-If you like this project, please give it a star ⭐
+构建前需要在 `app` 目录放置 `google-services.json`。产物位于 `app/build/outputs/apk/public/debug/`。
 
-[![Star History Chart](https://api.star-history.com/svg?repos=re-ovo/rikkahub&type=Date)](https://star-history.com/#re-ovo/rikkahub&Date)
+## 仓库归属
 
-## 📄 License
+- 上游项目：[rikkahub/rikkahub](https://github.com/rikkahub/rikkahub)
+- 本项目：[Lin-chpin/rikkahub-Jude](https://github.com/Lin-chpin/rikkahub-Jude)
+- 维护者：[Lin-chpin](https://github.com/Lin-chpin)
+
+本仓库保留上游历史提交。GitHub 文件历史中出现的上游提交身份只代表对应的 Git 元数据，不代表本项目的所有者发生变化。
+
+## 许可证
 
 [License](LICENSE)

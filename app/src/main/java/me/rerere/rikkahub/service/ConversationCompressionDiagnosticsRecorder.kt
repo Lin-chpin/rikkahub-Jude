@@ -4,7 +4,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import me.rerere.ai.ui.ChatVoiceReplySegmentType
+import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.data.voice.CHAT_VOICE_REPLY_TOOL_NAME
+import me.rerere.rikkahub.data.voice.chatVoiceReply
+import me.rerere.rikkahub.data.voice.chatVoiceReplyDraft
+import me.rerere.rikkahub.data.voice.chatVoiceReplyError
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.uuid.Uuid
 
@@ -89,5 +96,50 @@ private fun Conversation.compressionDiagnosticSnapshot(): String {
         append(allNodesCovered)
         append(" summaryChars=")
         append(compressedSummary?.length ?: 0)
+        append(' ')
+        append(currentMessages.chatVoiceReplyDiagnosticSnapshot())
+    }
+}
+
+/**
+ * Adds voice-reply lifecycle state without recording reply text or provider details.
+ * This is intentionally part of every compression diagnostic snapshot so the chat
+ * troubleshooting dialog can be copied at any point in generation.
+ */
+private fun List<UIMessage>.chatVoiceReplyDiagnosticSnapshot(): String {
+    val voiceTools = flatMap { message ->
+        message.parts.filterIsInstance<UIMessagePart.Tool>()
+            .filter { it.toolName == CHAT_VOICE_REPLY_TOOL_NAME }
+    }
+    val voiceToolErrors = voiceTools.mapNotNull { it.chatVoiceReplyError()?.code?.name }
+    val replies = count { it.chatVoiceReply() != null }
+    val drafts = count { it.chatVoiceReplyDraft() != null }
+    val voiceSegments = flatMap { it.chatVoiceReply()?.segments.orEmpty() }
+        .count { it.type == ChatVoiceReplySegmentType.VOICE }
+    val audioSegments = flatMap { it.chatVoiceReply()?.segments.orEmpty() }
+        .filter { it.type == ChatVoiceReplySegmentType.VOICE }
+        .sumOf { it.audioSegments.size }
+    val emptyAudioSegments = flatMap { it.chatVoiceReply()?.segments.orEmpty() }
+        .count { it.type == ChatVoiceReplySegmentType.VOICE && it.audioSegments.isEmpty() }
+
+    return buildString {
+        append("voiceTools=")
+        append(voiceTools.size)
+        append(" voiceToolExecuted=")
+        append(voiceTools.count { it.isExecuted })
+        append(" voiceToolPending=")
+        append(voiceTools.count { !it.isExecuted })
+        append(" voiceToolErrors=")
+        append(voiceToolErrors.takeIf { it.isNotEmpty() }?.joinToString(",") ?: "none")
+        append(" voiceDrafts=")
+        append(drafts)
+        append(" voiceReplies=")
+        append(replies)
+        append(" voiceSegments=")
+        append(voiceSegments)
+        append(" voiceAudioSegments=")
+        append(audioSegments)
+        append(" voiceEmptyAudioSegments=")
+        append(emptyAudioSegments)
     }
 }
