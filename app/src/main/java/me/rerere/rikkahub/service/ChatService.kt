@@ -481,7 +481,11 @@ class ChatService(
                     messageNodes = conversationBeforeSend.messageNodes + userMessage.toMessageNode(),
                 )
                 saveConversation(conversationId, newConversation)
-                LocalBuildIntegration.onUserMessageSent(context, userMessage)
+                LocalBuildIntegration.onUserMessageSent(
+                    context = context,
+                    message = userMessage,
+                    assistantId = conversationBeforeSend.assistantId,
+                )
                 compressionDiagnostics.record(
                     conversationId = conversationId,
                     stage = "send.saved",

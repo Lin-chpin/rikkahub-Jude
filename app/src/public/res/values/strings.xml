@@ -1,4 +1,22 @@
 <resources>
+  <string name="heartbeat_setup_title">启用前检查</string>
+  <string name="heartbeat_setup_description">心跳需要模型、通知和系统后台调度配合；先完成检查，主动消息才更可靠地送达。</string>
+  <string name="heartbeat_setup_model_title">当前助手模型</string>
+  <string name="heartbeat_setup_model_ready">已配置：%1$s</string>
+  <string name="heartbeat_setup_model_missing">未找到可用模型，请先在助手或模型设置中配置。</string>
+  <string name="heartbeat_setup_notification_title">通知权限</string>
+  <string name="heartbeat_setup_notification_missing">需要通知权限才能看到主动消息和运行状态。</string>
+  <string name="heartbeat_setup_exact_alarm_title">精确闹钟</string>
+  <string name="heartbeat_setup_exact_alarm_missing">用于在设备休眠时按计划唤醒；系统将打开授权页面。</string>
+  <string name="heartbeat_setup_battery_title">后台运行</string>
+  <string name="heartbeat_setup_battery_ready">当前未检测到电池优化限制。</string>
+  <string name="heartbeat_setup_battery_missing">系统可能限制后台触发，建议在电池设置中允许后台运行。</string>
+  <string name="heartbeat_setup_battery_unknown">无法自动确认，请检查系统电池设置中的后台限制。</string>
+  <string name="heartbeat_setup_permission_ready">已允许</string>
+  <string name="heartbeat_setup_status_ready">已满足</string>
+  <string name="heartbeat_setup_status_action">需要处理</string>
+  <string name="heartbeat_setup_status_check">请检查</string>
+  <string name="heartbeat_setup_open_settings">去设置</string>
   <string name="heartbeat_settings_title">&#x81EA;&#x4E3B;&#x5524;&#x9192;</string>
   <string name="heartbeat_settings_description">&#x5B9A;&#x65F6;&#x751F;&#x6210;&#x4E3B;&#x52A8;&#x6D88;&#x606F;&#x4E0E;&#x540E;&#x53F0;&#x5B89;&#x5168;&#x5DE5;&#x5177;</string>
   <string name="heartbeat_current_assistant_label">当前助手</string>

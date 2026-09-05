@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -46,8 +47,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.ui.theme.RikkahubTheme
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
+import me.rerere.rikkahub.ui.components.ui.permission.PermissionManager
+import me.rerere.rikkahub.ui.components.ui.permission.PermissionNotification
+import me.rerere.rikkahub.ui.components.ui.permission.rememberPermissionState
 import org.koin.android.ext.android.inject
 import java.text.DateFormat
 import java.util.Date
@@ -55,15 +60,27 @@ import java.util.Date
 class HeartbeatSettingsActivity : ComponentActivity() {
     private val settingsStore: SettingsStore by inject()
     private var activeAssistantStore: HeartbeatConfigStore? = null
+    private var exactAlarmAllowed by mutableStateOf(true)
+    private var batteryOptimizationIgnored by mutableStateOf<Boolean?>(null)
 
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        refreshSetupChecks()
         setContent {
             RikkahubTheme {
+                val notificationPermissionState = rememberPermissionState(
+                    permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        setOf(PermissionNotification)
+                    } else {
+                        emptySet()
+                    },
+                )
+                PermissionManager(permissionState = notificationPermissionState)
                 val settings by settingsStore.settingsFlow.collectAsStateWithLifecycle()
                 val currentAssistant = settings.getCurrentAssistant()
+                val currentModel = settings.getCurrentChatModel()
                 val currentAssistantId = currentAssistant.id.toString()
                 val assistantStore = remember(currentAssistantId) {
                     activeAssistantStore?.close()
@@ -135,6 +152,15 @@ class HeartbeatSettingsActivity : ComponentActivity() {
                                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                             }
                         }
+                        HeartbeatSetupChecklist(
+                            model = currentModel,
+                            notificationReady = notificationPermissionState.allPermissionsGranted,
+                            exactAlarmReady = exactAlarmAllowed,
+                            batteryOptimizationIgnored = batteryOptimizationIgnored,
+                            onRequestNotifications = notificationPermissionState::requestPermissions,
+                            onRequestExactAlarm = ::requestExactAlarmPermissionIfNeeded,
+                            onOpenBatterySettings = ::openBatteryOptimizationSettings,
+                        )
                         HeartbeatGlassSection {
                             HeartbeatCurrentDiagnosticsSection(visibleRunStatus)
                         }
@@ -282,7 +308,25 @@ class HeartbeatSettingsActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        refreshSetupChecks()
         HeartbeatScheduler.sync(this)
+    }
+
+    private fun refreshSetupChecks() {
+        exactAlarmAllowed = canScheduleExactAlarms()
+        batteryOptimizationIgnored = isIgnoringBatteryOptimizations()
+    }
+
+    private fun canScheduleExactAlarms(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+        return getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
+    }
+
+    private fun isIgnoringBatteryOptimizations(): Boolean? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
+        return runCatching {
+            getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
+        }.getOrNull()
     }
 
     private fun requestExactAlarmPermissionIfNeeded() {
@@ -295,6 +339,10 @@ class HeartbeatSettingsActivity : ComponentActivity() {
                 Uri.parse("package:$packageName"),
             ),
         )
+    }
+
+    private fun openBatteryOptimizationSettings() {
+        startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
     }
 
     override fun onDestroy() {
