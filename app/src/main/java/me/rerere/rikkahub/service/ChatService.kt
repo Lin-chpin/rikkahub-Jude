@@ -868,7 +868,7 @@ class ChatService(
                     ChatRequestMode.VoiceCall -> messages
                 }
             }
-            val generationBaseMessageIds = generationMessages.mapTo(mutableSetOf()) { it.id }
+            val generationBaseMessageIds = conversation.currentMessages.mapTo(mutableSetOf()) { it.id }
             val transientLastContextMessage = voiceCallUserEventState?.let { eventState ->
                 generationMessages.lastOrNull()
                     ?.takeIf { it.role == MessageRole.USER }

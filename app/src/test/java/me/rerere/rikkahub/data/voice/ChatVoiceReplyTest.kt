@@ -143,6 +143,30 @@ class ChatVoiceReplyTest {
     }
 
     @Test
+    fun ignoresAnExecutedVoiceToolAlreadyPresentBeforeGeneration() {
+        val existingMessage = UIMessage.user("请继续聊天")
+        val oldToolReply = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool(
+                    toolCallId = "voice-old",
+                    toolName = CHAT_VOICE_REPLY_TOOL_NAME,
+                    input = "{}",
+                    output = listOf(UIMessagePart.Text("done")),
+                ),
+            ),
+        )
+        val ordinaryReply = UIMessage.assistant("这是本轮普通文字回复")
+
+        val target = findChatVoiceReplyMaterializationTarget(
+            messages = listOf(existingMessage, oldToolReply, ordinaryReply),
+            generationBaseMessageIds = setOf(existingMessage.id, oldToolReply.id),
+        )
+
+        assertNull(target)
+    }
+
+    @Test
     fun usesTheLatestStructuredTextPartWhenStreamingRepeatedTheProtocol() {
         val message = UIMessage(
             role = MessageRole.ASSISTANT,
