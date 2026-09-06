@@ -296,6 +296,7 @@ class HeartbeatGenerationWorkflow(
             context = context,
             message = message,
             assistantId = config.assistantId,
+            reschedule = false,
         )
 
         recordExperience(

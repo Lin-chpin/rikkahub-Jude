@@ -31,14 +31,29 @@ object HeartbeatScheduler {
             val autonomousWakeAt = HeartbeatScheduleStore(context)
                 .nextWakeAtMillis(config.assistantId!!)
             val storedAutonomousTrigger = autonomousWakeAt != null && triggerAt == autonomousWakeAt
-            if (triggerAt == null || triggerAt <= now || storedAutonomousTrigger) {
+            val autonomousTriggerEarlier = autonomousWakeAt != null &&
+                (triggerAt == null || autonomousWakeAt < triggerAt)
+            val triggerTooSoon = triggerAt != null &&
+                !storedAutonomousTrigger &&
+                triggerAt < now + config.minIntervalMinutes * 60_000L
+            if (
+                triggerAt == null ||
+                triggerAt <= now ||
+                storedAutonomousTrigger ||
+                autonomousTriggerEarlier ||
+                triggerTooSoon
+            ) {
                 scheduleNext(context, config)
             }
         }
         rearmEarliest(context)
     }
 
-    fun scheduleNext(context: Context, rawConfig: HeartbeatConfig) {
+    fun scheduleNext(
+        context: Context,
+        rawConfig: HeartbeatConfig,
+        intervalAnchorAtMillis: Long? = null,
+    ) {
         val config = rawConfig.normalized()
         val assistantId = config.assistantId
         if (!config.enabled || assistantId.isNullOrBlank()) {
@@ -69,12 +84,17 @@ object HeartbeatScheduler {
                 maximumMinutes = config.maxIntervalMinutes,
             )
         }
-        val anchorAt = lastAssistantMessageAt.takeIf { it > 0L } ?: now
-        val delayMillis = delayMinutes * 60_000L
         val regularTriggerAt = if (retryAtMillis != null && retryAtMillis > now) {
             retryAtMillis
         } else {
-            maxOf(now + delayMillis, anchorAt + delayMillis)
+            HeartbeatScheduleTiming.nextRegularTriggerAtMillis(
+                nowMillis = now,
+                delayMinutes = delayMinutes,
+                anchorAtMillis = intervalAnchorAtMillis
+                    ?: lastAssistantMessageAt.takeIf { it > 0L },
+                preserveAnchor = intervalAnchorAtMillis != null,
+                minimumLeadMillis = MIN_SCHEDULE_LEAD_MILLIS,
+            )
         }
         val autonomousTriggerAt = autonomousWakeAt?.let {
             maxOf(it, now + MIN_SCHEDULE_LEAD_MILLIS)

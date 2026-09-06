@@ -158,7 +158,10 @@ data class Conversation(
         return messageNodes.firstOrNull { node -> node.messages.any { it.id == messageId } }
     }
 
-    fun updateCurrentMessages(messages: List<UIMessage>): Conversation {
+    fun updateCurrentMessages(
+        messages: List<UIMessage>,
+        messagesAreVisibleInOrder: Boolean = false,
+    ): Conversation {
         val newNodes = this.messageNodes.toMutableList()
         val compressedNodeIds = activeCompressedMessageNodeIds
         val targetNodeIndices = newNodes.mapIndexedNotNull { index, node ->
@@ -167,6 +170,38 @@ data class Conversation(
                     !node.currentMessage.isStandaloneVoiceCallRecord()
             }
         }
+
+        if (messagesAreVisibleInOrder) {
+            messages.forEachIndexed { index, message ->
+                val nodeIndex = targetNodeIndices.getOrNull(index)
+                val node = if (nodeIndex != null) {
+                    newNodes[nodeIndex]
+                } else {
+                    message.toMessageNode()
+                }
+
+                val newMessages = node.messages.toMutableList()
+                val existingMessageIndex = newMessages.indexOfFirst { it.id == message.id }
+                val newMessageIndex = if (existingMessageIndex >= 0) {
+                    newMessages[existingMessageIndex] = message
+                    node.selectIndex
+                } else {
+                    newMessages.add(message)
+                    newMessages.lastIndex
+                }
+                val newNode = node.copy(
+                    messages = newMessages,
+                    selectIndex = newMessageIndex,
+                )
+                if (nodeIndex == null) {
+                    newNodes.add(newNode)
+                } else {
+                    newNodes[nodeIndex] = newNode
+                }
+            }
+            return copy(messageNodes = newNodes)
+        }
+
         val existingNodeIndexByMessageId = buildMap {
             newNodes.forEachIndexed { nodeIndex, node ->
                 node.messages.forEach { message -> put(message.id, nodeIndex) }

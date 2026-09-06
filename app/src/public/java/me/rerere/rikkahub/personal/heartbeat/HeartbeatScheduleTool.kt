@@ -34,6 +34,9 @@ class HeartbeatScheduleTool(
             For mode=random_window provide window_start, window_end, and count; the app chooses that many random
             future wake times inside the window. Existing callers may use repeat=true for interval repetition.
             The schedule is autonomous and is not limited by the normal heartbeat min/max interval settings.
+            A relative or one-time wake fires at its own due time; after it fires, the normal heartbeat interval
+            is recalculated from that trigger time, not from the end of the API call. A recurring calendar wake
+            such as daily at 04:00 remains anchored to that clock time and fires even when the app is already open.
             The heartbeat master switch still controls whether background execution is enabled.
         """.trimIndent().replace("\n", " "),
         needsApproval = false,

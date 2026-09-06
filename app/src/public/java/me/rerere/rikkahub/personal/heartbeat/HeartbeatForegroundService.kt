@@ -381,6 +381,7 @@ class HeartbeatForegroundService : Service(), KoinComponent {
                                 HeartbeatScheduler.scheduleNext(
                                     this@HeartbeatForegroundService,
                                     latest,
+                                    intervalAnchorAtMillis = runStartedAtMillis,
                                 )
                             } else {
                                 HeartbeatScheduler.cancel(this@HeartbeatForegroundService)

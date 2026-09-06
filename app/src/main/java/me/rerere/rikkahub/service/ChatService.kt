@@ -1049,6 +1049,7 @@ class ChatService(
                                     updateConversation(
                                         conversationId,
                                         currentConversation.updateCurrentMessages(listOf(projectedReply)),
+                                        checkFiles = false,
                                     )
                                 }
                             }
@@ -1094,8 +1095,15 @@ class ChatService(
                             }
                             synchronized(tagProjectionLock) {
                                 val updatedConversation = getConversationFlow(conversationId).value
-                                    .updateCurrentMessages(projectedMessages)
-                                updateConversation(conversationId, updatedConversation)
+                                    .updateCurrentMessages(
+                                        projectedMessages,
+                                        messagesAreVisibleInOrder = true,
+                                    )
+                                updateConversation(
+                                    conversationId,
+                                    updatedConversation,
+                                    checkFiles = false,
+                                )
                             }
                             enqueueVoiceCallTagging(chunkMessages, includeUnfinishedTail = false)
 
@@ -2138,7 +2146,11 @@ class ChatService(
 
     // ---- 对话状态更新 ----
 
-    private fun updateConversation(conversationId: Uuid, conversation: Conversation) {
+    private fun updateConversation(
+        conversationId: Uuid,
+        conversation: Conversation,
+        checkFiles: Boolean = true,
+    ) {
         if (conversation.id != conversationId) return
         val normalizedConversation = conversation.normalizeCompressionState()
         if (normalizedConversation.compressedMessageNodeIds != conversation.compressedMessageNodeIds) {
@@ -2151,7 +2163,9 @@ class ChatService(
             )
         }
         val session = getOrCreateSession(conversationId)
-        checkFilesDelete(normalizedConversation, session.state.value)
+        if (checkFiles) {
+            checkFilesDelete(normalizedConversation, session.state.value)
+        }
         session.replaceState(normalizedConversation)
     }
 
@@ -2161,6 +2175,7 @@ class ChatService(
     }
 
     private fun checkFilesDelete(newConversation: Conversation, oldConversation: Conversation) {
+        if (newConversation.messageNodes === oldConversation.messageNodes) return
         val newFiles = newConversation.files
         val oldFiles = oldConversation.files
         val deletedFiles = oldFiles.filter { file ->

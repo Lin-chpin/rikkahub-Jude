@@ -44,7 +44,12 @@ object HeartbeatUserActivity {
         }
     }
 
-    fun recordAssistantMessage(context: Context, message: UIMessage, assistantId: String?) {
+    fun recordAssistantMessage(
+        context: Context,
+        message: UIMessage,
+        assistantId: String?,
+        reschedule: Boolean = true,
+    ) {
         if (message.role != MessageRole.ASSISTANT || message.toText().isBlank()) return
 
         val store = HeartbeatConfigStore(context, assistantId)
@@ -52,7 +57,7 @@ object HeartbeatUserActivity {
         val config = store.read()
         store.close()
 
-        if (config.enabled) {
+        if (reschedule && config.enabled) {
             HeartbeatScheduler.scheduleNext(context, config)
         }
     }
