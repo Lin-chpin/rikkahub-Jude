@@ -66,7 +66,14 @@ data class Conversation(
         }
 
     val visibleMessageNodes: List<MessageNode>
-        get() = messageNodes.filterNot { it.id in activeCompressedMessageNodeIds }
+        get() {
+            val activeIds = activeCompressedMessageNodeIds
+            return if (activeIds.isEmpty()) {
+                messageNodes
+            } else {
+                messageNodes.filterNot { it.id in activeIds }
+            }
+        }
 
     val hasCompressedMessages: Boolean
         get() = activeCompressedMessageNodeIds.isNotEmpty()
@@ -158,10 +165,7 @@ data class Conversation(
         return messageNodes.firstOrNull { node -> node.messages.any { it.id == messageId } }
     }
 
-    fun updateCurrentMessages(
-        messages: List<UIMessage>,
-        messagesAreVisibleInOrder: Boolean = false,
-    ): Conversation {
+    fun updateCurrentMessages(messages: List<UIMessage>): Conversation {
         val newNodes = this.messageNodes.toMutableList()
         val compressedNodeIds = activeCompressedMessageNodeIds
         val targetNodeIndices = newNodes.mapIndexedNotNull { index, node ->
@@ -169,37 +173,6 @@ data class Conversation(
                 node.id !in compressedNodeIds &&
                     !node.currentMessage.isStandaloneVoiceCallRecord()
             }
-        }
-
-        if (messagesAreVisibleInOrder) {
-            messages.forEachIndexed { index, message ->
-                val nodeIndex = targetNodeIndices.getOrNull(index)
-                val node = if (nodeIndex != null) {
-                    newNodes[nodeIndex]
-                } else {
-                    message.toMessageNode()
-                }
-
-                val newMessages = node.messages.toMutableList()
-                val existingMessageIndex = newMessages.indexOfFirst { it.id == message.id }
-                val newMessageIndex = if (existingMessageIndex >= 0) {
-                    newMessages[existingMessageIndex] = message
-                    node.selectIndex
-                } else {
-                    newMessages.add(message)
-                    newMessages.lastIndex
-                }
-                val newNode = node.copy(
-                    messages = newMessages,
-                    selectIndex = newMessageIndex,
-                )
-                if (nodeIndex == null) {
-                    newNodes.add(newNode)
-                } else {
-                    newNodes[nodeIndex] = newNode
-                }
-            }
-            return copy(messageNodes = newNodes)
         }
 
         val existingNodeIndexByMessageId = buildMap {
@@ -245,6 +218,53 @@ data class Conversation(
         return this.copy(
             messageNodes = newNodes
         )
+    }
+
+    /**
+     * Returns the backing node for a message's position in the visible message list.
+     * Streaming updates use this to avoid rebuilding every message node for each token.
+     */
+    fun visibleMessageNodeIndexAt(index: Int): Int? {
+        if (index < 0) return null
+        var visibleIndex = 0
+        return messageNodes.indexOfFirst { node ->
+            if (node.id in activeCompressedMessageNodeIds ||
+                node.currentMessage.isStandaloneVoiceCallRecord()
+            ) {
+                false
+            } else {
+                visibleIndex++ == index
+            }
+        }.takeIf { it >= 0 }
+    }
+
+    /**
+     * Updates one node while preserving the other nodes untouched.
+     * This is the hot path for streaming assistant responses.
+     */
+    fun updateMessageAtNodeIndex(nodeIndex: Int?, message: UIMessage): Conversation {
+        val newNodes = messageNodes.toMutableList()
+        val resolvedNodeIndex = nodeIndex?.takeIf { it in newNodes.indices }
+        if (resolvedNodeIndex == null) {
+            newNodes += message.toMessageNode()
+            return copy(messageNodes = newNodes)
+        }
+
+        val node = newNodes[resolvedNodeIndex]
+        val newMessages = node.messages.toMutableList()
+        val existingMessageIndex = newMessages.indexOfFirst { it.id == message.id }
+        val newMessageIndex = if (existingMessageIndex >= 0) {
+            newMessages[existingMessageIndex] = message
+            node.selectIndex
+        } else {
+            newMessages += message
+            newMessages.lastIndex
+        }
+        newNodes[resolvedNodeIndex] = node.copy(
+            messages = newMessages,
+            selectIndex = newMessageIndex,
+        )
+        return copy(messageNodes = newNodes)
     }
 
     companion object {

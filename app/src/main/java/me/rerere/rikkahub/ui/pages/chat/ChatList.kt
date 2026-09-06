@@ -292,12 +292,10 @@ private fun ChatListNormal(
             .flatMap { it.models }
             .associateBy { it.id }
     }
-    val displayedMessageNodes = remember(
-        conversation.messageNodes,
-        conversation.compressedMessageNodeIds,
-        showCompressedMessages
-    ) {
-        if (showCompressedMessages) conversation.messageNodes else conversation.visibleMessageNodes
+    val displayedMessageNodes = if (showCompressedMessages) {
+        conversation.messageNodes
+    } else {
+        conversation.visibleMessageNodes
     }
     val lastMessageNodeId = displayedMessageNodes.lastOrNull()?.id
 

@@ -149,6 +149,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.uuid.Uuid
 
 private const val TAG = "ChatService"
+private const val STREAMING_UI_UPDATE_INTERVAL_NANOS = 50_000_000L
 private const val MIN_COMPRESSION_CHUNK_TOKENS = 8000
 private const val COMPRESSION_CHUNK_TOKENS_PER_TARGET_TOKEN = 8
 private const val VOICE_CALL_SYSTEM_PROMPT_COMMON = """
@@ -349,7 +350,7 @@ class ChatService(
     private fun launchWithConversationReference(
         conversationId: Uuid,
         block: suspend () -> Unit
-    ): Job = appScope.launch {
+    ): Job = appScope.launch(Dispatchers.IO) {
         addConversationReference(conversationId)
         try {
             block()
@@ -449,7 +450,7 @@ class ChatService(
         val session = getOrCreateSession(conversationId)
         session.getJob()?.cancel()
 
-        val job = appScope.launch {
+        val job = appScope.launch(Dispatchers.IO) {
             try {
                 initializeConversation(conversationId)
                 val currentConversation = session.state.value
@@ -560,7 +561,7 @@ class ChatService(
         val session = getOrCreateSession(conversationId)
         session.getJob()?.cancel()
 
-        val job = appScope.launch {
+        val job = appScope.launch(Dispatchers.IO) {
             try {
                 val conversation = session.state.value
 
@@ -609,7 +610,7 @@ class ChatService(
         val session = getOrCreateSession(conversationId)
         session.getJob()?.cancel()
 
-        val job = appScope.launch {
+        val job = appScope.launch(Dispatchers.IO) {
             try {
                 val conversation = session.state.value
                 val acceptedVoiceCall = approved && answer == null &&
@@ -712,7 +713,7 @@ class ChatService(
         val previousJob = session.getJob()
         previousJob?.cancel()
 
-        val job = appScope.launch {
+        val job = appScope.launch(Dispatchers.IO) {
             try {
                 runCatching { previousJob?.join() }
 
@@ -989,6 +990,9 @@ class ChatService(
             val tagAssignmentsByMessageId = mutableMapOf<kotlin.uuid.Uuid, MutableMap<Int, VoiceCallAudioTagAssignment?>>()
             val nextTagIndexByMessageId = mutableMapOf<kotlin.uuid.Uuid, Int>()
             val tagProjectionLock = Any()
+            var streamingMessageId: kotlin.uuid.Uuid? = null
+            var streamingNodeIndex: Int? = null
+            var lastStreamingUiUpdateNanos = 0L
 
             coroutineScope {
                 val tagJobs = mutableListOf<Job>()
@@ -1048,7 +1052,12 @@ class ChatService(
                                     )
                                     updateConversation(
                                         conversationId,
-                                        currentConversation.updateCurrentMessages(listOf(projectedReply)),
+                                        currentConversation.updateMessageAtNodeIndex(
+                                            nodeIndex = currentConversation.messageNodes.indexOfFirst { node ->
+                                                node.messages.any { it.id == projectedReply.id }
+                                            }.takeIf { it >= 0 },
+                                            message = projectedReply,
+                                        ),
                                         checkFiles = false,
                                     )
                                 }
@@ -1062,8 +1071,34 @@ class ChatService(
                     cancelLiveUpdateNotification(conversationId)
 
                     // 可能被取消了，或者意外结束，兜底更新
-                    val updatedConversation = getConversationFlow(conversationId).value.copy(
-                        messageNodes = getConversationFlow(conversationId).value.messageNodes.map { node ->
+                    val currentConversation = getConversationFlow(conversationId).value
+                    val finalStreamMessage = latestPrimaryMessages?.lastOrNull()?.let { message ->
+                        synchronized(tagProjectionLock) {
+                            tagAssignmentsByMessageId[message.id]?.let { assignments ->
+                                message.withIncrementalVoiceCallAudioTagAssignments(
+                                    assignments = assignments,
+                                    format = voiceCallAudioTagFormat!!,
+                                )
+                            } ?: message
+                        }
+                    }
+                    val conversationBeforeFinish = if (finalStreamMessage != null) {
+                        val nodeIndex = if (streamingMessageId == finalStreamMessage.id) {
+                            streamingNodeIndex
+                        } else {
+                            currentConversation.visibleMessageNodeIndexAt(
+                                latestPrimaryMessages!!.lastIndex,
+                            )
+                        }
+                        currentConversation.updateMessageAtNodeIndex(
+                            nodeIndex = nodeIndex,
+                            message = finalStreamMessage,
+                        )
+                    } else {
+                        currentConversation
+                    }
+                    val updatedConversation = conversationBeforeFinish.copy(
+                        messageNodes = conversationBeforeFinish.messageNodes.map { node ->
                             node.copy(messages = node.messages.map { it.finishReasoning() })
                         },
                         updateAt = Instant.now()
@@ -1094,16 +1129,32 @@ class ChatService(
                                 }
                             }
                             synchronized(tagProjectionLock) {
-                                val updatedConversation = getConversationFlow(conversationId).value
-                                    .updateCurrentMessages(
-                                        projectedMessages,
-                                        messagesAreVisibleInOrder = true,
+                                val currentConversation = getConversationFlow(conversationId).value
+                                val streamedMessage = projectedMessages.lastOrNull()
+                                val now = System.nanoTime()
+                                val shouldUpdateUi = streamedMessage != null && (
+                                    streamingMessageId != streamedMessage.id ||
+                                        now - lastStreamingUiUpdateNanos >= STREAMING_UI_UPDATE_INTERVAL_NANOS
                                     )
-                                updateConversation(
-                                    conversationId,
-                                    updatedConversation,
-                                    checkFiles = false,
-                                )
+                                if (shouldUpdateUi) {
+                                    val nodeIndex = if (streamingMessageId == streamedMessage.id) {
+                                        streamingNodeIndex
+                                    } else {
+                                        currentConversation.visibleMessageNodeIndexAt(projectedMessages.lastIndex)
+                                    }
+                                    val updatedConversation = currentConversation.updateMessageAtNodeIndex(
+                                        nodeIndex = nodeIndex,
+                                        message = streamedMessage,
+                                    )
+                                    streamingMessageId = streamedMessage.id
+                                    streamingNodeIndex = nodeIndex ?: updatedConversation.messageNodes.lastIndex
+                                    lastStreamingUiUpdateNanos = now
+                                    updateConversation(
+                                        conversationId,
+                                        updatedConversation,
+                                        checkFiles = false,
+                                    )
+                                }
                             }
                             enqueueVoiceCallTagging(chunkMessages, includeUnfinishedTail = false)
 

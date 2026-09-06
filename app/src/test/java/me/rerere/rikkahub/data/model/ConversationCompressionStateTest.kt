@@ -124,6 +124,25 @@ class ConversationCompressionStateTest {
     }
 
     @Test
+    fun streamingUpdateOnlyTouchesTheTargetVisibleNode() {
+        val first = messageNode("A")
+        val second = messageNode("B")
+        val conversation = conversationOf(first, second)
+        val updatedMessage = second.currentMessage.copy(
+            parts = listOf(UIMessagePart.Text("updated")),
+        )
+
+        val updated = conversation.updateMessageAtNodeIndex(
+            nodeIndex = conversation.visibleMessageNodeIndexAt(1),
+            message = updatedMessage,
+        )
+
+        assertEquals(listOf(first.id, second.id), updated.messageNodes.map { it.id })
+        assertEquals(first, updated.messageNodes.first())
+        assertEquals(updatedMessage, updated.messageNodes[1].currentMessage)
+    }
+
+    @Test
     fun visibleForkPointRemapsCompressedNodeIdsAndKeepsSummary() {
         val first = messageNode("A")
         val second = messageNode("B")
