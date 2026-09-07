@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">RikkaHub Import Adapter</string>
+    <string name="title">RikkaHub Import Adapter</string>
+    <string name="description">Select an upstream RikkaHub backup and convert it into a standard .rhk package. Everything is processed locally.</string>
+    <string name="select_backup">Select upstream backup</string>
+    <string name="export_package">Export .rhk package</string>
+    <string name="waiting">Waiting for a backup file.</string>
+    <string name="converting">Converting…</string>
+    <string name="converted">Conversion complete. Export the .rhk package and import it in RikkaHub.</string>
+    <string name="converted_with_warnings">Converted %1$d conversations with %2$d warnings and %3$d errors. Export the .rhk package and check diagnostics.json.</string>
+    <string name="saved">Package saved.</string>
+    <string name="failed">Conversion failed: %1$s</string>
+</resources>

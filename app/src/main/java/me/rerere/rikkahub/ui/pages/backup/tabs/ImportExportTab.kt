@@ -47,7 +47,7 @@ fun ImportExportTab(
     var isExporting by remember { mutableStateOf(false) }
     var isRestoring by remember { mutableStateOf(false) }
 
-    // 导入类型：local 为本地备份，chatbox 为 Chatbox 导入，cherry 为 Cherry Studio 导入
+    // 导入类型：local 为本地备份，transfer 为独立适配器生成的标准包
     var importType by remember { mutableStateOf("local") }
 
     // 创建文件保存的launcher
@@ -149,13 +149,40 @@ fun ImportExportTab(
                             // 清理临时文件
                             tempFile.delete()
                         }
+
+                        "transfer" -> {
+                            val tempFile =
+                                File(context.cacheDir, "temp_rikkahub_transfer_${System.currentTimeMillis()}.rhk")
+                            try {
+                                context.contentResolver.openInputStream(sourceUri)?.use { inputStream ->
+                                    FileOutputStream(tempFile).use { outputStream ->
+                                        inputStream.copyTo(outputStream)
+                                    }
+                                }
+
+                                val result = vm.restoreFromRikkaHubTransfer(tempFile)
+                                val report = result.report
+                                toaster.show(
+                                    context.getString(
+                                        R.string.backup_page_import_transfer_summary,
+                                        report.importedConversations,
+                                        report.skippedExistingConversations + report.skippedConversations,
+                                    ),
+                                    type = if (report.hasWarnings) ToastType.Warning else ToastType.Success
+                                )
+                            } finally {
+                                tempFile.delete()
+                            }
+                        }
                     }
 
-                    toaster.show(
-                        context.getString(R.string.backup_page_restore_success),
-                        type = ToastType.Success
-                    )
-                    onShowRestartDialog()
+                    if (importType != "transfer") {
+                        toaster.show(
+                            context.getString(R.string.backup_page_restore_success),
+                            type = ToastType.Success
+                        )
+                        onShowRestartDialog()
+                    }
                 }.onFailure { e ->
                     e.printStackTrace()
                     toaster.show(
@@ -233,6 +260,7 @@ fun ImportExportTab(
                         }
                     },
                 )
+
             }
         }
 
@@ -273,6 +301,24 @@ fun ImportExportTab(
                     supportingContent = { Text(stringResource(R.string.backup_page_import_cherry_studio_desc)) },
                     leadingContent = {
                         if (isRestoring && importType == "cherry") {
+                            CircularWavyProgressIndicator(modifier = Modifier.size(24.dp))
+                        } else {
+                            Icon(HugeIcons.FileImport, null)
+                        }
+                    },
+                )
+
+                item(
+                    onClick = if (!isRestoring) {
+                        {
+                            importType = "transfer"
+                            openDocumentLauncher.launch(arrayOf("application/zip"))
+                        }
+                    } else null,
+                    headlineContent = { Text(stringResource(R.string.backup_page_import_from_rikkahub_adapter)) },
+                    supportingContent = { Text(stringResource(R.string.backup_page_import_rikkahub_adapter_desc)) },
+                    leadingContent = {
+                        if (isRestoring && importType == "transfer") {
                             CircularWavyProgressIndicator(modifier = Modifier.size(24.dp))
                         } else {
                             Icon(HugeIcons.FileImport, null)

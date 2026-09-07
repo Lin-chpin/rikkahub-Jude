@@ -186,11 +186,14 @@
   <string name="backup_page_files">文件</string>
   <string name="backup_page_import_chatbox_desc">导入 ChatBox 提供商配置和完整聊天记录</string>
   <string name="backup_page_import_cherry_studio_desc">导入Cherry Studio提供商配置</string>
+  <string name="backup_page_import_rikkahub_adapter_desc">导入独立适配器生成的 .rhk 文件</string>
   <string name="backup_page_import_desc">导入本地备份文件</string>
   <string name="backup_page_import_export">本地</string>
   <string name="backup_page_import_from_chatbox">从ChatBox导入</string>
   <string name="backup_page_import_from_cherry_studio">从Cherry Studio导入</string>
+  <string name="backup_page_import_from_rikkahub_adapter">导入转换后的 RikkaHub 数据</string>
   <string name="backup_page_import_from_other_app">从其他APP导入</string>
+  <string name="backup_page_import_transfer_summary">已导入 %1$d 个对话，跳过 %2$d 个</string>
   <string name="backup_page_importing">正在恢复...</string>
   <string name="backup_page_loading_failed">加载备份文件失败: %s</string>
   <string name="backup_page_local_backup_export">导出为文件</string>
