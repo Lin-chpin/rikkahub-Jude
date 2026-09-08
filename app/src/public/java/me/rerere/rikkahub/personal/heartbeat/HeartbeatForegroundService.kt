@@ -56,8 +56,12 @@ class HeartbeatForegroundService : Service(), KoinComponent {
                     HeartbeatRunImpact.FAILURE
                 },
             )
+            val retryAtMillis = store.readDiagnostics().nextRetryAtMillis
             store.close()
             Logging.log(TAG, "foreground promotion failed $detail")
+            if (!readOnlyTest) {
+                HeartbeatNotifications.showFailure(this, retryAtMillis)
+            }
             if (!readOnlyTest && config.enabled) {
                 HeartbeatScheduler.scheduleNext(this, config)
             }
@@ -309,6 +313,7 @@ class HeartbeatForegroundService : Service(), KoinComponent {
                         },
                     )
                 }
+                val completionImpact = result.toRunImpact(readOnlyTest)
                 activeStore.recordRunStatus(
                     phase = result.toRunPhase(),
                     detail = result.detail,
@@ -316,8 +321,14 @@ class HeartbeatForegroundService : Service(), KoinComponent {
                     assistantId = runAssistantId,
                     triggerSource = source,
                     startedAtMillis = runStartedAtMillis,
-                    completionImpact = result.toRunImpact(readOnlyTest),
+                    completionImpact = completionImpact,
                 )
+                if (completionImpact == HeartbeatRunImpact.FAILURE && !readOnlyTest) {
+                    HeartbeatNotifications.showFailure(
+                        context = this@HeartbeatForegroundService,
+                        nextRetryAtMillis = activeStore.readDiagnostics().nextRetryAtMillis,
+                    )
+                }
             } catch (error: TimeoutCancellationException) {
                 store?.recordRunStatus(
                     phase = HeartbeatRunPhase.TIMED_OUT,
@@ -331,6 +342,12 @@ class HeartbeatForegroundService : Service(), KoinComponent {
                         HeartbeatRunImpact.FAILURE
                     },
                 )
+                if (!readOnlyTest) {
+                    HeartbeatNotifications.showFailure(
+                        context = this@HeartbeatForegroundService,
+                        nextRetryAtMillis = store?.readDiagnostics()?.nextRetryAtMillis,
+                    )
+                }
                 Log.e(TAG, "Heartbeat generation timed out", error)
             } catch (error: CancellationException) {
                 store?.recordRunStatus(
@@ -362,6 +379,12 @@ class HeartbeatForegroundService : Service(), KoinComponent {
                         HeartbeatRunImpact.FAILURE
                     },
                 )
+                if (!readOnlyTest) {
+                    HeartbeatNotifications.showFailure(
+                        context = this@HeartbeatForegroundService,
+                        nextRetryAtMillis = store?.readDiagnostics()?.nextRetryAtMillis,
+                    )
+                }
             } finally {
                 withContext(NonCancellable) {
                     if (gateAcquired) {
@@ -435,7 +458,9 @@ class HeartbeatForegroundService : Service(), KoinComponent {
                     triggerSource = "persistent_start",
                     completionImpact = HeartbeatRunImpact.FAILURE,
                 )
+                val retryAtMillis = store.readDiagnostics().nextRetryAtMillis
                 store.close()
+                HeartbeatNotifications.showFailure(context, retryAtMillis)
                 if (config.enabled) HeartbeatScheduler.scheduleNext(context, config)
             }
         }

@@ -64,6 +64,7 @@ object HeartbeatScheduler {
         val store = HeartbeatConfigStore(context, assistantId)
         val goodNightActive = store.isGoodNightActive()
         val lastAssistantMessageAt = store.lastAssistantMessageAt()
+        val lastUserMessageAt = store.lastUserMessageAt()
         val now = System.currentTimeMillis()
         val desireState = store.readDesireState().advance(now)
         val retryAtMillis = store.readDiagnostics().nextRetryAtMillis
@@ -84,23 +85,27 @@ object HeartbeatScheduler {
                 maximumMinutes = config.maxIntervalMinutes,
             )
         }
-        val regularTriggerAt = if (retryAtMillis != null && retryAtMillis > now) {
-            retryAtMillis
-        } else {
-            HeartbeatScheduleTiming.nextRegularTriggerAtMillis(
-                nowMillis = now,
-                delayMinutes = delayMinutes,
-                anchorAtMillis = intervalAnchorAtMillis
-                    ?: lastAssistantMessageAt.takeIf { it > 0L },
-                preserveAnchor = intervalAnchorAtMillis != null,
-                minimumLeadMillis = MIN_SCHEDULE_LEAD_MILLIS,
-            )
-        }
+        val regularTriggerAt = HeartbeatScheduleTiming.nextRegularTriggerAtMillis(
+            nowMillis = now,
+            delayMinutes = delayMinutes,
+            anchorAtMillis = if (intervalAnchorAtMillis != null) {
+                maxOf(intervalAnchorAtMillis, lastUserMessageAt)
+            } else {
+                maxOf(lastAssistantMessageAt, lastUserMessageAt).takeIf { it > 0L }
+            },
+            preserveAnchor = intervalAnchorAtMillis != null,
+            minimumLeadMillis = MIN_SCHEDULE_LEAD_MILLIS,
+        )
+        val retryAwareTriggerAt = HeartbeatScheduleTiming.earliestRetryOrRegularTriggerAtMillis(
+            nowMillis = now,
+            retryAtMillis = retryAtMillis,
+            regularTriggerAtMillis = regularTriggerAt,
+        )
         val autonomousTriggerAt = autonomousWakeAt?.let {
             maxOf(it, now + MIN_SCHEDULE_LEAD_MILLIS)
         }
-        val triggerAt = listOfNotNull(regularTriggerAt, autonomousTriggerAt).minOrNull()
-            ?: regularTriggerAt
+        val triggerAt = listOfNotNull(retryAwareTriggerAt, autonomousTriggerAt).minOrNull()
+            ?: retryAwareTriggerAt
         scheduleAt(context, triggerAt, assistantId)
     }
 
@@ -247,9 +252,11 @@ object HeartbeatScheduler {
                 triggerSource = source,
                 completionImpact = if (readOnlyTest) HeartbeatRunImpact.NEUTRAL else HeartbeatRunImpact.FAILURE,
             )
+            val retryAtMillis = store.readDiagnostics().nextRetryAtMillis
             Logging.log(LOG_TAG, "service start failed $detail")
             store.close()
             rootStore.close()
+            if (!readOnlyTest) HeartbeatNotifications.showFailure(context, retryAtMillis)
             if (!readOnlyTest && config.enabled) scheduleNext(context, config)
             return
         }

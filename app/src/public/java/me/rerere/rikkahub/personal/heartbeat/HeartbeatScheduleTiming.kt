@@ -21,6 +21,17 @@ object HeartbeatScheduleTiming {
         return maxOf(earliestAt, anchorAt + delayMillis)
     }
 
+    /** Chooses a pending failure retry before the regular heartbeat when it is due sooner. */
+    fun earliestRetryOrRegularTriggerAtMillis(
+        nowMillis: Long,
+        retryAtMillis: Long?,
+        regularTriggerAtMillis: Long,
+    ): Long {
+        val pendingRetryAt = retryAtMillis?.takeIf { it > nowMillis }
+        return pendingRetryAt?.let { minOf(it, regularTriggerAtMillis) }
+            ?: regularTriggerAtMillis
+    }
+
     fun jitteredDelayMinutes(
         baseMinutes: Int,
         minimumMinutes: Int,

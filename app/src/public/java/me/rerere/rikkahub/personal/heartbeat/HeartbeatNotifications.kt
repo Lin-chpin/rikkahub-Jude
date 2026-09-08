@@ -9,11 +9,14 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.RouteActivity
+import java.text.DateFormat
+import java.util.Date
 
 object HeartbeatNotifications {
     const val CHANNEL_ID = "personal_heartbeat"
     const val RUNNING_NOTIFICATION_ID = 47022
     private const val MESSAGE_NOTIFICATION_ID = 47023
+    private const val FAILURE_NOTIFICATION_ID = 47024
     private const val QUESTION_NOTIFICATION_BASE = 47100
 
     fun createChannel(context: Context) {
@@ -84,6 +87,33 @@ object HeartbeatNotifications {
             title = senderName,
             message = message,
         )
+    }
+
+    fun showFailure(context: Context, nextRetryAtMillis: Long?) {
+        val content = nextRetryAtMillis?.let { retryAt ->
+            context.getString(
+                R.string.heartbeat_failure_content,
+                DateFormat.getDateTimeInstance().format(Date(retryAt)),
+            )
+        } ?: context.getString(R.string.heartbeat_failure_content_no_retry)
+        val contentIntent = PendingIntent.getActivity(
+            context,
+            FAILURE_NOTIFICATION_ID,
+            Intent(context, HeartbeatSettingsActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.drawable.small_icon)
+            .setContentTitle(context.getString(R.string.heartbeat_failure_title))
+            .setContentText(content)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(content))
+            .setCategory(NotificationCompat.CATEGORY_ERROR)
+            .setAutoCancel(true)
+            .setContentIntent(contentIntent)
+            .build()
+        NotificationManagerCompat.from(context).notify(FAILURE_NOTIFICATION_ID, notification)
     }
 
     private fun notifyMessage(

@@ -50,4 +50,51 @@ class HeartbeatScheduleTimingTest {
             ),
         )
     }
+
+    @Test
+    fun userActivityRescheduleWaitsFromTheUserMessage() {
+        val now = 10_000_000L
+        val userMessageAt = now - 5 * 60_000L
+
+        assertEquals(
+            userMessageAt + 60 * 60_000L,
+            HeartbeatScheduleTiming.nextRegularTriggerAtMillis(
+                nowMillis = now,
+                delayMinutes = 60L,
+                anchorAtMillis = userMessageAt,
+                preserveAnchor = true,
+            ),
+        )
+    }
+
+    @Test
+    fun failureRetryPrecedesLongRegularInterval() {
+        val now = 10_000_000L
+        val retryAt = now + 5 * 60_000L
+        val regularAt = now + 60 * 60_000L
+
+        assertEquals(
+            retryAt,
+            HeartbeatScheduleTiming.earliestRetryOrRegularTriggerAtMillis(
+                nowMillis = now,
+                retryAtMillis = retryAt,
+                regularTriggerAtMillis = regularAt,
+            ),
+        )
+    }
+
+    @Test
+    fun expiredFailureRetryDoesNotReplaceRegularInterval() {
+        val now = 10_000_000L
+        val regularAt = now + 60 * 60_000L
+
+        assertEquals(
+            regularAt,
+            HeartbeatScheduleTiming.earliestRetryOrRegularTriggerAtMillis(
+                nowMillis = now,
+                retryAtMillis = now - 1L,
+                regularTriggerAtMillis = regularAt,
+            ),
+        )
+    }
 }
