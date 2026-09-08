@@ -50,9 +50,19 @@ object LocalBuildIntegration {
         HeartbeatUserActivity.recordAssistantMessage(context, message, assistantId?.toString())
     }
 
-    fun additionalTools(context: Context, assistantId: Uuid?): List<Tool> = listOf(
-        HeartbeatScheduleTool(context, assistantId).tool,
-    )
+    fun additionalTools(context: Context, assistantId: Uuid?): List<Tool> {
+        val assistantKey = assistantId?.toString() ?: return emptyList()
+        val store = HeartbeatConfigStore(context, assistantKey)
+        return try {
+            if (store.read().enabled) {
+                listOf(HeartbeatScheduleTool(context, assistantId).tool)
+            } else {
+                emptyList()
+            }
+        } finally {
+            store.close()
+        }
+    }
 
     fun additionalConversationModeTools(context: Context, assistantId: Uuid?, conversationId: Uuid?): List<Tool> = emptyList()
 
