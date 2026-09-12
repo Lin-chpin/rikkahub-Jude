@@ -4,6 +4,7 @@ import android.util.Log
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArrayBuilder
 import kotlinx.serialization.json.JsonObject
@@ -25,6 +26,7 @@ import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
+import me.rerere.ai.provider.OpenAIAuthType
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.provider.providers.PartGroup
@@ -34,7 +36,9 @@ import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.handleMessageChunk
 import me.rerere.ai.util.KeyRoulette
+import me.rerere.ai.util.SSEEventSource
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.encodeBase64
 import me.rerere.ai.util.json
@@ -53,37 +57,46 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
-import okhttp3.sse.EventSources
 import kotlin.time.Clock
 
 private const val TAG = "ResponseAPI"
+private const val EVENT_STREAM_MEDIA_TYPE = "text/event-stream"
+
+internal fun okhttp3.Request.Builder.acceptEventStream(): okhttp3.Request.Builder =
+    header("Accept", EVENT_STREAM_MEDIA_TYPE)
 
 class ResponseAPI(
     private val client: OkHttpClient,
-    private val keyRoulette: KeyRoulette = KeyRoulette.default()
+    keyRoulette: KeyRoulette = KeyRoulette.default(),
+    codexTokenProvider: OpenAICodexTokenProvider? = null,
 ) : OpenAIImpl {
+    private val authenticator = OpenAIRequestAuthenticator(keyRoulette, codexTokenProvider)
+
     override suspend fun generateText(
         providerSetting: ProviderSetting.OpenAI,
         messages: List<UIMessage>,
         params: TextGenerationParams
     ): MessageChunk {
+        if (providerSetting.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION) {
+            return collectStreamingTextGeneration(
+                model = params.model,
+                stream = streamText(providerSetting, messages, params),
+            )
+        }
+
         val requestBody = buildRequestBody(
             providerSetting = providerSetting,
             messages = messages,
             params = params,
             stream = false,
         )
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url("${providerSetting.baseUrl}/responses")
             .headers(params.customHeaders.toHeaders())
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
-            .addHeader(
-                "Authorization",
-                "Bearer ${keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString())}"
-            )
             .addHeader("Content-Type", "application/json")
             .configureReferHeaders(providerSetting.baseUrl)
-            .build()
+        val request = authenticator.authenticate(requestBuilder, providerSetting).build()
 
         Log.i(TAG, "generateText: ${json.encodeToString(requestBody)}")
 
@@ -111,16 +124,13 @@ class ResponseAPI(
             params = params,
             stream = true,
         )
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url("${providerSetting.baseUrl}/responses")
             .headers(params.customHeaders.toHeaders())
+            .acceptEventStream()
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
-            .addHeader(
-                "Authorization",
-                "Bearer ${keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString())}"
-            )
             .configureReferHeaders(providerSetting.baseUrl)
-            .build()
+        val request = authenticator.authenticate(requestBuilder, providerSetting).build()
 
         Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
 
@@ -173,7 +183,10 @@ class ResponseAPI(
             }
         }
 
-        val eventSource = EventSources.createFactory(client)
+        val eventSource = SSEEventSource.factory(
+            callFactory = client,
+            allowMissingContentType = providerSetting.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION,
+        )
             .newEventSource(request, listener)
 
         awaitClose {
@@ -190,7 +203,7 @@ class ResponseAPI(
     ): JsonObject {
         val host = providerSetting.baseUrl.toHttpUrl().host
         val capabilities = resolveResponseProviderCapabilities(host)
-        return buildJsonObject {
+        val body = buildJsonObject {
             put("model", params.model.modelId)
             put("stream", stream)
             if (!params.model.tools.contains(BuiltInTools.ImageGeneration)) {
@@ -274,6 +287,12 @@ class ResponseAPI(
                 }
             }
         }.mergeCustomBody(params.customBody)
+
+        return if (providerSetting.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION) {
+            JsonObject(body + ("stream" to JsonPrimitive(true)))
+        } else {
+            body
+        }
     }
 
     internal fun buildMessages(messages: List<UIMessage>) = buildJsonArray {
@@ -749,6 +768,41 @@ class ResponseAPI(
                 ?: 0
         )
     }
+}
+
+internal suspend fun collectStreamingTextGeneration(
+    model: Model,
+    stream: Flow<MessageChunk>,
+): MessageChunk {
+    var messages = listOf(UIMessage(role = MessageRole.USER, parts = emptyList()))
+    var responseId = ""
+    var responseModel = model.modelId
+    var finishReason: String? = null
+    var usage: TokenUsage? = null
+
+    stream.collect { chunk ->
+        messages = messages.handleMessageChunk(chunk, model)
+        if (chunk.id.isNotBlank()) responseId = chunk.id
+        if (chunk.model.isNotBlank()) responseModel = chunk.model
+        chunk.choices.firstOrNull()?.finishReason?.let { finishReason = it }
+        chunk.usage?.let { usage = it }
+    }
+
+    val assistant = messages.lastOrNull { it.role == MessageRole.ASSISTANT }
+        ?: error("Streaming response completed without an assistant message")
+    return MessageChunk(
+        id = responseId,
+        model = responseModel,
+        choices = listOf(
+            UIMessageChoice(
+                index = 0,
+                delta = null,
+                message = assistant,
+                finishReason = finishReason,
+            )
+        ),
+        usage = usage,
+    )
 }
 
 private fun isModelAllowTemperature(model: Model): Boolean {

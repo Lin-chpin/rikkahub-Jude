@@ -23,6 +23,27 @@ enum class ClaudePromptCacheTtl(val apiValue: String?) {
 }
 
 @Serializable
+enum class OpenAIAuthType {
+    @SerialName("api_key")
+    API_KEY,
+
+    @SerialName("chatgpt_subscription")
+    CHATGPT_SUBSCRIPTION,
+}
+
+@Serializable
+data class OpenAICodexCredentials(
+    val accessToken: String,
+    val refreshToken: String,
+    val accountId: String,
+    val expiresAt: Long = 0L,
+    val email: String? = null,
+    val planType: String? = null,
+)
+
+const val OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
+
+@Serializable
 sealed class ProviderSetting {
     abstract val id: Uuid
     abstract val enabled: Boolean
@@ -64,6 +85,8 @@ sealed class ProviderSetting {
         var baseUrl: String = "https://api.openai.com/v1",
         var chatCompletionsPath: String = "/chat/completions",
         var useResponseApi: Boolean = false,
+        var authType: OpenAIAuthType = OpenAIAuthType.API_KEY,
+        var codexCredentials: OpenAICodexCredentials? = null,
     ) : ProviderSetting() {
         override fun addModel(model: Model): ProviderSetting {
             return copy(models = models + model)

@@ -90,7 +90,13 @@ fun ProviderSetting.encodeForShare(): String {
         append("ai-provider:")
         append("v1:")
 
-        val value = JsonInstant.encodeToString(this@encodeForShare.copyProvider(models = emptyList()))
+        val withoutModels = this@encodeForShare.copyProvider(models = emptyList())
+        val shareable = if (withoutModels is ProviderSetting.OpenAI) {
+            withoutModels.copy(codexCredentials = null)
+        } else {
+            withoutModels
+        }
+        val value = JsonInstant.encodeToString(shareable)
         append(Base64.encode(value.encodeToByteArray()))
     }
 }

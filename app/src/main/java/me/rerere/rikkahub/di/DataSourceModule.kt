@@ -16,6 +16,7 @@ import me.rerere.common.http.AcceptLanguageBuilder
 import me.rerere.rikkahub.BuildConfig
 import me.rerere.rikkahub.data.ai.AIRequestInterceptor
 import me.rerere.rikkahub.data.ai.RequestLoggingInterceptor
+import me.rerere.rikkahub.data.ai.openai.OpenAICodexAuthService
 import me.rerere.rikkahub.data.ai.transformers.AssistantTemplateLoader
 import me.rerere.rikkahub.data.ai.GenerationHandler
 import me.rerere.rikkahub.data.ai.transformers.TemplateTransformer
@@ -225,6 +226,12 @@ val dataSourceModule = module {
             .addInterceptor(AIRequestInterceptor(remoteConfig = get()))
             .addInterceptor(HttpLoggingInterceptor().apply {
                 level = HttpLoggingInterceptor.Level.HEADERS
+                redactHeader("Authorization")
+                redactHeader("Proxy-Authorization")
+                redactHeader("X-Api-Key")
+                redactHeader("Cookie")
+                redactHeader("Set-Cookie")
+                redactHeader("ChatGPT-Account-Id")
             })
             .build().also { SearchService.init(it, get()) }
     }
@@ -234,7 +241,18 @@ val dataSourceModule = module {
     }
 
     single {
-        ProviderManager(client = get(), context = get())
+        OpenAICodexAuthService(
+            httpClient = get(),
+            settingsStore = get(),
+        )
+    }
+
+    single {
+        ProviderManager(
+            client = get(),
+            context = get(),
+            openAICodexTokenProvider = get<OpenAICodexAuthService>(),
+        )
     }
 
     single {
