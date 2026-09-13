@@ -196,6 +196,7 @@ class ResponseAPI(
     ): JsonObject {
         val host = providerSetting.baseUrl.toHttpUrl().host
         val capabilities = resolveResponseProviderCapabilities(host)
+        val modelAbilities = (params.model.abilities + ModelRegistry.MODEL_ABILITIES.getData(params.model.modelId)).toSet()
         val body = buildJsonObject {
             put("model", params.model.modelId)
             put("stream", stream)
@@ -232,7 +233,7 @@ class ResponseAPI(
             )
 
             // reasoning
-            if (params.model.abilities.contains(ModelAbility.REASONING)) {
+            if (ModelAbility.REASONING in modelAbilities) {
                 val level = params.reasoningLevel
                 put("reasoning", buildJsonObject {
                     if (capabilities.supportsReasoningSummary) {

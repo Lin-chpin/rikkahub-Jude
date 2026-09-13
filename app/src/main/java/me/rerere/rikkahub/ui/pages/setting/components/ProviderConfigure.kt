@@ -294,6 +294,7 @@ private fun ColumnScope.ProviderConfigureOpenAI(
     var deviceCode by remember(provider.id) { mutableStateOf<OpenAICodexDeviceCode?>(null) }
     var authError by remember(provider.id) { mutableStateOf<String?>(null) }
     var signingIn by remember(provider.id) { mutableStateOf(false) }
+    var showCodexTutorial by remember(provider.id) { mutableStateOf(false) }
     val supportsChatGPTSubscription = provider.supportsChatGPTSubscription()
     val selectedAuthType = if (supportsChatGPTSubscription) {
         provider.authType
@@ -304,6 +305,38 @@ private fun ColumnScope.ProviderConfigureOpenAI(
     LaunchedEffect(provider.authType, supportsChatGPTSubscription) {
         if (!supportsChatGPTSubscription && provider.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION) {
             onEdit(provider.copy(authType = OpenAIAuthType.API_KEY, codexCredentials = null))
+        }
+    }
+
+    fun startCodexSignIn() {
+        authJob?.cancel()
+        authJob = scope.launch {
+            signingIn = true
+            authError = null
+            try {
+                val signedIn = codexAuthService.signIn(provider.id) { code ->
+                    deviceCode = code
+                    context.getSystemService(ClipboardManager::class.java)
+                        ?.setPrimaryClip(ClipData.newPlainText("OpenAI Codex device code", code.userCode))
+                    launchCodexAuthorization(context, code.verificationUrl)
+                }
+                deviceCode = null
+                onEdit(
+                    provider.copy(
+                        authType = OpenAIAuthType.CHATGPT_SUBSCRIPTION,
+                        codexCredentials = signedIn,
+                        baseUrl = OPENAI_CODEX_BASE_URL,
+                        useResponseApi = true,
+                    )
+                )
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                authError = error.message ?: error.javaClass.simpleName
+            } finally {
+                signingIn = false
+                authJob = null
+            }
         }
     }
 
@@ -412,35 +445,7 @@ private fun ColumnScope.ProviderConfigureOpenAI(
                 OutlinedButton(
                     enabled = !signingIn,
                     onClick = {
-                        authJob?.cancel()
-                        authJob = scope.launch {
-                            signingIn = true
-                            authError = null
-                            try {
-                                val signedIn = codexAuthService.signIn(provider.id) { code ->
-                                    deviceCode = code
-                                    context.getSystemService(ClipboardManager::class.java)
-                                        ?.setPrimaryClip(ClipData.newPlainText("OpenAI Codex device code", code.userCode))
-                                    launchCodexAuthorization(context, code.verificationUrl)
-                                }
-                                deviceCode = null
-                                onEdit(
-                                    provider.copy(
-                                        authType = OpenAIAuthType.CHATGPT_SUBSCRIPTION,
-                                        codexCredentials = signedIn,
-                                        baseUrl = OPENAI_CODEX_BASE_URL,
-                                        useResponseApi = true,
-                                    )
-                                )
-                            } catch (error: kotlinx.coroutines.CancellationException) {
-                                throw error
-                            } catch (error: Exception) {
-                                authError = error.message ?: error.javaClass.simpleName
-                            } finally {
-                                signingIn = false
-                                authJob = null
-                            }
-                        }
+                        showCodexTutorial = true
                     },
                 ) {
                     Text(
@@ -555,6 +560,19 @@ private fun ColumnScope.ProviderConfigureOpenAI(
             },
         )
     }
+
+    CodexLoginTutorialDialog(
+        visible = showCodexTutorial,
+        onDismiss = { showCodexTutorial = false },
+        onSkip = {
+            showCodexTutorial = false
+            startCodexSignIn()
+        },
+        onLogin = {
+            showCodexTutorial = false
+            startCodexSignIn()
+        },
+    )
 }
 
 private fun launchCodexAuthorization(context: android.content.Context, verificationUrl: String) {

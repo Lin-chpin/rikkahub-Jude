@@ -54,5 +54,6 @@ class OpenAIRequestAuthenticatorTest {
             Request.Builder().url("https://gateway.example.com/v1/responses"),
             setting,
         )
+        Unit
     }
 }

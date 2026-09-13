@@ -90,6 +90,7 @@ import kotlinx.coroutines.Job
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ModelType
+import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.asr.ASRStatus
 import me.rerere.common.android.appTempFolder
@@ -453,7 +454,11 @@ fun ChatInput(
 
                             // Reasoning
                             val model = settings.getCurrentChatModel()
-                            if (model?.abilities?.contains(ModelAbility.REASONING) == true) {
+                            if (model?.let {
+                                    ModelAbility.REASONING in (
+                                        it.abilities + ModelRegistry.MODEL_ABILITIES.getData(it.modelId)
+                                    )
+                                } == true) {
                                 ReasoningButton(
                                     reasoningLevel = assistant.reasoningLevel,
                                     onUpdateReasoningLevel = {

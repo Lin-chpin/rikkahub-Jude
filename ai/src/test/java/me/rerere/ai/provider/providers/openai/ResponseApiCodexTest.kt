@@ -149,6 +149,22 @@ class ResponseApiCodexTest {
     }
 
     @Test
+    fun `Codex request restores reasoning for a saved model without abilities`() {
+        val body = ResponseAPI(okhttp3.OkHttpClient()).buildRequestBody(
+            providerSetting = ProviderSetting.OpenAI(authType = OpenAIAuthType.CHATGPT_SUBSCRIPTION),
+            messages = listOf(UIMessage.user("hello")),
+            params = TextGenerationParams(Model(modelId = "gpt-5.6-sol")),
+            stream = true,
+        )
+
+        assertEquals("auto", body["reasoning"]?.jsonObject?.get("summary")?.jsonPrimitive?.content)
+        assertEquals(
+            "reasoning.encrypted_content",
+            body["include"]?.jsonArray?.single()?.jsonPrimitive?.content,
+        )
+    }
+
+    @Test
     fun `chat completions omits reasoning unless assistant has a tool call`() {
         val api = ChatCompletionsAPI(okhttp3.OkHttpClient(), KeyRoulette.default())
         val assistant = UIMessage(
