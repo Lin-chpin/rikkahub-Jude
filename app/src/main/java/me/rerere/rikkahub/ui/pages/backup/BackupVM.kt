@@ -11,7 +11,9 @@ import kotlinx.coroutines.launch
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.data.datastore.migration.SettingsJsonMigrator
 import me.rerere.rikkahub.data.files.FilesManager
+import me.rerere.rikkahub.data.files.RestoredFile
 import me.rerere.rikkahub.data.files.saveUploadFromBytes
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.repository.ConversationRepository
@@ -24,6 +26,7 @@ import me.rerere.rikkahub.data.sync.webdav.WebDavSync
 import me.rerere.rikkahub.data.sync.S3BackupItem
 import me.rerere.rikkahub.data.sync.S3Sync
 import me.rerere.rikkahub.utils.UiState
+import me.rerere.rikkahub.utils.JsonInstant
 import java.io.File
 
 private const val TAG = "BackupVM"
@@ -150,53 +153,110 @@ class BackupVM(
             file = file,
             assistantId = settings.value.assistantId,
         )
-        var importedConversations = 0
-        var skippedExistingConversations = 0
+        require(result.conversations.isNotEmpty()) {
+            "转换包没有可导入的聊天记录（适配器报告源聊天 ${result.manifest.conversationCount} 个）。请查看 diagnostics.json。"
+        }
         val importErrors = result.errors.toMutableList()
         val attachmentUris = mutableMapOf<String, String>()
-
-        result.conversations.forEach { conversation ->
-            if (conversationRepository.existsConversationById(conversation.id)) {
-                skippedExistingConversations++
-            } else {
-                val materializedConversation = materializeTransferAttachments(
-                    conversation = conversation,
-                    attachments = result.attachments,
-                    attachmentUris = attachmentUris,
-                    errors = importErrors,
-                )
-                conversationRepository.insertConversation(materializedConversation)
-                importedConversations++
+        val importedSettings = result.settingsJson
+            ?.takeIf { result.isCompleteRestore }
+            ?.let { settingsJson ->
+            val migratedJson = SettingsJsonMigrator.migrate(settingsJson)
+            val normalizedJson = SettingsJsonMigrator.migrateLocalFileUris(
+                settingsJson = migratedJson,
+                filesDir = filesManager.appFilesDir,
+            )
+            JsonInstant.decodeFromString<Settings>(normalizedJson).also {
+                require(it.assistants.isNotEmpty()) { "转换包中的助手列表为空" }
+            }
+        }
+        val isFullRestore = importedSettings != null
+        if (isFullRestore) {
+            require(result.conversations.isNotEmpty()) {
+                "完整恢复包不包含可导入聊天记录，未修改当前数据"
             }
         }
 
-        val hasConversationSystemPrompt = result.conversations.any {
-            !it.customSystemPrompt.isNullOrBlank()
-        }
-        if (hasConversationSystemPrompt) {
-            val targetAssistantId = settings.value.assistantId
-            settingsStore.update(
-                settings.value.copy(
-                    assistants = settings.value.assistants.map { assistant ->
-                        if (assistant.id == targetAssistantId) {
-                            assistant.copy(allowConversationSystemPrompt = true)
-                        } else {
-                            assistant
-                        }
-                    }
-                )
+        val restoredFileUris = if (isFullRestore) {
+            filesManager.replaceManagedFiles(
+                result.files.map { file ->
+                    RestoredFile(
+                        relativePath = file.descriptor.relativePath,
+                        displayName = file.descriptor.displayName,
+                        mimeType = file.descriptor.mimeType,
+                        bytes = file.bytes,
+                    )
+                }
             )
+        } else {
+            emptyMap()
+        }
+
+        val importedConversationCount = if (importedSettings != null) {
+            val materializedConversations = result.conversations.map { conversation ->
+                materializeTransferAttachments(
+                    conversation = conversation,
+                    attachments = result.attachments,
+                    attachmentUris = attachmentUris,
+                    restoredFileUris = restoredFileUris,
+                    errors = importErrors,
+                )
+            }
+            val conversations = remapMissingAssistants(
+                conversations = materializedConversations,
+                importedSettings = importedSettings,
+            )
+            conversationRepository.replaceAllConversations(conversations)
+            settingsStore.update(importedSettings)
+            conversations.size
+        } else {
+            var importedCount = 0
+            result.conversations.forEach { conversation ->
+                if (!conversationRepository.existsConversationById(conversation.id)) {
+                    val materializedConversation = materializeTransferAttachments(
+                        conversation = conversation,
+                        attachments = result.attachments,
+                        attachmentUris = attachmentUris,
+                        restoredFileUris = restoredFileUris,
+                        errors = importErrors,
+                    )
+                    conversationRepository.insertConversation(materializedConversation)
+                    importedCount++
+                }
+            }
+            if (result.conversations.any { !it.customSystemPrompt.isNullOrBlank() }) {
+                val targetAssistantId = settings.value.assistantId
+                settingsStore.update(
+                    settings.value.copy(
+                        assistants = settings.value.assistants.map { assistant ->
+                            if (assistant.id == targetAssistantId) {
+                                assistant.copy(allowConversationSystemPrompt = true)
+                            } else {
+                                assistant
+                            }
+                        }
+                    )
+                )
+            }
+            importedCount
+        }
+
+        val skippedExistingConversations = if (importedSettings == null) {
+            result.conversations.size - importedConversationCount
+        } else {
+            0
         }
 
         val report = RikkaHubTransferImportReport(
             parsedConversations = result.conversations.size + result.skippedConversations,
-            importedConversations = importedConversations,
+            importedConversations = importedConversationCount,
             skippedExistingConversations = skippedExistingConversations,
             skippedConversations = result.skippedConversations,
             skippedNodes = result.skippedNodes,
             parsedMessages = result.parsedMessages,
             warnings = result.warnings,
             errors = importErrors,
+            replacedAllData = isFullRestore,
         )
         Log.i(TAG, "restoreFromRikkaHubTransfer: ${report.toDiagnosticText()}")
         return RikkaHubTransferRestoreResult(report)
@@ -206,17 +266,24 @@ class BackupVM(
         conversation: Conversation,
         attachments: Map<String, me.rerere.rikkahub.data.sync.transfer.RikkaHubTransferAttachmentData>,
         attachmentUris: MutableMap<String, String>,
+        restoredFileUris: Map<String, String>,
         errors: MutableList<String>,
     ): Conversation {
         attachments.forEach { (id, attachment) ->
             if (id in attachmentUris) return@forEach
             runCatching {
-                val entity = filesManager.saveUploadFromBytes(
-                    bytes = attachment.bytes,
-                    displayName = attachment.descriptor.fileName,
-                    mimeType = attachment.descriptor.mimeType,
-                )
-                attachmentUris[id] = filesManager.getFile(entity).toUri().toString()
+                val restoredUri = attachment.descriptor.sourceRelativePath
+                    ?.let { restoredFileUris[it] }
+                if (restoredUri != null) {
+                    attachmentUris[id] = restoredUri
+                } else {
+                    val entity = filesManager.saveUploadFromBytes(
+                        bytes = attachment.bytes,
+                        displayName = attachment.descriptor.fileName,
+                        mimeType = attachment.descriptor.mimeType,
+                    )
+                    attachmentUris[id] = filesManager.getFile(entity).toUri().toString()
+                }
             }.onFailure {
                 errors += "attachment:$id:${it.message ?: "save failed"}"
             }
@@ -238,6 +305,22 @@ class BackupVM(
                 )
             }
         )
+    }
+
+    private fun remapMissingAssistants(
+        conversations: List<Conversation>,
+        importedSettings: Settings,
+    ): List<Conversation> {
+        val assistantIds = importedSettings.assistants.map { it.id }.toSet()
+        val fallbackAssistantId = importedSettings.assistantId.takeIf { it in assistantIds }
+            ?: importedSettings.assistants.first().id
+        return conversations.map { conversation ->
+            if (conversation.assistantId in assistantIds) {
+                conversation
+            } else {
+                conversation.copy(assistantId = fallbackAssistantId)
+            }
+        }
     }
 
     private fun rewriteTransferAttachments(

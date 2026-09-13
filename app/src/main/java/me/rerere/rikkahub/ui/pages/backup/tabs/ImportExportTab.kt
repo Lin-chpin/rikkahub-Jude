@@ -162,14 +162,25 @@ fun ImportExportTab(
 
                                 val result = vm.restoreFromRikkaHubTransfer(tempFile)
                                 val report = result.report
-                                toaster.show(
+                                val message = if (report.replacedAllData) {
                                     context.getString(
-                                        R.string.backup_page_import_transfer_summary,
+                                        R.string.backup_page_import_transfer_replace_summary,
+                                        report.importedConversations,
+                                    )
+                                } else {
+                                    context.getString(
+                                        R.string.backup_page_import_transfer_merge_summary,
                                         report.importedConversations,
                                         report.skippedExistingConversations + report.skippedConversations,
-                                    ),
+                                    )
+                                }
+                                toaster.show(
+                                    message,
                                     type = if (report.hasWarnings) ToastType.Warning else ToastType.Success
                                 )
+                                if (report.replacedAllData) {
+                                    onShowRestartDialog()
+                                }
                             } finally {
                                 tempFile.delete()
                             }

@@ -44,6 +44,7 @@ import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.usagetracker.UsageReminderAppState
 import me.rerere.usagetracker.UsageReminderConfig
 import me.rerere.usagetracker.UsageReminderLock
+import me.rerere.usagetracker.UsageReminderPolicy
 import me.rerere.usagetracker.UsageReminderRule
 import me.rerere.usagetracker.UsageReminderState
 import me.rerere.usagetracker.UsageStatsPeriod
@@ -280,16 +281,15 @@ class UsageReminderService : Service() {
 
         for (rule in enabledRules) {
             val current = nextStates[rule.packageName] ?: UsageReminderAppState()
-            if (current.ignored) continue
-
             val usageMillis = reader.loadUsageMillis(rule.packageName, UsageStatsPeriod.Today)
-            if (usageMillis < rule.thresholdMinutes * 60_000L) continue
-            if (usageMillis <= current.lastReminderUsageMillis) continue
-
-            val remindedState = current.copy(
-                reminderCount = current.reminderCount + 1,
-                lastReminderUsageMillis = usageMillis,
+            val evaluation = UsageReminderPolicy.evaluate(
+                current = current,
+                usageMillis = usageMillis,
+                thresholdMinutes = rule.thresholdMinutes,
             )
+            if (!evaluation.shouldNotify) continue
+
+            val remindedState = evaluation.state
             nextStates[rule.packageName] = remindedState
             sendLimitNotification(
                 rule = rule,
@@ -898,7 +898,7 @@ class UsageReminderService : Service() {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
 
-        if (reminderCount >= IGNORE_ACTION_START_COUNT) {
+        if (reminderCount < UsageReminderPolicy.AUTO_IGNORE_AFTER_REMINDERS) {
             builder.addAction(
                 R.drawable.small_icon,
                 getString(R.string.usage_reminder_ignore_today),
@@ -961,8 +961,6 @@ class UsageReminderService : Service() {
         private const val TARGET_REDIRECT_NOTICE_MILLIS = 10_000L
         private const val TARGET_REDIRECT_COOLDOWN_MILLIS = 800L
         private const val CHECK_LOOKBACK_MILLIS = 60_000L
-        private const val IGNORE_ACTION_START_COUNT = 3
-
         fun sync(context: Context, config: UsageReminderConfig) {
             val shouldStart = config.rules.any { it.enabled }
             val intent = Intent(context, UsageReminderService::class.java).apply {

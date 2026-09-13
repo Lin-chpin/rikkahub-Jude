@@ -22,6 +22,7 @@ data class RikkaHubTransferImportReport(
     val parsedMessages: Int,
     val warnings: List<String>,
     val errors: List<String>,
+    val replacedAllData: Boolean = false,
 ) {
     val hasWarnings: Boolean get() = warnings.isNotEmpty() || errors.isNotEmpty()
 
@@ -33,6 +34,7 @@ data class RikkaHubTransferImportReport(
         appendLine("skipped_conversations=$skippedConversations")
         appendLine("skipped_nodes=$skippedNodes")
         appendLine("parsed_messages=$parsedMessages")
+        appendLine("replaced_all_data=$replacedAllData")
         warnings.forEach { appendLine("warning=$it") }
         errors.forEach { appendLine("error=$it") }
     }
@@ -47,16 +49,27 @@ data class RikkaHubTransferImportResult(
     val warnings: List<String>,
     val errors: List<String>,
     val attachments: Map<String, RikkaHubTransferAttachmentData>,
-)
+    val settingsJson: String? = null,
+    val files: List<RikkaHubTransferFileData> = emptyList(),
+) {
+    val isCompleteRestore: Boolean
+        get() = manifest.completeRestore && settingsJson != null
+}
 
 data class RikkaHubTransferAttachmentData(
     val descriptor: RikkaHubTransferAttachment,
     val bytes: ByteArray,
 )
 
+data class RikkaHubTransferFileData(
+    val descriptor: RikkaHubTransferFile,
+    val bytes: ByteArray,
+)
+
 object RikkaHubTransferImporter {
     private const val MANIFEST_ENTRY = "manifest.json"
     private const val CONVERSATIONS_ENTRY = "conversations.json"
+    private const val SETTINGS_ENTRY = "settings.json"
 
     fun import(file: File, assistantId: Uuid): RikkaHubTransferImportResult {
         ZipFile(file).use { zip ->
@@ -73,17 +86,39 @@ object RikkaHubTransferImporter {
             )
             val diagnostics = zip.readJsonEntryOrNull<RikkaHubTransferDiagnostics>("diagnostics.json")
             val errors = mutableListOf<String>()
+            val files = manifest.files.mapNotNull { descriptor ->
+                zip.getEntry(descriptor.entry)?.let { entry ->
+                    RikkaHubTransferFileData(
+                        descriptor = descriptor,
+                        bytes = zip.getInputStream(entry).use { it.readBytes() },
+                    )
+                } ?: run {
+                    errors += "file:${descriptor.relativePath}:missing entry ${descriptor.entry}"
+                    null
+                }
+            }
+            val availableFiles = files.associateBy { it.descriptor.relativePath }
             val attachments = manifest.attachments.mapNotNull { descriptor ->
+                val fileBackedAttachment = descriptor.sourceRelativePath?.let {
+                    it in availableFiles
+                } == true
                 zip.getEntry(descriptor.entry)?.let { entry ->
                     RikkaHubTransferAttachmentData(
                         descriptor = descriptor,
-                        bytes = zip.getInputStream(entry).use { it.readBytes() },
+                        bytes = if (fileBackedAttachment) {
+                            ByteArray(0)
+                        } else {
+                            zip.getInputStream(entry).use { it.readBytes() }
+                        },
                     )
                 } ?: run {
                     errors += "attachment:${descriptor.id}:missing entry ${descriptor.entry}"
                     null
                 }
             }.associateBy { it.descriptor.id }
+            val settingsJson = zip.getEntry(SETTINGS_ENTRY)?.let { entry ->
+                zip.getInputStream(entry).bufferedReader().use { it.readText() }
+            }
             var skippedConversations = 0
             var skippedNodes = 0
             var parsedMessages = 0
@@ -115,7 +150,9 @@ object RikkaHubTransferImporter {
 
                     Conversation(
                         id = Uuid.parse(source.id),
-                        assistantId = assistantId,
+                        assistantId = source.assistantId
+                            ?.let { runCatching { Uuid.parse(it) }.getOrNull() }
+                            ?: assistantId,
                         title = source.title,
                         messageNodes = migratedNodes,
                         chatSuggestions = source.chatSuggestions,
@@ -139,6 +176,8 @@ object RikkaHubTransferImporter {
                 warnings = (manifest.warnings + diagnostics?.warnings.orEmpty()).distinct(),
                 errors = (diagnostics?.errors.orEmpty() + errors).distinct(),
                 attachments = attachments,
+                settingsJson = settingsJson,
+                files = files,
             )
         }
     }

@@ -18,29 +18,29 @@ object HeartbeatUserActivity {
         val wasGoodNightActive = store.isGoodNightActive()
         store.setLastUserMessageAt(messageAt)
         store.recordDesireState(store.readDesireState().afterUserMessage(System.currentTimeMillis()))
-        var shouldRearmForModeChange = false
         when {
             text.contains(GOOD_NIGHT_MARKER) -> {
                 store.setGoodNightActive(true)
                 store.setGoodNightNoUsageRuns(0)
-                shouldRearmForModeChange = true
                 Logging.log("Heartbeat", "goodnight=activated:user-message")
             }
 
             wasGoodNightActive -> {
                 store.setGoodNightActive(false)
                 store.setGoodNightNoUsageRuns(0)
-                shouldRearmForModeChange = true
                 Logging.log("Heartbeat", "goodnight=deactivated:user-message")
             }
         }
         val config = store.read()
         store.close()
 
-        if (config.enabled && shouldRearmForModeChange) {
-            // Mode changes need an immediate scheduling update; ordinary user messages do not
-            // move the heartbeat clock, which is anchored to the assistant's last message.
-            HeartbeatScheduler.scheduleNext(context, config)
+        if (config.enabled) {
+            // User activity must move an already-armed alarm as well as update the guard state.
+            HeartbeatScheduler.scheduleNext(
+                context = context,
+                rawConfig = config,
+                intervalAnchorAtMillis = messageAt,
+            )
         }
     }
 

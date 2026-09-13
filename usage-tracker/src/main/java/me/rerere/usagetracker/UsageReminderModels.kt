@@ -38,6 +38,7 @@ data class UsageReminderAppState(
     val ignored: Boolean = false,
     val lastEventTimeMillis: Long = 0L,
     val lastReminderUsageMillis: Long = 0L,
+    val lastReminderEventTimeMillis: Long = 0L,
 )
 
 @Serializable

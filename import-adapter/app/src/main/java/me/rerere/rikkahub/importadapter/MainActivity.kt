@@ -1,7 +1,9 @@
 package me.rerere.rikkahub.importadapter
 
 import android.app.Activity
+import android.content.ClipboardManager
 import android.content.Intent
+import android.content.ClipData
 import android.net.Uri
 import android.os.Bundle
 import android.view.ViewGroup
@@ -17,6 +19,8 @@ import java.util.concurrent.Executors
 class MainActivity : Activity() {
     private val executor = Executors.newSingleThreadExecutor()
     private lateinit var statusView: TextView
+    private lateinit var diagnosticsButton: Button
+    private lateinit var diagnosticsView: TextView
     private lateinit var exportButton: Button
     private var convertedFile: File? = null
 
@@ -51,12 +55,25 @@ class MainActivity : Activity() {
             textSize = 15f
             setPadding(0, 24, 0, 0)
         }
+        diagnosticsButton = Button(this).apply {
+            text = getString(R.string.copy_diagnostics)
+            isEnabled = false
+            setOnClickListener { copyDiagnostics() }
+        }
+        diagnosticsView = TextView(this).apply {
+            textSize = 14f
+            setPadding(0, 16, 0, 0)
+            setTextIsSelectable(true)
+            visibility = TextView.GONE
+        }
 
         content.addView(title, matchParentWrapContent())
         content.addView(description, matchParentWrapContent())
         content.addView(selectButton, matchParentWrapContent())
         content.addView(exportButton, matchParentWrapContent())
         content.addView(statusView, matchParentWrapContent())
+        content.addView(diagnosticsButton, matchParentWrapContent())
+        content.addView(diagnosticsView, matchParentWrapContent())
 
         setContentView(ScrollView(this).apply {
             addView(content)
@@ -112,20 +129,38 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     convertedFile = output
                     exportButton.isEnabled = true
+                    updateDiagnostics(summary.diagnosticsText)
                     statusView.text = if (summary.warningCount + summary.errorCount == 0) {
-                        getString(R.string.converted)
+                            getString(
+                                R.string.converted,
+                                summary.sourceConversationCount,
+                                summary.sourceNodeCount,
+                                summary.sourceMessageCount,
+                                summary.conversationCount,
+                                summary.restoredFileCount,
+                                if (summary.settingsFound) "已包含" else "未找到，将使用兼容模式",
+                                summary.databaseVersion,
+                            )
                     } else {
                         getString(
                             R.string.converted_with_warnings,
+                            summary.sourceConversationCount,
+                            summary.sourceNodeCount,
+                            summary.sourceMessageCount,
                             summary.conversationCount,
+                            summary.restoredFileCount,
+                            if (summary.settingsFound) "已包含" else "未找到，将使用兼容模式",
                             summary.warningCount,
                             summary.errorCount,
+                            summary.databaseVersion,
                         )
                     }
                 }
             }.onFailure { error ->
                 runOnUiThread {
-                    statusView.text = getString(R.string.failed, error.message ?: error.javaClass.simpleName)
+                    val message = error.message ?: error.javaClass.simpleName
+                    statusView.text = getString(R.string.failed, message)
+                    updateDiagnostics(getString(R.string.failed_diagnostics, message))
                 }
             }
         }
@@ -152,6 +187,18 @@ class MainActivity : Activity() {
         }.onFailure { error ->
             statusView.text = getString(R.string.failed, error.message ?: error.javaClass.simpleName)
         }
+    }
+
+    private fun updateDiagnostics(text: String) {
+        diagnosticsView.text = text
+        diagnosticsView.visibility = TextView.VISIBLE
+        diagnosticsButton.isEnabled = text.isNotBlank()
+    }
+
+    private fun copyDiagnostics() {
+        val clipboard = getSystemService(ClipboardManager::class.java)
+        clipboard?.setPrimaryClip(ClipData.newPlainText("RikkaHub 适配器诊断", diagnosticsView.text))
+        statusView.text = getString(R.string.diagnostics_copied)
     }
 
     private fun matchParentWrapContent() = LinearLayout.LayoutParams(

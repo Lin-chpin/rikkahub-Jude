@@ -109,6 +109,15 @@
     </service>
 
     <service
+      android:name=".service.ChatGenerationForegroundService"
+      android:exported="false"
+      android:foregroundServiceType="specialUse">
+      <property
+        android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+        android:value="background AI chat generation and tool execution" />
+    </service>
+
+    <service
       android:name=".service.UsageReminderService"
       android:exported="false"
       android:foregroundServiceType="specialUse">

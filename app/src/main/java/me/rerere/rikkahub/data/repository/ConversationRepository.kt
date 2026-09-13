@@ -212,6 +212,20 @@ class ConversationRepository(
         messageFtsManager.indexConversation(conversation)
     }
 
+    suspend fun replaceAllConversations(conversations: List<Conversation>) {
+        database.withTransaction {
+            conversationDAO.deleteAll()
+            conversations.forEach { conversation ->
+                conversationDAO.insert(conversationToConversationEntity(conversation))
+                saveMessageNodes(conversation.id.toString(), conversation.messageNodes)
+            }
+        }
+        messageFtsManager.deleteAll()
+        conversations.forEach { conversation ->
+            messageFtsManager.indexConversation(conversation)
+        }
+    }
+
     suspend fun updateConversation(conversation: Conversation) {
         database.withTransaction {
             conversationDAO.update(

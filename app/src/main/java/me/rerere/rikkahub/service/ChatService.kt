@@ -288,7 +288,10 @@ class ChatService(
     private val lifecycleObserver = LifecycleEventObserver { _, event ->
         when (event) {
             Lifecycle.Event.ON_START -> _isForeground.value = true
-            Lifecycle.Event.ON_STOP -> _isForeground.value = false
+            Lifecycle.Event.ON_STOP -> {
+                _isForeground.value = false
+                startBackgroundGenerationIfNeeded()
+            }
             else -> {}
         }
     }
@@ -480,6 +483,7 @@ class ChatService(
                 )
                 val newConversation = conversationBeforeSend.copy(
                     messageNodes = conversationBeforeSend.messageNodes + userMessage.toMessageNode(),
+                    updateAt = Instant.now(),
                 )
                 saveConversation(conversationId, newConversation)
                 LocalBuildIntegration.onUserMessageSent(
@@ -531,6 +535,7 @@ class ChatService(
             }
         }
         session.setJob(job)
+        if (answer) startBackgroundGenerationIfNeeded()
     }
 
     private fun preprocessUserInputParts(parts: List<UIMessagePart>, assistant: Assistant): List<UIMessagePart> {
@@ -596,6 +601,9 @@ class ChatService(
         }
 
         session.setJob(job)
+        if (message.role == MessageRole.USER || regenerateAssistantMsg) {
+            startBackgroundGenerationIfNeeded()
+        }
     }
 
     // ---- 处理工具调用审批 ----
@@ -613,16 +621,16 @@ class ChatService(
         val job = appScope.launch(Dispatchers.IO) {
             try {
                 val conversation = session.state.value
-                val acceptedVoiceCall = approved && answer == null &&
-                    conversation.messageNodes.any { node ->
-                        node.messages.any { message ->
-                            message.parts.any { part ->
-                                part is UIMessagePart.Tool &&
-                                    part.toolCallId == toolCallId &&
-                                    part.toolName == REQUEST_VOICE_CALL_TOOL_NAME
-                            }
+                val isVoiceCallTool = conversation.messageNodes.any { node ->
+                    node.messages.any { message ->
+                        message.parts.any { part ->
+                            part is UIMessagePart.Tool &&
+                                part.toolCallId == toolCallId &&
+                                part.toolName == REQUEST_VOICE_CALL_TOOL_NAME
                         }
                     }
+                }
+                val acceptedVoiceCall = approved && answer == null && isVoiceCallTool
                 val resumeRequestMode = if (acceptedVoiceCall) {
                     ChatRequestMode.VoiceCall
                 } else {
@@ -673,6 +681,9 @@ class ChatService(
                 }
                 val updatedConversation = conversation.copy(messageNodes = updatedNodes)
                 saveConversation(conversationId, updatedConversation)
+                if (isVoiceCallTool) {
+                    VoiceCallNotifications.cancel(context, conversationId.toString())
+                }
 
                 // Check if there are still pending tools
                 val hasPendingTools = updatedNodes.any { node ->
@@ -701,6 +712,7 @@ class ChatService(
         }
 
         session.setJob(job)
+        startBackgroundGenerationIfNeeded()
     }
 
     fun reportVoiceCallClosed(
@@ -870,10 +882,17 @@ class ChatService(
                 }
             }
             val generationBaseMessageIds = conversation.currentMessages.mapTo(mutableSetOf()) { it.id }
-            val transientLastContextMessage = voiceCallUserEventState?.let { eventState ->
+            val transientLastContextMessage = if (
+                requestMode == ChatRequestMode.VoiceCall || voiceCallUserEventState != null
+            ) {
                 generationMessages.lastOrNull()
                     ?.takeIf { it.role == MessageRole.USER }
-                    ?.withVoiceCallRuntimeEventForRequest(eventState)
+                    ?.withVoiceCallRuntimeInstructionForRequest(
+                        state = voiceCallRuntimeState,
+                        includeConnectionEvent = voiceCallUserEventState != null,
+                    )
+            } else {
+                null
             }
             val voiceCallToolEnabled = LocalToolOption.VoiceCall in assistant.localTools &&
                 voiceCallRuntimeState == VoiceCallRuntimeState.INACTIVE
@@ -993,6 +1012,7 @@ class ChatService(
             var streamingMessageId: kotlin.uuid.Uuid? = null
             var streamingNodeIndex: Int? = null
             var lastStreamingUiUpdateNanos = 0L
+            var voiceCallNotificationSent = false
 
             coroutineScope {
                 val tagJobs = mutableListOf<Job>()
@@ -1114,6 +1134,23 @@ class ChatService(
                         is GenerationChunk.Messages -> {
                             val chunkMessages = chunk.messages
                             latestPrimaryMessages = chunkMessages
+                            if (!voiceCallNotificationSent && !isForeground.value) {
+                                chunkMessages.asSequence()
+                                    .flatMap { it.parts.asSequence() }
+                                    .filterIsInstance<UIMessagePart.Tool>()
+                                    .firstOrNull {
+                                        it.toolName == REQUEST_VOICE_CALL_TOOL_NAME && !it.isExecuted
+                                    }
+                                    ?.let { tool ->
+                                        VoiceCallNotifications.show(
+                                            context = context,
+                                            conversationId = conversationId.toString(),
+                                            senderName = senderName,
+                                            reasonPayload = tool.input,
+                                        )
+                                        voiceCallNotificationSent = true
+                                    }
+                            }
                             val projectedMessages = synchronized(tagProjectionLock) {
                                 if (!incrementalVoiceCallTagging) {
                                     chunkMessages
@@ -1282,6 +1319,16 @@ class ChatService(
         }.onSuccess {
             val finalConversation = getConversationFlow(conversationId).value
             saveConversation(conversationId, finalConversation)
+
+            finalConversation.currentMessages
+                .lastOrNull { it.role == MessageRole.ASSISTANT && it.toText().isNotBlank() }
+                ?.let { assistantMessage ->
+                    LocalBuildIntegration.onAssistantMessageSent(
+                        context = context,
+                        message = assistantMessage,
+                        assistantId = finalConversation.assistantId,
+                    )
+                }
 
             launchWithConversationReference(conversationId) {
                 generateTitle(conversationId, finalConversation)
@@ -2084,6 +2131,11 @@ class ChatService(
     }
 
     // ---- 通知 ----
+
+    private fun startBackgroundGenerationIfNeeded() {
+        if (sessions.values.none { it.getJob()?.isActive == true }) return
+        ChatGenerationForegroundService.start(context)
+    }
 
     private fun sendGenerationDoneNotification(conversationId: Uuid, senderName: String) {
         // 先取消 Live Update 通知

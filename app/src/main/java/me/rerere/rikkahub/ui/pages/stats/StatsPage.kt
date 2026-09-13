@@ -284,7 +284,8 @@ private fun HeatmapCell(alpha: Float, sizeDp: Int) {
 
 @Composable
 private fun StatsGrid(stats: AppStats, modifier: Modifier = Modifier) {
-    val tokenTotal = stats.totalPromptTokens + stats.totalCompletionTokens + stats.totalCachedTokens
+    // cachedTokens is a subset of promptTokens, not an additional token bucket.
+    val tokenTotal = stats.totalPromptTokens + stats.totalCompletionTokens
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -331,7 +332,7 @@ private fun StatsGrid(stats: AppStats, modifier: Modifier = Modifier) {
                 icon = HugeIcons.Zap,
                 label = stringResource(R.string.stats_page_cached_tokens),
                 value = formatTokens(stats.totalCachedTokens),
-                progress = stats.totalCachedTokens.shareOf(tokenTotal),
+                progress = stats.totalCachedTokens.shareOf(stats.totalPromptTokens),
             )
         }
         StatCard(
@@ -388,7 +389,7 @@ private fun TokenBreakdownCard(
     stats: AppStats,
     modifier: Modifier = Modifier,
 ) {
-    val total = stats.totalPromptTokens + stats.totalCompletionTokens + stats.totalCachedTokens
+    val total = stats.totalPromptTokens + stats.totalCompletionTokens
     Card(modifier = modifier.fillMaxWidth(), colors = CustomColors.cardColorsOnSurfaceContainer) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -423,7 +424,7 @@ private fun TokenBreakdownCard(
                 TokenProgressRow(
                     label = stringResource(R.string.stats_page_cached_tokens),
                     value = formatTokens(stats.totalCachedTokens),
-                    progress = stats.totalCachedTokens.shareOf(total),
+                    progress = stats.totalCachedTokens.shareOf(stats.totalPromptTokens),
                 )
             }
         }

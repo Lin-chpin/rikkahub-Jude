@@ -336,7 +336,7 @@ private fun ReminderIntroCard(
                 style = MaterialTheme.typography.titleMedium,
             )
             Text(
-                text = "给某个应用打开提醒并设置今日累计阈值。超过后，每次再次打开都会提醒；第 3 次开始可以选择今日忽略。",
+                text = "给某个应用打开提醒并设置今日累计阈值。超过后，每次再次打开只提醒一次；每次都可以手动忽略，第 3 次提醒后会自动忽略。",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -808,7 +808,7 @@ private fun UsageReminderConfig.upsertRule(rule: UsageReminderRule): UsageRemind
 private fun UsageReminderState.clearIgnored(packageName: String): UsageReminderState {
     val nextStates = appStates.toMutableMap()
     val current = nextStates[packageName] ?: UsageReminderAppState()
-    nextStates[packageName] = current.copy(ignored = false)
+    nextStates[packageName] = UsageReminderPolicy.reset(current)
     return copy(appStates = nextStates)
 }
 

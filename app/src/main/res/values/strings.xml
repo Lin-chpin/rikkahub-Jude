@@ -225,6 +225,8 @@
   <string name="backup_page_import_from_rikkahub_adapter">Import converted RikkaHub data</string>
   <string name="backup_page_import_from_other_app">Import from other app</string>
   <string name="backup_page_import_transfer_summary">Imported %1$d conversations, skipped %2$d</string>
+  <string name="backup_page_import_transfer_merge_summary">仅合并聊天：导入 %1$d 个，跳过 %2$d 个；未替换助手、模型、API 配置、应用设置和文件。若需完整替换，请使用包含 settings.json 的新适配器转换包。</string>
+  <string name="backup_page_import_transfer_replace_summary">已完整替换 %1$d 个聊天，原有助手、模型、API 配置、应用设置和文件已被上游数据替换。</string>
   <string name="backup_page_importing">Importing...</string>
   <string name="backup_page_loading_failed">Failed to load backup files: %s</string>
   <string name="backup_page_local_backup_export">Export to File</string>
@@ -512,6 +514,8 @@
   <string name="notification_live_update_title">Generating response...</string>
   <string name="notification_live_update_tool">Running tool: %s</string>
   <string name="notification_live_update_writing">Writing response...</string>
+  <string name="notification_voice_call_title">%1$s is inviting you to a voice call</string>
+  <string name="notification_voice_call_default_reason">The assistant would like to talk with you.</string>
   <string name="notification_web_server_running">Web Server Running</string>
   <string name="notification_web_server_starting">Starting...</string>
   <string name="notification_web_server_stop">Stop</string>

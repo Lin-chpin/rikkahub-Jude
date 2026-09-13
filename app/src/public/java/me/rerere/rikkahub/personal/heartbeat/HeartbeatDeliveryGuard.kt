@@ -9,6 +9,7 @@ import kotlin.uuid.Uuid
 enum class HeartbeatDeliveryBlock {
     VOICE_CALL_ACTIVE,
     CONVERSATION_BUSY,
+    USER_REPLY_PENDING,
     USER_RETURNED,
     HEARTBEAT_DISABLED,
     TARGET_CHANGED,
@@ -24,6 +25,9 @@ class HeartbeatDeliveryGuard(
         expectedAssistantId: String,
     ): HeartbeatDeliveryBlock? {
         if (VoiceCallSessionRegistry.isActive()) return HeartbeatDeliveryBlock.VOICE_CALL_ACTIVE
+        if (hasPendingUserMessage(expectedAssistantId)) {
+            return HeartbeatDeliveryBlock.USER_REPLY_PENDING
+        }
         if (isConversationGenerating(conversationId)) {
             return HeartbeatDeliveryBlock.CONVERSATION_BUSY
         }
@@ -42,6 +46,13 @@ class HeartbeatDeliveryGuard(
         store.close()
         return HeartbeatDeliveryBlock.USER_RETURNED
             .takeIf { lastUserMessageAt > runStartedAtMillis }
+    }
+
+    private fun hasPendingUserMessage(expectedAssistantId: String): Boolean {
+        val store = HeartbeatConfigStore(context, expectedAssistantId)
+        val hasPendingUser = store.lastUserMessageAt() > store.lastAssistantMessageAt()
+        store.close()
+        return hasPendingUser
     }
 
     private fun currentConfigurationBlock(expectedAssistantId: String): HeartbeatDeliveryBlock? {

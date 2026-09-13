@@ -38,6 +38,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.hugeicons.HugeIcons
@@ -100,7 +102,11 @@ private fun rememberReasoningState(reasoning: UIMessagePart.Reasoning): Pair<Rea
             scrollState.animateScrollTo(scrollState.maxValue)
         } else {
             if (state.expandState.expanded) {
-                state.expandState = if (settings.displaySetting.autoCloseThinking)
+                val hasRawReasoning = reasoning.metadata
+                    ?.get("reasoning_channel")
+                    ?.jsonPrimitive
+                    ?.contentOrNull == "text"
+                state.expandState = if (settings.displaySetting.autoCloseThinking && !hasRawReasoning)
                     ReasoningCardState.Collapsed
                 else
                     ReasoningCardState.Expanded
@@ -133,6 +139,9 @@ private fun ReasoningContent(
     val reasoningTextStyle = MaterialTheme.typography.bodySmall.copy(
         fontFamily = LocalTextStyle.current.fontFamily,
     )
+    val standaloneThinkingTitle = reasoning.reasoning.trim()
+        .takeIf { it.lines().size == 1 }
+        ?.let { it.extractThinkingTitle() }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -168,15 +177,23 @@ private fun ReasoningContent(
             }
     ) {
         val reasoningContent = @Composable {
-            MarkdownBlock(
-                content = reasoning.reasoning.replaceRegexes(
-                    assistant = assistant,
-                    scope = AssistantAffectScope.ASSISTANT,
-                    visual = true,
-                ),
-                style = reasoningTextStyle,
-                modifier = Modifier.fillMaxSize(),
-            )
+            if (standaloneThinkingTitle != null) {
+                Text(
+                    text = standaloneThinkingTitle,
+                    style = reasoningTextStyle,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else {
+                MarkdownBlock(
+                    content = reasoning.reasoning.replaceRegexes(
+                        assistant = assistant,
+                        scope = AssistantAffectScope.ASSISTANT,
+                        visual = true,
+                    ),
+                    style = reasoningTextStyle,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
         if (loading) {
             reasoningContent()

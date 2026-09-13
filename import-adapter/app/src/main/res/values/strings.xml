@@ -1,13 +1,18 @@
 <resources>
-    <string name="app_name">RikkaHub Import Adapter</string>
-    <string name="title">RikkaHub Import Adapter</string>
-    <string name="description">Select an upstream RikkaHub backup and convert it into a standard .rhk package. Everything is processed locally.</string>
-    <string name="select_backup">Select upstream backup</string>
-    <string name="export_package">Export .rhk package</string>
-    <string name="waiting">Waiting for a backup file.</string>
-    <string name="converting">Converting…</string>
-    <string name="converted">Conversion complete. Export the .rhk package and import it in RikkaHub.</string>
-    <string name="converted_with_warnings">Converted %1$d conversations with %2$d warnings and %3$d errors. Export the .rhk package and check diagnostics.json.</string>
-    <string name="saved">Package saved.</string>
-    <string name="failed">Conversion failed: %1$s</string>
+    <string name="app_name">RikkaHub 聊天记录适配器</string>
+    <string name="title">RikkaHub 聊天记录适配器</string>
+    <string name="description">选择上游 RikkaHub 备份文件，生成可完整恢复助手、模型、API 配置、应用设置、聊天记录和附件文件的 .rhk 文件。所有数据只在本机处理。</string>
+    <string name="select_backup">选择上游备份文件</string>
+    <string name="export_package">导出 .rhk 转换文件</string>
+    <string name="waiting">等待选择备份文件。</string>
+    <string name="converting">正在读取并转换，请稍候……</string>
+    <string name="converted">已读取 %1$d 个聊天、%2$d 个消息节点和 %3$d 条消息，成功转换 %4$d 个聊天，找到 %5$d 个文件，设置文件%6$s（数据库版本 %7$d）。导出后在 RikkaHub 中选择“导入转换后的 RikkaHub 数据”；包含设置文件时会完整替换原有数据。</string>
+    <string name="converted_with_warnings">已读取 %1$d 个聊天、%2$d 个消息节点和 %3$d 条消息，成功转换 %4$d 个聊天，找到 %5$d 个文件，设置文件%6$s；有 %7$d 个警告、%8$d 个错误（数据库版本 %9$d）。导出后请查看文件中的 diagnostics.json。</string>
+    <string name="saved">转换文件已保存。</string>
+    <string name="failed">转换失败：%1$s</string>
+    <string name="copy_diagnostics">复制诊断信息</string>
+    <string name="diagnostics_copied">诊断信息已复制。</string>
+    <string name="failed_diagnostics">诊断信息
+失败原因：%1$s
+请确认选择的是上游 RikkaHub 的备份 ZIP，并且导出时至少勾选了“聊天记录”。</string>
 </resources>

@@ -480,6 +480,8 @@
   <string name="notification_live_update_title">正在生成回复…</string>
   <string name="notification_live_update_tool">正在运行工具：%s</string>
   <string name="notification_live_update_writing">正在编写回复…</string>
+  <string name="notification_voice_call_title">%1$s 邀请你进行语音通话</string>
+  <string name="notification_voice_call_default_reason">想和你进行语音通话。</string>
   <string name="notification_web_server_running">Web服务器运行中</string>
   <string name="notification_web_server_starting">正在启动...</string>
   <string name="notification_web_server_stop">停止</string>

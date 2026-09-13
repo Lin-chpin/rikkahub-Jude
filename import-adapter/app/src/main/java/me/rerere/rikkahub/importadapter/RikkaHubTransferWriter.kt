@@ -20,6 +20,13 @@ data class ConversionSummary(
     val conversationCount: Int,
     val warningCount: Int,
     val errorCount: Int,
+    val sourceConversationCount: Int = conversationCount,
+    val sourceNodeCount: Int = 0,
+    val sourceMessageCount: Int = 0,
+    val databaseVersion: Int = 0,
+    val restoredFileCount: Int = 0,
+    val settingsFound: Boolean = false,
+    val diagnosticsText: String = "",
 )
 
 private data class StagedFile(
@@ -30,7 +37,25 @@ private data class StagedFile(
 private data class StagedBackup(
     val databaseFile: File,
     val files: List<StagedFile>,
+    val settingsFile: File?,
 )
+
+private val RESTORABLE_FOLDERS = setOf("upload", "images", "skills", "fonts")
+
+private fun restorableRelativePath(path: String): String? {
+    val normalized = path.replace('\\', '/').trimStart('/')
+    val lower = normalized.lowercase()
+    val candidate = when {
+        "/files/" in lower -> normalized.substring(lower.indexOf("/files/") + "/files/".length)
+        lower.startsWith("files/") -> normalized.substring("files/".length)
+        else -> normalized
+    }
+    val folder = candidate.substringBefore('/').lowercase()
+    val relativePath = candidate.substringAfter('/', "")
+    if (folder !in RESTORABLE_FOLDERS || relativePath.isBlank()) return null
+    if (candidate.split('/').any { it.isBlank() || it == "." || it == ".." }) return null
+    return "$folder/$relativePath"
+}
 
 private fun stableImportUuid(value: String): String = UUID.nameUUIDFromBytes(
     value.toByteArray(StandardCharsets.UTF_8)
@@ -42,6 +67,7 @@ private data class AttachmentSource(
     val mimeType: String,
     val file: File? = null,
     val bytes: ByteArray? = null,
+    val sourceRelativePath: String? = null,
 )
 
 private class AttachmentCollector(
@@ -58,9 +84,10 @@ private class AttachmentCollector(
         if (url.startsWith("http://") || url.startsWith("https://")) return url
 
         val sourcePath = Uri.parse(url).path ?: url
-        val normalizedSource = normalize(sourcePath)
+        val normalizedSource = normalize(relativeAttachmentPath(sourcePath))
         val exact = stagedFiles.firstOrNull {
-            normalize(it.path).endsWith(normalizedSource)
+            val candidate = normalize(it.path)
+            candidate == normalizedSource || candidate.endsWith("/$normalizedSource")
         }
         val baseName = normalizedSource.substringAfterLast('/')
         val byName = stagedFiles.filter {
@@ -68,7 +95,7 @@ private class AttachmentCollector(
         }
         val source = exact ?: byName.singleOrNull()
         if (source == null) {
-            warnings += "unresolved attachment reference: $url"
+            warnings += "未找到附件引用：$url"
             return url
         }
         return registerFile(
@@ -77,13 +104,14 @@ private class AttachmentCollector(
             mimeType = URLConnection.guessContentTypeFromName(source.file.name)
                 ?: "application/octet-stream",
             identity = source.path,
+            sourceRelativePath = source.path,
         )
     }
 
     private fun registerDataUrl(url: String, type: String, fileNameHint: String?): String? {
         val separator = url.indexOf(',')
         if (separator < 0) {
-            warnings += "invalid data attachment"
+            warnings += "无效的数据附件"
             return null
         }
         return runCatching {
@@ -104,18 +132,25 @@ private class AttachmentCollector(
                 identity = url.hashCode().toString(),
             )
         }.getOrElse {
-            warnings += "invalid data attachment: ${it.message ?: "decode failed"}"
+            warnings += "无效的数据附件：${it.message ?: "解码失败"}"
             null
         }
     }
 
-    private fun registerFile(file: File, fileName: String, mimeType: String, identity: String): String {
+    private fun registerFile(
+        file: File,
+        fileName: String,
+        mimeType: String,
+        identity: String,
+        sourceRelativePath: String? = null,
+    ): String {
         return register(
             AttachmentSource(
                 id = stableImportUuid("attachment:$identity"),
                 fileName = File(fileName).name,
                 mimeType = mimeType,
                 file = file,
+                sourceRelativePath = sourceRelativePath?.replace('\\', '/')?.trimStart('/'),
             )
         )
     }
@@ -147,6 +182,11 @@ private class AttachmentCollector(
         .replace('\\', '/')
         .trimStart('/')
         .lowercase()
+
+    private fun relativeAttachmentPath(path: String): String {
+        return restorableRelativePath(path)
+            ?: path.replace('\\', '/').trimStart('/')
+    }
 }
 
 object RikkaHubTransferWriter {
@@ -162,29 +202,42 @@ object RikkaHubTransferWriter {
             return SQLiteDatabase.openDatabase(
                 stagedBackup.databaseFile.absolutePath,
                 null,
-                SQLiteDatabase.OPEN_READONLY,
+                SQLiteDatabase.OPEN_READWRITE,
             ).use { database ->
                 val warnings = mutableListOf<String>()
                 val errors = mutableListOf<String>()
-                val attachments = AttachmentCollector(stagedBackup.files, warnings)
+                val restoredFiles = stagedBackup.files
+                    .mapNotNull { file ->
+                        restorableRelativePath(file.path)?.let { path ->
+                            StagedFile(path = path, file = file.file)
+                        }
+                    }
+                    .distinctBy { it.path }
+                val attachments = AttachmentCollector(restoredFiles, warnings)
+                if (stagedBackup.settingsFile == null) {
+                    warnings += "未找到 settings.json，本次转换将按兼容模式仅导入聊天数据"
+                }
                 val tables = readTables(database)
                 val conversationTable = tables.firstOrNull { it.equals("conversationentity", true) }
-                    ?: error("ConversationEntity table not found")
+                    ?: error("未找到 ConversationEntity 聊天表")
                 val nodeTable = tables.firstOrNull { it.equals("message_node", true) }
-                val nodesByConversation = if (nodeTable != null) {
+                val sourceConversationCount = readRowCount(database, conversationTable)
+                val nodeReadResult = if (nodeTable != null) {
                     readNodes(database, nodeTable, warnings)
                 } else {
-                    emptyMap()
+                    NodeReadResult(emptyMap(), 0, 0)
                 }
                 val conversations = readConversations(
                     database = database,
                     table = conversationTable,
-                    nodesByConversation = nodesByConversation,
+                    nodesByConversation = nodeReadResult.nodesByConversation,
                     warnings = warnings,
                     errors = errors,
                     attachments = attachments,
                 )
-                require(conversations.isNotEmpty()) { "No readable conversations found" }
+                require(conversations.isNotEmpty()) {
+                    "数据库中读取到 $sourceConversationCount 个对话，但没有可转换的聊天消息"
+                }
 
                 writePackage(
                     output = output,
@@ -194,11 +247,33 @@ object RikkaHubTransferWriter {
                     warnings = warnings,
                     errors = errors,
                     attachments = attachments.attachments.values.toList(),
+                    settingsFile = stagedBackup.settingsFile,
+                    restoredFiles = restoredFiles,
                 )
+                val distinctWarnings = warnings.distinct()
+                val distinctErrors = errors.distinct()
                 ConversionSummary(
                     conversationCount = conversations.size,
-                    warningCount = warnings.distinct().size,
-                    errorCount = errors.distinct().size,
+                    warningCount = distinctWarnings.size,
+                    errorCount = distinctErrors.size,
+                    sourceConversationCount = sourceConversationCount,
+                    sourceNodeCount = nodeReadResult.nodeCount,
+                    sourceMessageCount = nodeReadResult.messageCount,
+                    databaseVersion = database.version,
+                    restoredFileCount = restoredFiles.size,
+                    settingsFound = stagedBackup.settingsFile != null,
+                    diagnosticsText = buildDiagnosticsText(
+                        databaseVersion = database.version,
+                        tables = tables,
+                        sourceConversationCount = sourceConversationCount,
+                        sourceNodeCount = nodeReadResult.nodeCount,
+                        sourceMessageCount = nodeReadResult.messageCount,
+                        convertedConversationCount = conversations.size,
+                        restoredFileCount = restoredFiles.size,
+                        settingsFound = stagedBackup.settingsFile != null,
+                        warnings = distinctWarnings,
+                        errors = distinctErrors,
+                    ),
                 )
             }
         } finally {
@@ -211,6 +286,12 @@ object RikkaHubTransferWriter {
         val index: Int,
         val messages: String,
         val selectIndex: Int,
+    )
+
+    private data class NodeReadResult(
+        val nodesByConversation: Map<String, List<SourceNode>>,
+        val nodeCount: Int,
+        val messageCount: Int,
     )
 
     private fun readTables(database: SQLiteDatabase): List<String> {
@@ -228,20 +309,22 @@ object RikkaHubTransferWriter {
         database: SQLiteDatabase,
         table: String,
         warnings: MutableList<String>,
-    ): Map<String, List<SourceNode>> {
+    ): NodeReadResult {
         val columns = readColumns(database, table)
         val conversationIdColumn = columns.firstOrNull { it.equals("conversation_id", true) }
-            ?: return emptyMap()
+            ?: return NodeReadResult(emptyMap(), 0, 0)
         val messagesColumn = columns.firstOrNull { it.equals("messages", true) }
-            ?: return emptyMap()
+            ?: return NodeReadResult(emptyMap(), 0, 0)
         val idColumn = columns.firstOrNull { it.equals("id", true) } ?: "rowid"
         val indexColumn = columns.firstOrNull { it.equals("node_index", true) }
         val selectIndexColumn = columns.firstOrNull { it.equals("select_index", true) }
         val result = linkedMapOf<String, MutableList<SourceNode>>()
+        var messageCount = 0
         database.query(table, null, null, null, null, null, null).use { cursor ->
             while (cursor.moveToNext()) {
                 val conversationId = cursor.string(conversationIdColumn) ?: continue
                 val messages = cursor.string(messagesColumn) ?: continue
+                messageCount += runCatching { JSONArray(messages).length() }.getOrDefault(0)
                 val node = SourceNode(
                     id = cursor.string(idColumn) ?: "row-${cursor.position}",
                     index = cursor.int(indexColumn) ?: cursor.position,
@@ -251,8 +334,12 @@ object RikkaHubTransferWriter {
                 result.getOrPut(conversationId) { mutableListOf() } += node
             }
         }
-        if (result.isEmpty()) warnings += "message_node table was present but contained no readable rows"
-        return result.mapValues { (_, nodes) -> nodes.sortedBy { it.index } }
+        if (result.isEmpty()) warnings += "message_node 表存在，但没有读取到可用消息节点"
+        return NodeReadResult(
+            nodesByConversation = result.mapValues { (_, nodes) -> nodes.sortedBy { it.index } },
+            nodeCount = result.values.sumOf { it.size },
+            messageCount = messageCount,
+        )
     }
 
     private fun readConversations(
@@ -267,7 +354,7 @@ object RikkaHubTransferWriter {
         database.query(table, null, null, null, null, null, null).use { cursor ->
             while (cursor.moveToNext()) {
                 val sourceId = cursor.string("id") ?: run {
-                    errors += "conversation row ${cursor.position} has no id"
+                    errors += "第 ${cursor.position + 1} 条聊天记录缺少 id"
                     continue
                 }
                 val nodes = nodesByConversation[sourceId].orEmpty().mapNotNull { node ->
@@ -278,7 +365,7 @@ object RikkaHubTransferWriter {
                     nodes += parseLegacyNodes(legacyNodes, sourceId, warnings, errors, attachments)
                 }
                 if (nodes.isEmpty()) {
-                    warnings += "conversation:$sourceId has no readable messages"
+                    warnings += "聊天记录 $sourceId 没有可读取的消息"
                     continue
                 }
 
@@ -288,6 +375,7 @@ object RikkaHubTransferWriter {
                 result += JSONObject().apply {
                     put("id", stableUuid("conversation:$sourceId"))
                     put("source_id", sourceId)
+                    cursor.string("assistant_id")?.takeIf(::isUuid)?.let { put("assistant_id", it) }
                     put("title", cursor.string("title")?.takeIf { it.isNotBlank() } ?: sourceId)
                     put("create_at", createAt)
                     put("update_at", updateAt)
@@ -317,7 +405,7 @@ object RikkaHubTransferWriter {
                 put("messages", messages)
             }
         }.onFailure {
-            errors += "node:${node.id}:${it.message ?: "message decode failed"}"
+            errors += "消息节点 ${node.id}：${it.message ?: "消息解码失败"}"
         }.getOrNull()
     }
 
@@ -330,7 +418,7 @@ object RikkaHubTransferWriter {
     ): List<JSONObject> {
         if (raw.isNullOrBlank()) return emptyList()
         val nodes = runCatching { JSONArray(raw) }.getOrElse {
-            errors += "conversation:$conversationId:legacy nodes JSON is invalid"
+            errors += "聊天记录 $conversationId 的旧版消息节点 JSON 无效"
             return emptyList()
         }
         return buildList {
@@ -422,6 +510,8 @@ object RikkaHubTransferWriter {
         warnings: List<String>,
         errors: List<String>,
         attachments: List<AttachmentSource>,
+        settingsFile: File?,
+        restoredFiles: List<StagedFile>,
     ) {
         output.parentFile?.mkdirs()
         ZipOutputStream(FileOutputStream(output)).use { zip ->
@@ -430,21 +520,46 @@ object RikkaHubTransferWriter {
                 put("format_version", FORMAT_VERSION)
                 put("source_app", "RikkaHub")
                 put("source_version", JSONObject.NULL)
+                put("complete_restore", settingsFile != null)
                 put("source_database_version", databaseVersion)
                 put("conversation_count", conversations.size)
                 put("attachment_count", attachments.size)
+                put("file_count", restoredFiles.size)
                 put("attachments", JSONArray(attachments.map { attachment ->
                     JSONObject().apply {
                         put("id", attachment.id)
                         put("file_name", attachment.fileName)
                         put("mime_type", attachment.mimeType)
                         put("entry", "attachments/${attachment.id}")
+                        attachment.sourceRelativePath?.let {
+                            put("source_relative_path", it)
+                        }
+                    }
+                }))
+                put("files", JSONArray(restoredFiles.map { file ->
+                    JSONObject().apply {
+                        put("relative_path", file.path.replace('\\', '/').trimStart('/'))
+                        put("display_name", file.file.name)
+                        put(
+                            "mime_type",
+                            URLConnection.guessContentTypeFromName(file.file.name)
+                                ?: "application/octet-stream"
+                        )
+                        put("entry", "files/${file.path.replace('\\', '/').trimStart('/')}")
                     }
                 }))
                 put("warnings", JSONArray(warnings.distinct()))
             }
             putEntry(zip, "manifest.json", manifest.toString(2))
             putEntry(zip, "conversations.json", JSONArray(conversations).toString())
+            settingsFile?.let { putFileEntry(zip, "settings.json", it) }
+            restoredFiles.forEach { file ->
+                putFileEntry(
+                    zip,
+                    "files/${file.path.replace('\\', '/').trimStart('/')}",
+                    file.file,
+                )
+            }
             attachments.forEach { attachment ->
                 val entryName = "attachments/${attachment.id}"
                 if (attachment.file != null) {
@@ -461,6 +576,33 @@ object RikkaHubTransferWriter {
             }
             putEntry(zip, "diagnostics.json", diagnostics.toString(2))
         }
+    }
+
+    private fun buildDiagnosticsText(
+        databaseVersion: Int,
+        tables: List<String>,
+        sourceConversationCount: Int,
+        sourceNodeCount: Int,
+        sourceMessageCount: Int,
+        convertedConversationCount: Int,
+        restoredFileCount: Int,
+        settingsFound: Boolean,
+        warnings: List<String>,
+        errors: List<String>,
+    ): String = buildString {
+        appendLine("诊断信息")
+        appendLine("数据库版本：$databaseVersion")
+        appendLine("数据库表：${tables.joinToString(", ")}")
+        appendLine("源聊天数：$sourceConversationCount")
+        appendLine("源消息节点数：$sourceNodeCount")
+        appendLine("源消息数：$sourceMessageCount")
+        appendLine("成功转换聊天数：$convertedConversationCount")
+        appendLine("恢复文件数：$restoredFileCount")
+        appendLine("设置文件：${if (settingsFound) "已找到" else "未找到（兼容模式）"}")
+        appendLine("警告数：${warnings.size}")
+        warnings.forEach { appendLine("警告：$it") }
+        appendLine("错误数：${errors.size}")
+        errors.forEach { appendLine("错误：$it") }
     }
 
     private fun putEntry(zip: ZipOutputStream, name: String, content: String) {
@@ -480,8 +622,19 @@ object RikkaHubTransferWriter {
     }
 
     private fun extractDatabase(input: File, staging: File): StagedBackup {
-        if (!isZip(input)) return StagedBackup(input, emptyList())
+        if (!isZip(input)) {
+            val databaseFile = File(staging, "rikka_hub.db")
+            FileInputStream(input).use { source ->
+                FileOutputStream(databaseFile).use { target -> source.copyTo(target) }
+            }
+            return StagedBackup(
+                databaseFile = databaseFile,
+                files = listOf(StagedFile("rikka_hub.db", databaseFile)),
+                settingsFile = null,
+            )
+        }
         var databaseFile: File? = null
+        var settingsFile: File? = null
         val stagedFiles = mutableListOf<StagedFile>()
         val stagingRoot = staging.canonicalFile
         ZipInputStream(FileInputStream(input)).use { zip ->
@@ -497,11 +650,15 @@ object RikkaHubTransferWriter {
                 if (relativePath.substringAfterLast('/').equals("rikka_hub.db", true)) {
                     databaseFile = target
                 }
+                if (relativePath.substringAfterLast('/').equals("settings.json", true)) {
+                    settingsFile = target
+                }
             }
         }
         return StagedBackup(
-            databaseFile = databaseFile ?: error("rikka_hub.db not found in selected backup"),
+            databaseFile = databaseFile ?: error("所选备份中未找到 rikka_hub.db 聊天数据库"),
             files = stagedFiles,
+            settingsFile = settingsFile,
         )
     }
 
@@ -515,6 +672,12 @@ object RikkaHubTransferWriter {
             while (cursor.moveToNext()) result += cursor.getString(1)
         }
         return result
+    }
+
+    private fun readRowCount(database: SQLiteDatabase, table: String): Int {
+        return database.rawQuery("SELECT COUNT(*) FROM ${quote(table)}", null).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getInt(0) else 0
+        }
     }
 
     private fun quote(identifier: String): String = "`" + identifier.replace("`", "``") + "`"

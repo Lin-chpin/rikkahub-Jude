@@ -57,6 +57,9 @@ internal fun buildVoiceCallRuntimeContext(state: VoiceCallRuntimeState): VoiceCa
             A voice call is connected now, regardless of whether the user or the assistant initiated it.
             The current user message was spoken after the voice call connected. Treat wording such as "I called", "I'm here", or "can you hear me" as speech happening inside the active call, never as a future request to start a call.
             Reply as part of the active phone conversation.
+            Speak in the first person and output only words you would actually say to the user on the phone.
+            Do not include inner thoughts, private mental state, actions, expressions, environment details, narration, stage directions, or other non-spoken descriptions.
+            If the active audio-tag mode requires audio tags, keep only the required protocol tags; do not turn them into narration or extra descriptions.
             Keep the complete reply within $ACTIVE_VOICE_CALL_REPLY_CHARACTER_LIMIT Chinese characters or an equivalently brief length in other languages. Compose a naturally complete short reply within this limit; do not generate a longer reply and truncate it.
             Do not announce or explain this runtime state unless the user's message makes it relevant.
             """.trimIndent(),
@@ -85,32 +88,40 @@ internal fun buildVoiceCallRuntimeContext(state: VoiceCallRuntimeState): VoiceCa
     }
 }
 
-internal fun UIMessage.withVoiceCallRuntimeEventForRequest(
+internal fun UIMessage.withVoiceCallRuntimeInstructionForRequest(
     state: VoiceCallRuntimeState,
+    includeConnectionEvent: Boolean,
 ): UIMessage {
-    if (role != MessageRole.USER) return this
+    if (role != MessageRole.USER || state == VoiceCallRuntimeState.INACTIVE) return this
 
-    val eventDescription = when (state) {
-        VoiceCallRuntimeState.ACTIVE ->
-            "The voice call is connected. The following is the user's first spoken message after connection, regardless of who initiated the call."
+    val prefix = buildString {
+        appendLine("[VOICE_CALL_RUNTIME_TURN]")
+        appendLine("state=${state.name}")
+        appendLine("Speak in the first person and output only words you would actually say to the user on the phone.")
+        appendLine("Do not include inner thoughts, private mental state, actions, expressions, environment details, narration, stage directions, or other non-spoken descriptions.")
+        appendLine("If audio tags are required by the active audio-tag mode, keep only the required protocol tags and do not turn them into narration.")
+        if (includeConnectionEvent) {
+            val eventDescription = when (state) {
+                VoiceCallRuntimeState.ACTIVE ->
+                    "The voice call is connected. The following is the user's first spoken message after connection, regardless of who initiated the call."
 
-        VoiceCallRuntimeState.ENDED ->
-            "The voice call has ended. The following is the user's first normal text message after hangup."
+                VoiceCallRuntimeState.ENDED ->
+                    "The voice call has ended. The following is the user's first normal text message after hangup."
 
-        VoiceCallRuntimeState.INACTIVE -> return this
+                VoiceCallRuntimeState.INACTIVE -> return@buildString
+            }
+            appendLine()
+            appendLine("[VOICE_CALL_RUNTIME_EVENT]")
+            appendLine("$eventDescription")
+        }
+        appendLine()
+        appendLine("[USER_MESSAGE]")
     }
-    val eventPrefix = """
-        [VOICE_CALL_RUNTIME_EVENT]
-        state=${state.name}
-        $eventDescription
-
-        [USER_MESSAGE]
-    """.trimIndent()
     var decoratedTextPart = false
     val decoratedParts = parts.map { part ->
         if (part is UIMessagePart.Text && !decoratedTextPart) {
             decoratedTextPart = true
-            part.copy(text = "$eventPrefix\n${part.text}")
+            part.copy(text = "$prefix${part.text}")
         } else {
             part
         }
@@ -119,7 +130,7 @@ internal fun UIMessage.withVoiceCallRuntimeEventForRequest(
         parts = if (decoratedTextPart) {
             decoratedParts
         } else {
-            listOf(UIMessagePart.Text(eventPrefix)) + decoratedParts
+            listOf(UIMessagePart.Text(prefix)) + decoratedParts
         }
     )
 }

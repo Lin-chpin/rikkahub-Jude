@@ -26,13 +26,29 @@ import me.rerere.rikkahub.utils.getActivity
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 
+data class RestoredFile(
+    val relativePath: String,
+    val displayName: String,
+    val mimeType: String,
+    val bytes: ByteArray,
+)
+
 class FilesManager(
     private val context: Context,
     private val repository: FilesRepository,
     private val appScope: AppScope,
 ) {
+    val appFilesDir: File
+        get() = context.filesDir
+
     companion object {
         private const val TAG = "FilesManager"
+        private val REPLACEABLE_FOLDERS = setOf(
+            FileFolders.UPLOAD,
+            FileFolders.IMAGES,
+            FileFolders.SKILLS,
+            FileFolders.FONTS,
+        )
     }
 
     suspend fun saveManagedFromUri(
@@ -352,6 +368,49 @@ class FilesManager(
         inserted
     }
 
+    suspend fun replaceManagedFiles(files: List<RestoredFile>): Map<String, String> =
+        withContext(Dispatchers.IO) {
+            val distinctFiles = files
+                .distinctBy { normalizeRestoredPath(it.relativePath) }
+            val prepared = distinctFiles
+                .map { file ->
+                    val relativePath = normalizeRestoredPath(file.relativePath)
+                    val target = restoredFileTarget(relativePath)
+                    relativePath to target
+                }
+
+            REPLACEABLE_FOLDERS.forEach { folder ->
+                File(context.filesDir, folder).deleteRecursively()
+                File(context.filesDir, folder).mkdirs()
+                repository.deleteByFolder(folder)
+            }
+
+            val restoredUris = linkedMapOf<String, String>()
+            distinctFiles
+                .forEachIndexed { index, file ->
+                    val relativePath = prepared[index].first
+                    val target = prepared[index].second
+                    target.parentFile?.mkdirs()
+                    target.writeBytes(file.bytes)
+                    val now = System.currentTimeMillis()
+                    repository.insert(
+                        ManagedFileEntity(
+                            folder = relativePath.substringBefore('/'),
+                            relativePath = relativePath,
+                            displayName = file.displayName.ifBlank {
+                                relativePath.substringAfterLast('/')
+                            },
+                            mimeType = file.mimeType.ifBlank { "application/octet-stream" },
+                            sizeBytes = target.length(),
+                            createdAt = now,
+                            updatedAt = now,
+                        )
+                    )
+                    restoredUris[relativePath] = target.toUri().toString()
+                }
+            restoredUris
+        }
+
     suspend fun delete(id: Long, deleteFromDisk: Boolean = true): Boolean = withContext(Dispatchers.IO) {
         val entity = repository.getById(id) ?: return@withContext false
         if (deleteFromDisk) {
@@ -423,6 +482,27 @@ class FilesManager(
 
     private fun buildRelativePath(folder: String, file: File): String =
         FileUtils.buildRelativePath(folder, file)
+
+    private fun normalizeRestoredPath(path: String): String {
+        val normalized = path.replace('\\', '/').trim('/')
+        require(normalized.isNotBlank()) { "恢复文件路径为空" }
+        require(normalized.split('/').none { it.isBlank() || it == "." || it == ".." }) {
+            "恢复文件路径无效：$path"
+        }
+        require(normalized.substringBefore('/') in REPLACEABLE_FOLDERS) {
+            "恢复文件目录不受支持：$path"
+        }
+        return normalized
+    }
+
+    private fun restoredFileTarget(relativePath: String): File {
+        val root = context.filesDir.canonicalFile
+        val target = File(root, relativePath).canonicalFile
+        require(target.path.startsWith(root.path + File.separator)) {
+            "恢复文件路径越界：$relativePath"
+        }
+        return target
+    }
 
     private fun getRelativePathInFilesDir(file: File): String? =
         FileUtils.getRelativePathInFilesDir(context.filesDir, file)

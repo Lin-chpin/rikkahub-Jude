@@ -23,6 +23,7 @@ import me.rerere.rikkahub.data.ai.GenerationHandler
 import me.rerere.rikkahub.data.ai.mcp.McpManager
 import me.rerere.rikkahub.data.ai.tools.LocalToolOption
 import me.rerere.rikkahub.data.ai.tools.LocalTools
+import me.rerere.rikkahub.data.ai.tools.REQUEST_VOICE_CALL_TOOL_NAME
 import me.rerere.rikkahub.data.ai.tools.buildMemoryTools
 import me.rerere.rikkahub.data.ai.transformers.Base64ImageToLocalFileTransformer
 import me.rerere.rikkahub.data.ai.transformers.DocumentAsPromptTransformer
@@ -46,6 +47,7 @@ import me.rerere.rikkahub.data.model.toMessageNode
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.service.ChatService
+import me.rerere.rikkahub.service.VoiceCallNotifications
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import java.time.Instant
@@ -464,17 +466,18 @@ class HeartbeatGenerationWorkflow(
         conversationId: Uuid,
     ): List<Tool> = buildList {
         val conversationMemoryScope = MemoryScope.conversation(conversationId)
+        val voiceCallConfigured = settings.getSelectedTTSProvider() != null
         addAll(
             localTools.getTools(
                 options = (assistant.localTools + LocalToolOption.VoiceCall).distinct(),
                 usageLockEnabled = true,
-                voiceCallConfigured = settings.getSelectedTTSProvider() != null,
+                voiceCallConfigured = voiceCallConfigured,
                 momentAssistantId = assistant.id,
                 anonymousQuestionScopeId = assistant.id,
                 includeBuildTools = false,
             ).map { tool ->
-                if (tool.name == "ask_user") {
-                    tool.copy(
+                when {
+                    tool.name == "ask_user" -> tool.copy(
                         needsApproval = false,
                         execute = { arguments ->
                             val questions = arguments.jsonObject["questions"]
@@ -507,8 +510,28 @@ class HeartbeatGenerationWorkflow(
                             )
                         },
                     )
-                } else {
-                    tool
+                    tool.name == REQUEST_VOICE_CALL_TOOL_NAME && voiceCallConfigured -> tool.copy(
+                        needsApproval = false,
+                        execute = { arguments ->
+                            VoiceCallNotifications.show(
+                                context = context,
+                                conversationId = conversationId.toString(),
+                                senderName = assistant.name.ifBlank { "AI" },
+                                reasonPayload = arguments.toString(),
+                                channelId = HeartbeatNotifications.CHANNEL_ID,
+                            )
+                            listOf(
+                                UIMessagePart.Text(
+                                    buildJsonObject {
+                                        put("success", true)
+                                        put("status", "notified")
+                                        put("instruction", "The user was notified. The call is not connected yet.")
+                                    }.toString(),
+                                ),
+                            )
+                        },
+                    )
+                    else -> tool
                 }
             },
         )
@@ -605,6 +628,10 @@ class HeartbeatGenerationWorkflow(
 }
 
 private fun HeartbeatDeliveryBlock.toGenerationResult(): HeartbeatGenerationResult = when (this) {
+    HeartbeatDeliveryBlock.USER_REPLY_PENDING -> HeartbeatGenerationResult(
+        outcome = HeartbeatGenerationOutcome.PENDING_USER,
+        reason = HeartbeatRunReason.USER_REPLY_PENDING,
+    )
     HeartbeatDeliveryBlock.USER_RETURNED -> HeartbeatGenerationResult(
         outcome = HeartbeatGenerationOutcome.PENDING_USER,
         reason = HeartbeatRunReason.USER_RETURNED,
