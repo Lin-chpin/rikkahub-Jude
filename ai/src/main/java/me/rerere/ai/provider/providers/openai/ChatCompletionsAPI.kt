@@ -249,7 +249,7 @@ class ChatCompletionsAPI(
     }
 
 
-    private fun buildChatCompletionRequest(
+    internal fun buildChatCompletionRequest(
         messages: List<UIMessage>,
         params: TextGenerationParams,
         providerSetting: ProviderSetting.OpenAI,
@@ -437,7 +437,10 @@ class ChatCompletionsAPI(
 
         filteredMessages.forEach { message ->
             if (message.role == MessageRole.ASSISTANT) {
-                addAssistantMessages(message, includeReasoning = true)
+                addAssistantMessages(
+                    message,
+                    includeReasoning = message.parts.any { it is UIMessagePart.Tool },
+                )
             } else {
                 addNonAssistantMessage(message)
             }

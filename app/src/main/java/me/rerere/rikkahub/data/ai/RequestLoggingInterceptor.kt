@@ -16,9 +16,14 @@ class RequestLoggingInterceptor : Interceptor {
             REDACTED
         } else {
             request.body?.let { body ->
-                val buffer = Buffer()
-                body.writeTo(buffer)
-                buffer.readUtf8()
+                val contentLength = body.contentLength()
+                if (contentLength > MAX_LOGGED_BODY_BYTES) {
+                    "[omitted request body: ${contentLength.takeIf { it >= 0 } ?: "unknown"} bytes]"
+                } else {
+                    val buffer = Buffer()
+                    body.writeTo(buffer)
+                    buffer.readUtf8()
+                }
             }
         }
 
@@ -70,6 +75,7 @@ class RequestLoggingInterceptor : Interceptor {
 
     private companion object {
         const val OPENAI_AUTH_HOST = "auth.openai.com"
+        const val MAX_LOGGED_BODY_BYTES = 32 * 1024L
         const val REDACTED = "[REDACTED]"
         val SENSITIVE_HEADERS = setOf(
             "authorization",

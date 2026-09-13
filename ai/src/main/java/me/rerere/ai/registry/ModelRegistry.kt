@@ -81,6 +81,24 @@ object ModelRegistry {
         toolReasoningAbility()
     }
 
+    private val GPT_5_6_TERRA = defineModel {
+        exact("gpt-5.6-Terra")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val GPT_5_6_LUNA = defineModel {
+        exact("gpt-5.6-Luna")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val GPT_5_6_SOL = defineModel {
+        exact("gpt-5.6-Sol")
+        visionInput()
+        toolReasoningAbility()
+    }
+
     private val GEMINI_20_FLASH = defineModel {
         tokens("gemini", "2", "0", "flash")
         visionInput()
@@ -421,6 +439,9 @@ object ModelRegistry {
         GPT_5_4_MINI,
         GPT_5_4_NANO,
         GPT_5_5,
+        GPT_5_6_TERRA,
+        GPT_5_6_LUNA,
+        GPT_5_6_SOL,
         GEMINI_20_FLASH,
         GEMINI_2_5_FLASH,
         GEMINI_2_5_PRO,

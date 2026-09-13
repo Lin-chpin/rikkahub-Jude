@@ -7,6 +7,9 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.provider.Model
@@ -75,19 +78,75 @@ data class UIMessage(
                         if (deltaPart.reasoning.isEmpty() && deltaPart.metadata == null) {
                             acc
                         } else {
-                            val lastPart = acc.lastOrNull()
-                            if (lastPart is UIMessagePart.Reasoning) {
-                                // Append to the last Reasoning part
-                                acc.dropLast(1) + UIMessagePart.Reasoning(
-                                    reasoning = lastPart.reasoning + deltaPart.reasoning,
-                                    createdAt = lastPart.createdAt,
-                                    finishedAt = null,
-                                ).also {
-                                    it.metadata = deltaPart.metadata ?: lastPart.metadata
-                                }
+                            val deltaId = deltaPart.metadata
+                                ?.get("reasoning_id")
+                                ?.jsonPrimitive
+                                ?.contentOrNull
+                            val deltaChannel = deltaPart.metadata
+                                ?.get("reasoning_channel")
+                                ?.jsonPrimitive
+                                ?.contentOrNull
+                            val isSnapshot = deltaPart.metadata
+                                ?.get("reasoning_snapshot")
+                                ?.jsonPrimitive
+                                ?.booleanOrNull == true
+                            val hasRawReasoning = deltaChannel == "summary" && acc.any {
+                                it is UIMessagePart.Reasoning &&
+                                    it.metadata?.get("reasoning_id")?.jsonPrimitive?.contentOrNull == deltaId &&
+                                    it.metadata?.get("reasoning_channel")?.jsonPrimitive?.contentOrNull == "text"
+                            }
+                            if (hasRawReasoning) {
+                                acc
                             } else {
-                                // Create new Reasoning part
-                                acc + deltaPart
+                                val snapshotIndex = if (isSnapshot) {
+                                    acc.indexOfLast {
+                                        it is UIMessagePart.Reasoning &&
+                                            (deltaId == null || it.metadata?.get("reasoning_id")
+                                                ?.jsonPrimitive?.contentOrNull == deltaId) &&
+                                            (deltaChannel == null || it.metadata?.get("reasoning_channel")
+                                                ?.jsonPrimitive?.contentOrNull in listOf(null, deltaChannel))
+                                    }
+                                } else {
+                                    -1
+                                }
+                                if (snapshotIndex >= 0) {
+                                    val previous = acc[snapshotIndex] as UIMessagePart.Reasoning
+                                    acc.toMutableList().also {
+                                        it[snapshotIndex] = previous.copy(
+                                            reasoning = deltaPart.reasoning,
+                                            finishedAt = null,
+                                            metadata = mergeMetadata(previous.metadata, deltaPart.metadata),
+                                        )
+                                    }
+                                } else {
+                                    val parts = if (deltaChannel == "text" && deltaId != null) {
+                                        acc.filterNot {
+                                            it is UIMessagePart.Reasoning &&
+                                                it.metadata?.get("reasoning_id")?.jsonPrimitive?.contentOrNull == deltaId &&
+                                                it.metadata?.get("reasoning_channel")?.jsonPrimitive?.contentOrNull == "summary"
+                                        }
+                                    } else {
+                                        acc
+                                    }
+                                    val lastPart = parts.lastOrNull()
+                                    val sameReasoning = lastPart is UIMessagePart.Reasoning &&
+                                        (deltaId == null || lastPart.metadata?.get("reasoning_id")
+                                            ?.jsonPrimitive?.contentOrNull.let { it == null || it == deltaId }) &&
+                                        (deltaChannel == null || lastPart.metadata?.get("reasoning_channel")
+                                            ?.jsonPrimitive?.contentOrNull.let { it == null || it == deltaChannel })
+                                    if (sameReasoning) {
+                                        // Append to the last Reasoning part
+                                        parts.dropLast(1) + UIMessagePart.Reasoning(
+                                            reasoning = lastPart.reasoning + deltaPart.reasoning,
+                                            createdAt = lastPart.createdAt,
+                                            finishedAt = null,
+                                            metadata = mergeMetadata(lastPart.metadata, deltaPart.metadata),
+                                        )
+                                    } else {
+                                        // Create a new part when the stream changes from summary to raw text.
+                                        parts + deltaPart
+                                    }
+                                }
                             }
                         }
                     }
@@ -208,6 +267,12 @@ data class UIMessage(
             parts = listOf(UIMessagePart.Text(prompt))
         )
     }
+}
+
+private fun mergeMetadata(previous: JsonObject?, next: JsonObject?): JsonObject? {
+    if (previous == null) return next
+    if (next == null) return previous
+    return JsonObject(previous + next)
 }
 
 /**

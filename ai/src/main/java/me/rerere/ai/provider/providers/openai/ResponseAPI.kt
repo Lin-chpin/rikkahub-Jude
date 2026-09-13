@@ -98,15 +98,12 @@ class ResponseAPI(
             .configureReferHeaders(providerSetting.baseUrl)
         val request = authenticator.authenticate(requestBuilder, providerSetting).build()
 
-        Log.i(TAG, "generateText: ${json.encodeToString(requestBody)}")
-
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
             throw Exception("Failed to get response: ${response.code} ${response.body.string()}")
         }
 
         val bodyStr = response.body?.string() ?: ""
-        Log.i(TAG, "generateText: $bodyStr")
         val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
         val output = parseResponseOutput(bodyJson)
 
@@ -132,8 +129,6 @@ class ResponseAPI(
             .configureReferHeaders(providerSetting.baseUrl)
         val request = authenticator.authenticate(requestBuilder, providerSetting).build()
 
-        Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
-
         val listener = object : EventSourceListener() {
             override fun onEvent(
                 eventSource: EventSource,
@@ -145,7 +140,7 @@ class ResponseAPI(
                     close()
                     return
                 }
-                Log.d(TAG, "onEvent: $id/$type $data")
+                Log.d(TAG, "onEvent: $id/$type (${data.length} chars)")
                 val json = json.parseToJsonElement(data).jsonObject
                 val chunk = parseResponseDelta(json)
                 if (chunk != null) {
@@ -166,7 +161,6 @@ class ResponseAPI(
                 try {
                     if (!bodyRaw.isNullOrBlank()) {
                         val bodyElement = Json.parseToJsonElement(bodyRaw)
-                        println(bodyElement)
                         exception = bodyElement.parseErrorDetail()
                         Log.i(TAG, "onFailure: $exception")
                     }
@@ -190,7 +184,6 @@ class ResponseAPI(
             .newEventSource(request, listener)
 
         awaitClose {
-            println("[awaitClose] 关闭eventSource ")
             eventSource.cancel()
         }
     }
@@ -216,16 +209,27 @@ class ResponseAPI(
             }
             if (params.maxTokens != null) put("max_output_tokens", params.maxTokens)
 
-            // system instructions
-            if (messages.any { it.role == MessageRole.SYSTEM }) {
-                val parts = messages.first { it.role == MessageRole.SYSTEM }.parts
-                put(
-                    "instructions",
-                    parts.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text })
+            // Keep the stable prefix in instructions. Conversation summaries and
+            // runtime context are appended by GenerationHandler and change often.
+            val systemPrompt = messages.firstOrNull { it.role == MessageRole.SYSTEM }
+                ?.parts
+                ?.filterIsInstance<UIMessagePart.Text>()
+                ?.joinToString("\n") { it.text }
+                .orEmpty()
+            val (stableInstructions, dynamicInstructions) = splitResponseSystemPrompt(systemPrompt)
+            if (stableInstructions.isNotBlank()) {
+                put("instructions", stableInstructions)
             }
 
             // messages
-            put("input", buildMessages(messages))
+            put(
+                "input",
+                buildInput(
+                    messages,
+                    dynamicInstructions,
+                    includeReasoning = providerSetting.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION,
+                )
+            )
 
             // reasoning
             if (params.model.abilities.contains(ModelAbility.REASONING)) {
@@ -295,20 +299,47 @@ class ResponseAPI(
         }
     }
 
-    internal fun buildMessages(messages: List<UIMessage>) = buildJsonArray {
+    internal fun buildMessages(
+        messages: List<UIMessage>,
+        includeReasoning: Boolean = false,
+    ) = buildJsonArray {
         messages
             .filter { it.isValidToUpload() && it.role != MessageRole.SYSTEM }
             .forEach { message ->
                 if (message.role == MessageRole.ASSISTANT) {
-                    addAssistantItems(message)
+                    addAssistantItems(message, includeReasoning)
                 } else {
                     addUserItems(message)
                 }
             }
     }
 
-    private fun JsonArrayBuilder.addAssistantItems(message: UIMessage) {
-        val groups = groupPartsByToolBoundary(message.parts)
+    internal fun buildInput(
+        messages: List<UIMessage>,
+        dynamicInstructions: String? = null,
+        includeReasoning: Boolean = false,
+    ) = buildJsonArray {
+        val messageItems = buildMessages(messages, includeReasoning)
+        val dynamic = dynamicInstructions?.trim().orEmpty()
+
+        messageItems.forEach { add(it) }
+        if (dynamic.isNotBlank()) addDeveloperInstruction(dynamic)
+    }
+
+    private fun JsonArrayBuilder.addDeveloperInstruction(text: String) {
+        add(buildJsonObject {
+            put("role", "developer")
+            put("content", text)
+        })
+    }
+
+    private fun JsonArrayBuilder.addAssistantItems(
+        message: UIMessage,
+        includeReasoning: Boolean,
+    ) {
+        val groups = groupPartsByToolBoundary(
+            if (includeReasoning) message.parts else message.parts.filterNot { it is UIMessagePart.Reasoning }
+        )
         val contentBuffer = mutableListOf<UIMessagePart>()
 
         for (group in groups) {
@@ -450,6 +481,7 @@ class ResponseAPI(
 
     private fun parseResponseDelta(jsonObject: JsonObject): MessageChunk? {
         val chunkType = jsonObject["type"]?.jsonPrimitive?.content ?: error("chunk type not found")
+        parseResponseReasoningEvent(jsonObject)?.let { return it }
 
         when (chunkType) {
             "response.output_text.delta" -> {
@@ -461,31 +493,6 @@ class ResponseAPI(
                             index = 0,
                             delta = UIMessage.assistant(
                                 jsonObject["delta"]?.jsonPrimitive?.contentOrNull ?: ""
-                            ),
-                            message = null,
-                            finishReason = null
-                        )
-                    )
-                )
-            }
-
-            "response.reasoning_summary_text.delta", "response.reasoning_text.delta" -> {
-                return MessageChunk(
-                    id = jsonObject["item_id"]?.jsonPrimitive?.contentOrNull ?: "",
-                    model = "",
-                    choices = listOf(
-                        UIMessageChoice(
-                            index = 0,
-                            delta = UIMessage(
-                                role = MessageRole.ASSISTANT,
-                                parts = listOf(
-                                    UIMessagePart.Reasoning(
-                                        reasoning = jsonObject["delta"]?.jsonPrimitive?.contentOrNull
-                                            ?: "",
-                                        createdAt = Clock.System.now(),
-                                        finishedAt = null
-                                    )
-                                )
                             ),
                             message = null,
                             finishReason = null
@@ -677,7 +684,6 @@ class ResponseAPI(
     }
 
     private fun parseResponseOutput(jsonObject: JsonObject): MessageChunk {
-        println(jsonObject)
         val outputs = jsonObject["output"]?.jsonArray ?: error("output not found")
         val parts = arrayListOf<UIMessagePart>()
 
@@ -817,14 +823,24 @@ private fun List<UIMessagePart>.isOnlyTextPart(): Boolean {
 
 internal data class ResponseProviderCapabilities(
     val supportsReasoningSummary: Boolean = true,
-    val supportEncryptedContent: Boolean = true
+    val supportEncryptedContent: Boolean = true,
 )
+
+private const val COMPRESSED_SUMMARY_MARKER =
+    "The following is a compressed summary of earlier messages in this conversation."
+
+private fun splitResponseSystemPrompt(prompt: String): Pair<String, String?> {
+    val markerIndex = prompt.indexOf(COMPRESSED_SUMMARY_MARKER)
+    if (markerIndex < 0) return prompt.trim() to null
+
+    return prompt.substring(0, markerIndex).trim() to prompt.substring(markerIndex).trim()
+}
 
 internal fun resolveResponseProviderCapabilities(host: String): ResponseProviderCapabilities {
     return when (host) {
         "ark.cn-beijing.volces.com" -> ResponseProviderCapabilities(
             supportsReasoningSummary = false,
-            supportEncryptedContent = false
+            supportEncryptedContent = false,
         )
 
         else -> ResponseProviderCapabilities()
