@@ -195,6 +195,8 @@ class ResponseAPI(
         stream: Boolean
     ): JsonObject {
         val host = providerSetting.baseUrl.toHttpUrl().host
+        val isCodexSubscription = providerSetting.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION &&
+            host == "chatgpt.com"
         val capabilities = resolveResponseProviderCapabilities(host)
         val modelAbilities = (params.model.abilities + ModelRegistry.MODEL_ABILITIES.getData(params.model.modelId)).toSet()
         val body = buildJsonObject {
@@ -210,27 +212,33 @@ class ResponseAPI(
             }
             if (params.maxTokens != null) put("max_output_tokens", params.maxTokens)
 
-            // Keep the stable prefix in instructions. Conversation summaries and
-            // runtime context are appended by GenerationHandler and change often.
-            val systemPrompt = messages.firstOrNull { it.role == MessageRole.SYSTEM }
+            val systemParts = messages.firstOrNull { it.role == MessageRole.SYSTEM }
                 ?.parts
                 ?.filterIsInstance<UIMessagePart.Text>()
-                ?.joinToString("\n") { it.text }
                 .orEmpty()
-            val (stableInstructions, dynamicInstructions) = splitResponseSystemPrompt(systemPrompt)
-            if (stableInstructions.isNotBlank()) {
-                put("instructions", stableInstructions)
-            }
-
-            // messages
-            put(
-                "input",
-                buildInput(
+            val prompt = buildResponsePrompt(
+                systemParts = systemParts,
+                messageItems = buildMessages(
                     messages,
-                    dynamicInstructions,
                     includeReasoning = providerSetting.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION,
-                )
+                ),
             )
+            prompt.instructions?.let { put("instructions", it) }
+            put("input", prompt.input)
+            if (isCodexSubscription) {
+                val sessionId = params.customHeaders
+                    .firstOrNull { it.name.equals("session-id", ignoreCase = true) }
+                    ?.value
+                    ?.takeIf { it.isNotBlank() }
+                put(
+                    "prompt_cache_key",
+                    (sessionId ?: "codex-${providerSetting.id}-${params.model.modelId}").take(64),
+                )
+                logInfo(
+                    TAG,
+                    "cache request: mode=implicit-default, key=stable, inputItems=${prompt.input.size}"
+                )
+            }
 
             // reasoning
             if (ModelAbility.REASONING in modelAbilities) {
@@ -313,25 +321,6 @@ class ResponseAPI(
                     addUserItems(message)
                 }
             }
-    }
-
-    internal fun buildInput(
-        messages: List<UIMessage>,
-        dynamicInstructions: String? = null,
-        includeReasoning: Boolean = false,
-    ) = buildJsonArray {
-        val messageItems = buildMessages(messages, includeReasoning)
-        val dynamic = dynamicInstructions?.trim().orEmpty()
-
-        messageItems.forEach { add(it) }
-        if (dynamic.isNotBlank()) addDeveloperInstruction(dynamic)
-    }
-
-    private fun JsonArrayBuilder.addDeveloperInstruction(text: String) {
-        add(buildJsonObject {
-            put("role", "developer")
-            put("content", text)
-        })
     }
 
     private fun JsonArrayBuilder.addAssistantItems(
@@ -672,11 +661,15 @@ class ResponseAPI(
             }
 
             "response.completed" -> {
+                val response = jsonObject["response"]?.jsonObject
+                response?.get("prompt_cache_diagnostics")?.let {
+                    logInfo(TAG, "cache diagnostics: $it")
+                }
                 return MessageChunk(
                     id = jsonObject["item_id"]?.jsonPrimitive?.contentOrNull ?: "",
                     model = "",
                     choices = emptyList(),
-                    usage = parseTokenUsage(jsonObject["response"]?.jsonObject?.get("usage")?.jsonObject)
+                    usage = parseTokenUsage(response?.get("usage")?.jsonObject)
                 )
             }
         }
@@ -767,14 +760,28 @@ class ResponseAPI(
 
     private fun parseTokenUsage(jsonObject: JsonObject?): TokenUsage? {
         if (jsonObject == null) return null
-        return TokenUsage(
+        val details = jsonObject["input_tokens_details"]?.jsonObjectOrNull
+        val cachedTokens = details?.get("cached_tokens")?.jsonPrimitive?.intOrNull
+        val cacheWriteTokens = details?.get("cache_write_tokens")?.jsonPrimitive?.intOrNull
+        val usage = TokenUsage(
             promptTokens = jsonObject["input_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
             completionTokens = jsonObject["output_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
             totalTokens = jsonObject["total_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
-            cachedTokens = jsonObject["input_tokens_details"]?.jsonObjectOrNull?.get("cached_tokens")?.jsonPrimitive?.intOrNull
-                ?: 0
+            cachedTokens = cachedTokens ?: 0
         )
+        logInfo(
+            TAG,
+            "usage: input=${usage.promptTokens}, cached=${usage.cachedTokens}, " +
+                "cacheWrite=${cacheWriteTokens ?: "missing"}, " +
+                "cacheFields=${if (details == null) "missing" else "present"}, " +
+                "output=${usage.completionTokens}, total=${usage.totalTokens}"
+        )
+        return usage
     }
+}
+
+private fun logInfo(tag: String, message: String) {
+    runCatching { Log.i(tag, message) }
 }
 
 internal suspend fun collectStreamingTextGeneration(
@@ -826,16 +833,6 @@ internal data class ResponseProviderCapabilities(
     val supportsReasoningSummary: Boolean = true,
     val supportEncryptedContent: Boolean = true,
 )
-
-private const val COMPRESSED_SUMMARY_MARKER =
-    "The following is a compressed summary of earlier messages in this conversation."
-
-private fun splitResponseSystemPrompt(prompt: String): Pair<String, String?> {
-    val markerIndex = prompt.indexOf(COMPRESSED_SUMMARY_MARKER)
-    if (markerIndex < 0) return prompt.trim() to null
-
-    return prompt.substring(0, markerIndex).trim() to prompt.substring(markerIndex).trim()
-}
 
 internal fun resolveResponseProviderCapabilities(host: String): ResponseProviderCapabilities {
     return when (host) {

@@ -19,14 +19,19 @@ import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.merge
 import me.rerere.ai.provider.CustomBody
+import me.rerere.ai.provider.CustomHeader
 import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.OpenAIAuthType
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.registry.ModelRegistry
-import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.MessageChunk
+import me.rerere.ai.ui.SYSTEM_PROMPT_DYNAMIC_SECTION
+import me.rerere.ai.ui.SYSTEM_PROMPT_SECTION_METADATA_KEY
+import me.rerere.ai.ui.SYSTEM_PROMPT_STABLE_SECTION
+import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.handleMessageChunk
@@ -171,6 +176,7 @@ class GenerationHandler(
                     runtimeStateSystemPrompt = runtimeStateSystemPrompt,
                     transientLastContextMessage = transientLastContextMessage,
                     maxTokensOverride = maxTokensOverride,
+                    conversationId = conversationId,
                 )
                 messages = messages.visualTransforms(
                     transformers = outputTransformers,
@@ -369,20 +375,18 @@ class GenerationHandler(
         runtimeStateSystemPrompt: String? = null,
         transientLastContextMessage: UIMessage? = null,
         maxTokensOverride: Int? = null,
+        conversationId: Uuid? = null,
     ) {
         val internalMessages = buildList {
-            val system = buildString {
-                val effectiveSystemPrompt =
-                    if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
-                        conversationSystemPrompt
-                    } else {
-                        assistant.systemPrompt
-                    }
-                if (effectiveSystemPrompt.isNotBlank()) {
-                    append(effectiveSystemPrompt)
+            val effectiveSystemPrompt =
+                if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
+                    conversationSystemPrompt
+                } else {
+                    assistant.systemPrompt
                 }
+            val dynamicSystemPrompt = buildString {
                 if (!extraSystemPrompt.isNullOrBlank()) {
-                    if (isNotBlank()) {
+                    if (effectiveSystemPrompt.isNotBlank()) {
                         appendLine()
                         appendLine()
                     }
@@ -418,7 +422,22 @@ class GenerationHandler(
                     append(runtimeStateSystemPrompt)
                 }
             }
-            if (system.isNotBlank()) add(UIMessage.system(prompt = system))
+            val system = effectiveSystemPrompt + dynamicSystemPrompt
+            if (system.isNotBlank()) {
+                val parts = if (provider is ProviderSetting.OpenAI && provider.useResponseApi) {
+                    buildList {
+                        if (effectiveSystemPrompt.isNotBlank()) {
+                            add(effectiveSystemPrompt.toSystemPromptPart(SYSTEM_PROMPT_STABLE_SECTION))
+                        }
+                        if (dynamicSystemPrompt.isNotBlank()) {
+                            add(dynamicSystemPrompt.toSystemPromptPart(SYSTEM_PROMPT_DYNAMIC_SECTION))
+                        }
+                    }
+                } else {
+                    listOf(UIMessagePart.Text(system))
+                }
+                add(UIMessage(role = MessageRole.SYSTEM, parts = parts))
+            }
             val contextMessages = if (!conversationContextSummary.isNullOrBlank()) {
                 messages
             } else {
@@ -454,6 +473,13 @@ class GenerationHandler(
             customHeaders = buildList {
                 addAll(assistant.customHeaders)
                 addAll(model.customHeaders)
+                if (provider is ProviderSetting.OpenAI &&
+                    provider.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION &&
+                    conversationId != null
+                ) {
+                    removeAll { it.name.equals("session-id", ignoreCase = true) }
+                    add(CustomHeader("session-id", conversationId.toString()))
+                }
             },
             customBody = buildList {
                 addAll(assistant.customBodies)
@@ -548,6 +574,13 @@ class GenerationHandler(
             onUpdateMessages(responseMessages)
         }
     }
+
+    private fun String.toSystemPromptPart(section: String) = UIMessagePart.Text(
+        text = this,
+        metadata = buildJsonObject {
+            put(SYSTEM_PROMPT_SECTION_METADATA_KEY, section)
+        },
+    )
 
     private fun List<UIMessage>.hasAssistantOutputAfter(before: List<UIMessage>): Boolean {
         if (size > before.size) {

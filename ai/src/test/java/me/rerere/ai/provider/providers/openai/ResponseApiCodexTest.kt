@@ -10,6 +10,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.TokenUsage
+import me.rerere.ai.provider.CustomHeader
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.OpenAIAuthType
@@ -17,11 +18,15 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.MessageChunk
+import me.rerere.ai.ui.SYSTEM_PROMPT_DYNAMIC_SECTION
+import me.rerere.ai.ui.SYSTEM_PROMPT_SECTION_METADATA_KEY
+import me.rerere.ai.ui.SYSTEM_PROMPT_STABLE_SECTION
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.util.KeyRoulette
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -226,6 +231,80 @@ class ResponseApiCodexTest {
             input[1].jsonObject["content"]?.jsonPrimitive?.content,
         )
         assertEquals("current question", input[0].jsonObject["content"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `Codex gpt 5 6 uses implicit caching without explicit breakpoints`() {
+        val body = ResponseAPI(okhttp3.OkHttpClient()).buildRequestBody(
+            providerSetting = ProviderSetting.OpenAI(
+                baseUrl = "https://chatgpt.com/backend-api/codex",
+                authType = OpenAIAuthType.CHATGPT_SUBSCRIPTION,
+            ),
+            messages = listOf(
+                UIMessage(
+                    role = MessageRole.SYSTEM,
+                    parts = listOf(
+                        UIMessagePart.Text(
+                            "stable instructions",
+                            metadata = buildJsonObject {
+                                put(SYSTEM_PROMPT_SECTION_METADATA_KEY, SYSTEM_PROMPT_STABLE_SECTION)
+                            },
+                        ),
+                        UIMessagePart.Text(
+                            "dynamic context",
+                            metadata = buildJsonObject {
+                                put(SYSTEM_PROMPT_SECTION_METADATA_KEY, SYSTEM_PROMPT_DYNAMIC_SECTION)
+                            },
+                        ),
+                    ),
+                ),
+                UIMessage.user("current question"),
+            ),
+            params = TextGenerationParams(
+                model = Model(modelId = "gpt-5.6-luna"),
+                customHeaders = listOf(CustomHeader("session-id", "conversation-1")),
+            ),
+            stream = true,
+        )
+
+        assertEquals("stable instructions", body["instructions"]?.jsonPrimitive?.content)
+        assertNull(body["prompt_cache_options"])
+        assertEquals("conversation-1", body["prompt_cache_key"]?.jsonPrimitive?.content)
+        assertEquals("user", body["input"]!!.jsonArray.first().jsonObject["role"]?.jsonPrimitive?.content)
+        assertFalse(body.toString().contains("prompt_cache_breakpoint"))
+    }
+
+    @Test
+    fun `Codex keeps tool results compatible with implicit caching`() {
+        val body = ResponseAPI(okhttp3.OkHttpClient()).buildRequestBody(
+            providerSetting = ProviderSetting.OpenAI(
+                baseUrl = "https://chatgpt.com/backend-api/codex",
+                authType = OpenAIAuthType.CHATGPT_SUBSCRIPTION,
+            ),
+            messages = listOf(
+                UIMessage.user("look this up"),
+                UIMessage(
+                    role = MessageRole.ASSISTANT,
+                    parts = listOf(
+                        UIMessagePart.Tool(
+                            toolCallId = "call_1",
+                            toolName = "lookup",
+                            input = "{}",
+                            output = listOf(UIMessagePart.Text("result")),
+                        )
+                    ),
+                ),
+                UIMessage.user("continue"),
+            ),
+            params = TextGenerationParams(Model(modelId = "gpt-5.6-luna")),
+            stream = true,
+        )
+
+        val toolOutput = body["input"]!!.jsonArray.first {
+            it.jsonObject["type"]?.jsonPrimitive?.content == "function_call_output"
+        }.jsonObject["output"]
+        assertEquals("result", toolOutput?.jsonPrimitive?.content)
+        assertFalse(body.toString().contains("prompt_cache_breakpoint"))
     }
 
     private fun textChunk(

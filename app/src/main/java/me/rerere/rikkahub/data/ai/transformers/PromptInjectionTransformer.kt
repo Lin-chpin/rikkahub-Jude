@@ -1,6 +1,13 @@
 package me.rerere.rikkahub.data.ai.transformers
 
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.ui.SYSTEM_PROMPT_DYNAMIC_SECTION
+import me.rerere.ai.ui.SYSTEM_PROMPT_SECTION_METADATA_KEY
+import me.rerere.ai.ui.SYSTEM_PROMPT_STABLE_SECTION
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.model.Assistant
@@ -136,24 +143,12 @@ internal fun applyInjections(
 
         if (beforeContent.isNotEmpty() || afterContent.isNotEmpty()) {
             val systemMessage = result[systemIndex]
-            val originalText = systemMessage.parts
-                .filterIsInstance<UIMessagePart.Text>()
-                .joinToString("") { it.text }
-
-            val newText = buildString {
-                if (beforeContent.isNotEmpty()) {
-                    append(beforeContent)
-                    appendLine()
-                }
-                append(originalText)
-                if (afterContent.isNotEmpty()) {
-                    appendLine()
-                    append(afterContent)
-                }
-            }
-
             result[systemIndex] = systemMessage.copy(
-                parts = listOf(UIMessagePart.Text(newText))
+                parts = mergeSystemPromptInjections(
+                    parts = systemMessage.parts,
+                    beforeContent = beforeContent,
+                    afterContent = afterContent,
+                ),
             )
         }
     } else {
@@ -222,6 +217,71 @@ internal fun applyInjections(
 
     return result
 }
+
+private fun mergeSystemPromptInjections(
+    parts: List<UIMessagePart>,
+    beforeContent: String,
+    afterContent: String,
+): List<UIMessagePart> {
+    val textParts = parts.filterIsInstance<UIMessagePart.Text>()
+    if (textParts.none { it.systemPromptSection() != null }) {
+        val originalText = textParts.joinToString("") { it.text }
+        return listOf(UIMessagePart.Text(buildString {
+            if (beforeContent.isNotEmpty()) {
+                append(beforeContent)
+                appendLine()
+            }
+            append(originalText)
+            if (afterContent.isNotEmpty()) {
+                appendLine()
+                append(afterContent)
+            }
+        }))
+    }
+
+    // BEFORE_SYSTEM_PROMPT must keep its ordering semantics. Do not mark this
+    // request as cacheable when a dynamic prefix has to remain before the base prompt.
+    if (beforeContent.isNotEmpty()) {
+        val originalText = textParts.joinToString("") { it.text }
+        return listOf(UIMessagePart.Text(buildString {
+            append(beforeContent)
+            appendLine()
+            append(originalText)
+            if (afterContent.isNotEmpty()) {
+                appendLine()
+                append(afterContent)
+            }
+        }))
+    }
+
+    val stable = textParts
+        .filter { it.systemPromptSection() == SYSTEM_PROMPT_STABLE_SECTION }
+        .joinToString("") { it.text }
+    val dynamic = buildString {
+        textParts
+            .filter { it.systemPromptSection() != SYSTEM_PROMPT_STABLE_SECTION }
+            .joinTo(this, separator = "") { it.text }
+        if (afterContent.isNotEmpty()) {
+            appendLine()
+            append(afterContent)
+        }
+    }
+
+    return listOfNotNull(
+        stable.takeIf { it.isNotBlank() }?.let { it.toSystemPromptPart(SYSTEM_PROMPT_STABLE_SECTION) },
+        dynamic.takeIf { it.isNotBlank() }?.let { it.toSystemPromptPart(SYSTEM_PROMPT_DYNAMIC_SECTION) },
+    )
+}
+
+private fun UIMessagePart.Text.systemPromptSection(): String? =
+    metadata?.get(SYSTEM_PROMPT_SECTION_METADATA_KEY)?.jsonPrimitive?.contentOrNull
+
+private fun String.toSystemPromptPart(section: String) = UIMessagePart.Text(
+    text = this,
+    metadata = buildJsonObject {
+        put(SYSTEM_PROMPT_SECTION_METADATA_KEY, section)
+    },
+)
 
 /**
  * 将同一 role 的注入合并成消息列表
