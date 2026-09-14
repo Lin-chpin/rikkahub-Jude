@@ -811,11 +811,14 @@
   <string name="setting_page_assistant">助手</string>
   <string name="setting_page_assistant_desc">设置个性化助手 (智能体)</string>
   <string name="setting_page_built_in_tools">内置工具</string>
-  <string name="setting_page_built_in_tools_desc">选择模型支持的内置工具, 这些工具直接由API内置，无需APP提供，当前这个功能仅支持Gemini官方API。</string>
+  <string name="setting_page_built_in_tools_desc">选择模型支持的内置工具，这些工具由 API 直接提供，无需 App 提供。</string>
   <string name="setting_page_built_in_tools_image_generation">图像生成</string>
   <string name="setting_page_built_in_tools_image_generation_desc">启用图像生成功能</string>
   <string name="setting_page_built_in_tools_search">搜索</string>
-  <string name="setting_page_built_in_tools_search_desc">启用 Google 搜索集成</string>
+  <string name="setting_page_built_in_tools_search_desc">启用 API 内置网页搜索</string>
+  <string name="deepseek_builtin_search_unsupported_model">当前 DeepSeek 模型不支持内置搜索，请使用 v4 及以上版本或 deepseek-flash。</string>
+  <string name="deepseek_builtin_search_requires_response_api">DeepSeek 内置搜索需要先开启 Response API。</string>
+  <string name="deepseek_builtin_image_generation_unsupported">DeepSeek 暂不支持图像生成，无法启用此内置工具。</string>
   <string name="setting_page_built_in_tools_url_context">URL 上下文</string>
   <string name="setting_page_built_in_tools_url_context_desc">启用 URL 内容处理</string>
   <string name="setting_page_chat_storage">聊天记录存储</string>

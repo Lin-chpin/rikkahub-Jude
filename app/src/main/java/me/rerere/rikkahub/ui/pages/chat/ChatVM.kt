@@ -9,6 +9,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.core.net.toUri
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.analytics.FirebaseAnalytics
@@ -19,7 +22,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import me.rerere.ai.provider.Model
@@ -67,6 +69,15 @@ class ChatVM(
     private val favoriteRepository: FavoriteRepository,
 ) : ViewModel() {
     private val _conversationId: Uuid = Uuid.parse(id)
+    private val updateCheckRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    private val updateLifecycleObserver = LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_START) {
+            updateCheckRequests.tryEmit(Unit)
+        }
+    }
+    val updateState = updateCheckRequests
+        .flatMapLatest { updateChecker.checkUpdate() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, UiState.Loading)
     val conversation: StateFlow<Conversation> = chatService.getConversationFlow(_conversationId)
     var chatListInitialized by mutableStateOf(false) // 聊天列表是否已经滚动到底部
 
@@ -102,6 +113,7 @@ class ChatVM(
         // 记住对话ID, 方便下次启动恢复
         context.writeStringPreference("lastConversationId", _conversationId.toString())
         updateChecker.restoreDownloadState(context)
+        ProcessLifecycleOwner.get().lifecycle.addObserver(updateLifecycleObserver)
 
         viewModelScope.launch {
             settingsStore.update { settings ->
@@ -117,6 +129,7 @@ class ChatVM(
     }
 
     override fun onCleared() {
+        ProcessLifecycleOwner.get().lifecycle.removeObserver(updateLifecycleObserver)
         super.onCleared()
         // 移除对话引用
         chatService.removeConversationReference(_conversationId)
@@ -188,12 +201,6 @@ class ChatVM(
     }
 
     // Update checker
-    private val updateCheckRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
-    val updateState = updateCheckRequests
-        .onStart { emit(Unit) }
-        .flatMapLatest { updateChecker.checkUpdate() }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, UiState.Loading)
-
     val updateDownloadState: StateFlow<UpdateDownloadState?> = updateChecker.downloadState
 
     fun retryUpdateCheck() {

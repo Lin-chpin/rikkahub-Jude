@@ -38,8 +38,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.hugeicons.HugeIcons
@@ -97,20 +95,12 @@ private fun rememberReasoningState(reasoning: UIMessagePart.Reasoning): Pair<Rea
 
     LaunchedEffect(reasoning.reasoning, loading) {
         if (loading) {
-            if (!state.expandState.expanded && settings.displaySetting.showThinkingContent)
-                state.expandState = ReasoningCardState.Preview
+            if (state.expandState == ReasoningCardState.Collapsed && settings.displaySetting.showThinkingContent)
+                state.expandState = ReasoningCardState.Expanded
             scrollState.animateScrollTo(scrollState.maxValue)
         } else {
-            if (state.expandState.expanded) {
-                val hasRawReasoning = reasoning.metadata
-                    ?.get("reasoning_channel")
-                    ?.jsonPrimitive
-                    ?.contentOrNull == "text"
-                state.expandState = if (settings.displaySetting.autoCloseThinking && !hasRawReasoning)
-                    ReasoningCardState.Collapsed
-                else
-                    ReasoningCardState.Expanded
-            }
+            if (settings.displaySetting.autoCloseThinking && state.expandState.expanded)
+                state.expandState = ReasoningCardState.Collapsed
         }
     }
 

@@ -96,6 +96,7 @@ class GenerationHandler(
         maxTokensOverride: Int? = null,
         providerOverride: ProviderSetting? = null,
         conversationId: Uuid? = null,
+        sessionIdOverride: String? = null,
     ): Flow<GenerationChunk> = flow {
         val provider = providerOverride ?: model.findProvider(settings.providers)
             ?: error("Provider not found")
@@ -177,6 +178,7 @@ class GenerationHandler(
                     transientLastContextMessage = transientLastContextMessage,
                     maxTokensOverride = maxTokensOverride,
                     conversationId = conversationId,
+                    sessionIdOverride = sessionIdOverride,
                 )
                 messages = messages.visualTransforms(
                     transformers = outputTransformers,
@@ -376,6 +378,7 @@ class GenerationHandler(
         transientLastContextMessage: UIMessage? = null,
         maxTokensOverride: Int? = null,
         conversationId: Uuid? = null,
+        sessionIdOverride: String? = null,
     ) {
         val internalMessages = buildList {
             val effectiveSystemPrompt =
@@ -473,12 +476,14 @@ class GenerationHandler(
             customHeaders = buildList {
                 addAll(assistant.customHeaders)
                 addAll(model.customHeaders)
+                val effectiveSessionId = sessionIdOverride?.takeIf { it.isNotBlank() }
+                    ?: conversationId?.toString()
                 if (provider is ProviderSetting.OpenAI &&
                     provider.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION &&
-                    conversationId != null
+                    effectiveSessionId != null
                 ) {
                     removeAll { it.name.equals("session-id", ignoreCase = true) }
-                    add(CustomHeader("session-id", conversationId.toString()))
+                    add(CustomHeader("session-id", effectiveSessionId))
                 }
             },
             customBody = buildList {

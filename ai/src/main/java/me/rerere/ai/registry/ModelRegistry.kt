@@ -277,6 +277,24 @@ object ModelRegistry {
         toolReasoningAbility()
     }
 
+    private val DEEPSEEK_V4_OR_LATER = defineModel {
+        tokens(
+            tokenRegex("deepseek"),
+            tokenRegex("v"),
+            tokenRegex("(?:[4-9]|[1-9][0-9]+)")
+        )
+        toolReasoningAbility()
+    }
+
+    private val DEEPSEEK_FLASH = defineModel {
+        tokens(tokenRegex("deepseek"), tokenRegex("flash"))
+        toolReasoningAbility()
+    }
+
+    val DEEPSEEK_RESPONSES = defineGroup {
+        add(DEEPSEEK_V4_OR_LATER, DEEPSEEK_FLASH)
+    }
+
     private val DEEPSEEK_R1 = defineGroup {
         add(DEEPSEEK_R1_MODEL, DEEPSEEK_REASONER)
     }
@@ -469,6 +487,8 @@ object ModelRegistry {
         DEEPSEEK_REASONER,
         DEEPSEEK_V4_FLASH,
         DEEPSEEK_V4_PRO,
+        DEEPSEEK_V4_OR_LATER,
+        DEEPSEEK_FLASH,
         DEEPSEEK_V3_1,
         DEEPSEEK_V3_2,
         QWEN_3,

@@ -200,6 +200,7 @@ class HeartbeatGenerationWorkflow(
                 if (isLiveRun) add(Base64ImageToLocalFileTransformer)
                 add(RegexOutputTransformer)
             },
+            sessionIdOverride = "heartbeat-$conversationId",
         ).collect { chunk ->
             if (chunk is GenerationChunk.Messages) generatedMessages = chunk.messages
         }

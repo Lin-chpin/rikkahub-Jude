@@ -8,8 +8,10 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.TokenUsage
+import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.CustomHeader
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
@@ -102,6 +104,86 @@ class ResponseApiCodexTest {
 
         assertEquals(1, input.size)
         assertEquals("answer", input[0].jsonObject["content"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `DeepSeek Responses API replays reasoning_text history`() {
+        val body = ResponseAPI(okhttp3.OkHttpClient()).buildRequestBody(
+            providerSetting = ProviderSetting.OpenAI(baseUrl = "https://api.deepseek.com/v1"),
+            messages = listOf(
+                UIMessage(
+                    role = MessageRole.ASSISTANT,
+                    parts = listOf(
+                        UIMessagePart.Reasoning("old reasoning"),
+                        UIMessagePart.Text("answer"),
+                    ),
+                ),
+            ),
+            params = TextGenerationParams(
+                model = Model(
+                    modelId = "deepseek-flash",
+                    abilities = listOf(ModelAbility.REASONING),
+                    tools = setOf(BuiltInTools.Search),
+                ),
+                reasoningLevel = ReasoningLevel.HIGH,
+            ),
+            stream = true,
+        )
+
+        val reasoning = body["input"]!!.jsonArray.first {
+            it.jsonObject["type"]?.jsonPrimitive?.content == "reasoning"
+        }.jsonObject
+        val content = reasoning["content"]!!.jsonArray.single().jsonObject
+        assertEquals("reasoning_text", content["type"]?.jsonPrimitive?.content)
+        assertEquals("old reasoning", content["text"]?.jsonPrimitive?.content)
+        assertNull(reasoning["summary"])
+    }
+
+    @Test
+    fun `DeepSeek repeats reasoning before each function call`() {
+        val body = ResponseAPI(okhttp3.OkHttpClient()).buildRequestBody(
+            providerSetting = ProviderSetting.OpenAI(baseUrl = "https://api.deepseek.com/v1"),
+            messages = listOf(
+                UIMessage.user("search"),
+                UIMessage(
+                    role = MessageRole.ASSISTANT,
+                    parts = listOf(
+                        UIMessagePart.Reasoning("thinking"),
+                        UIMessagePart.Tool(
+                            toolCallId = "call_1",
+                            toolName = "search_web",
+                            input = "{}",
+                            output = listOf(UIMessagePart.Text("result 1")),
+                        ),
+                        UIMessagePart.Tool(
+                            toolCallId = "call_2",
+                            toolName = "get_time_info",
+                            input = "{}",
+                            output = listOf(UIMessagePart.Text("result 2")),
+                        ),
+                    ),
+                ),
+            ),
+            params = TextGenerationParams(
+                model = Model(
+                    modelId = "deepseek-flash",
+                    abilities = listOf(ModelAbility.REASONING),
+                ),
+            ),
+            stream = true,
+        )
+
+        val input = body["input"]!!.jsonArray
+        val functionCallIndexes = input.mapIndexedNotNull { index, item ->
+            if (item.jsonObject["type"]?.jsonPrimitive?.content == "function_call") index else null
+        }
+        assertEquals(2, functionCallIndexes.size)
+        functionCallIndexes.forEach { index ->
+            assertEquals(
+                "reasoning",
+                input[index - 1].jsonObject["type"]?.jsonPrimitive?.content,
+            )
+        }
     }
 
     @Test

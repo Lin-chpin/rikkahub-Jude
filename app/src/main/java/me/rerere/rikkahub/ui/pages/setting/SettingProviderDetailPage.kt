@@ -659,6 +659,8 @@ private fun ModelSettingsForm(
                 2 -> {
                     // 内置工具页面
                     BuiltInToolsSettings(
+                        model = model,
+                        provider = model.providerOverwrite ?: parentProvider,
                         tools = model.tools,
                         onUpdateTools = { tools ->
                             onModelChange(model.copy(tools = tools))
@@ -1343,9 +1345,25 @@ private fun ModelCard(
 
 @Composable
 private fun BuiltInToolsSettings(
+    model: Model,
+    provider: ProviderSetting?,
     tools: Set<BuiltInTools>,
     onUpdateTools: (Set<BuiltInTools>) -> Unit
 ) {
+    val toaster = LocalToaster.current
+    val deepSeekSearchError = if (model.modelId.contains("deepseek", ignoreCase = true)) {
+        when {
+            !ModelRegistry.DEEPSEEK_RESPONSES.match(model.modelId) ->
+                stringResource(R.string.deepseek_builtin_search_unsupported_model)
+
+            provider !is ProviderSetting.OpenAI || !provider.useResponseApi ->
+                stringResource(R.string.deepseek_builtin_search_requires_response_api)
+
+            else -> null
+        }
+    } else {
+        null
+    }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1378,6 +1396,9 @@ private fun BuiltInToolsSettings(
                 stringResource(R.string.setting_page_built_in_tools_image_generation_desc)
             )
         )
+        val deepSeekImageGenerationError = stringResource(
+            R.string.deepseek_builtin_image_generation_unsupported
+        )
 
         availableTools.forEach { (tool, info) ->
             val (title, description) = info
@@ -1408,6 +1429,20 @@ private fun BuiltInToolsSettings(
                     Switch(
                         checked = tool in tools,
                         onCheckedChange = { checked ->
+                            if (checked && tool == BuiltInTools.Search &&
+                                model.modelId.contains("deepseek", ignoreCase = true)
+                            ) {
+                                if (deepSeekSearchError != null) {
+                                    toaster.show(deepSeekSearchError, type = ToastType.Error)
+                                    return@Switch
+                                }
+                            }
+                            if (checked && tool == BuiltInTools.ImageGeneration &&
+                                model.modelId.contains("deepseek", ignoreCase = true)
+                            ) {
+                                toaster.show(deepSeekImageGenerationError, type = ToastType.Error)
+                                return@Switch
+                            }
                             if (checked) {
                                 onUpdateTools(tools + tool)
                             } else {

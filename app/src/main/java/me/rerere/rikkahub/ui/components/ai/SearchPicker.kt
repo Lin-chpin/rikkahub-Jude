@@ -36,8 +36,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import com.dokar.sonner.ToastType
 import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.GlobalSearch
@@ -48,10 +50,12 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.ui.components.ui.AutoAIIcon
 import me.rerere.rikkahub.ui.components.ui.ToggleSurface
 import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.context.Navigator
+import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.pages.setting.SearchAbilityTagLine
 import me.rerere.search.SearchServiceOptions
 import org.koin.compose.koinInject
@@ -64,6 +68,7 @@ fun SearchPickerButton(
     onToggleSearch: (Boolean) -> Unit,
     onUpdateSearchService: (Int) -> Unit,
     model: Model?,
+    provider: ProviderSetting?,
 ) {
     var showSearchPicker by remember { mutableStateOf(false) }
     val currentService = settings.searchServices.getOrNull(settings.searchServiceSelected)
@@ -136,6 +141,7 @@ fun SearchPickerButton(
                         .fillMaxWidth()
                         .weight(1f),
                     model = model,
+                    provider = provider,
                     onDismiss = {
                         showSearchPicker = false
                     }
@@ -153,13 +159,14 @@ private fun SearchPicker(
     modifier: Modifier = Modifier,
     onToggleSearch: (Boolean) -> Unit,
     onUpdateSearchService: (Int) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    provider: ProviderSetting?,
 ) {
     val navBackStack = LocalNavController.current
 
     // 模型内置搜索
-    if (model != null && (ModelRegistry.GEMINI_SERIES.match(model.modelId) || model.modelId.contains("gpt-"))) {
-        BuiltInSearchSetting(model = model)
+    if (model != null && isBuiltInSearchModel(model)) {
+        BuiltInSearchSetting(model = model, provider = provider)
     }
 
     // 如果没有开启内置搜索，显示搜索服务选择
@@ -174,6 +181,22 @@ private fun SearchPicker(
             onUpdateSearchService = onUpdateSearchService
         )
     }
+}
+
+private fun isBuiltInSearchModel(model: Model): Boolean =
+    ModelRegistry.GEMINI_SERIES.match(model.modelId) ||
+        model.modelId.contains("gpt-", ignoreCase = true) ||
+        model.modelId.contains("deepseek", ignoreCase = true)
+
+private fun deepSeekSearchError(model: Model, provider: ProviderSetting?): Int? {
+    if (!model.modelId.contains("deepseek", ignoreCase = true)) return null
+    if (!ModelRegistry.DEEPSEEK_RESPONSES.match(model.modelId)) {
+        return R.string.deepseek_builtin_search_unsupported_model
+    }
+    if (provider !is ProviderSetting.OpenAI || !provider.useResponseApi) {
+        return R.string.deepseek_builtin_search_requires_response_api
+    }
+    return null
 }
 
 @Composable
@@ -289,9 +312,11 @@ private fun AppSearchSettings(
 }
 
 @Composable
-private fun BuiltInSearchSetting(model: Model) {
+private fun BuiltInSearchSetting(model: Model, provider: ProviderSetting?) {
     val settingsStore = koinInject<SettingsStore>()
     val scope = rememberCoroutineScope()
+    val toaster = LocalToaster.current
+    val deepSeekError = deepSeekSearchError(model, provider)?.let { stringResource(it) }
     Card {
         Row(
             modifier = Modifier
@@ -319,6 +344,12 @@ private fun BuiltInSearchSetting(model: Model) {
             Switch(
                 checked = model.tools.contains(BuiltInTools.Search),
                 onCheckedChange = { checked ->
+                    if (checked) {
+                        deepSeekError?.let { message ->
+                            toaster.show(message, type = ToastType.Error)
+                            return@Switch
+                        }
+                    }
                     val settings = settingsStore.settingsFlow.value
                     scope.launch {
                         settingsStore.update(

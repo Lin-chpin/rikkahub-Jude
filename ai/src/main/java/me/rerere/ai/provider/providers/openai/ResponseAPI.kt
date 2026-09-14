@@ -62,6 +62,15 @@ import kotlin.time.Clock
 private const val TAG = "ResponseAPI"
 private const val EVENT_STREAM_MEDIA_TYPE = "text/event-stream"
 
+private fun ProviderSetting.OpenAI.responsesBaseUrl(): String {
+    val baseUrl = baseUrl.trimEnd('/')
+    return if (baseUrl.toHttpUrl().host == "api.deepseek.com") {
+        baseUrl.removeSuffix("/v1")
+    } else {
+        baseUrl
+    }
+}
+
 internal fun okhttp3.Request.Builder.acceptEventStream(): okhttp3.Request.Builder =
     header("Accept", EVENT_STREAM_MEDIA_TYPE)
 
@@ -90,12 +99,13 @@ class ResponseAPI(
             params = params,
             stream = false,
         )
+        val responsesBaseUrl = providerSetting.responsesBaseUrl()
         val requestBuilder = Request.Builder()
-            .url("${providerSetting.baseUrl}/responses")
+            .url("$responsesBaseUrl/responses")
             .headers(params.customHeaders.toHeaders())
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .addHeader("Content-Type", "application/json")
-            .configureReferHeaders(providerSetting.baseUrl)
+            .configureReferHeaders(responsesBaseUrl)
         val request = authenticator.authenticate(requestBuilder, providerSetting).build()
 
         val response = client.newCall(request).await()
@@ -121,12 +131,13 @@ class ResponseAPI(
             params = params,
             stream = true,
         )
+        val responsesBaseUrl = providerSetting.responsesBaseUrl()
         val requestBuilder = Request.Builder()
-            .url("${providerSetting.baseUrl}/responses")
+            .url("$responsesBaseUrl/responses")
             .headers(params.customHeaders.toHeaders())
             .acceptEventStream()
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
-            .configureReferHeaders(providerSetting.baseUrl)
+            .configureReferHeaders(responsesBaseUrl)
         val request = authenticator.authenticate(requestBuilder, providerSetting).build()
 
         val listener = object : EventSourceListener() {
@@ -195,6 +206,7 @@ class ResponseAPI(
         stream: Boolean
     ): JsonObject {
         val host = providerSetting.baseUrl.toHttpUrl().host
+        val isDeepSeek = host == "api.deepseek.com"
         val isCodexSubscription = providerSetting.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION &&
             host == "chatgpt.com"
         val capabilities = resolveResponseProviderCapabilities(host)
@@ -220,7 +232,8 @@ class ResponseAPI(
                 systemParts = systemParts,
                 messageItems = buildMessages(
                     messages,
-                    includeReasoning = providerSetting.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION,
+                    includeReasoning = isDeepSeek || providerSetting.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION,
+                    useReasoningText = isDeepSeek,
                 ),
             )
             prompt.instructions?.let { put("instructions", it) }
@@ -259,7 +272,7 @@ class ResponseAPI(
             }
 
             // tools
-            if (params.tools.isNotEmpty()) {
+            if (params.tools.isNotEmpty() || params.model.tools.isNotEmpty()) {
                 putJsonArray("tools") {
                     params.tools.forEach { tool ->
                         add(buildJsonObject {
@@ -274,11 +287,7 @@ class ResponseAPI(
                             )
                         })
                     }
-                }
-            }
-            // built-in tools
-            if (params.model.tools.isNotEmpty()) {
-                putJsonArray("tools") {
+                    // built-in tools
                     params.model.tools.forEach { builtInTool ->
                         when (builtInTool) {
                             BuiltInTools.Search -> {
@@ -311,12 +320,13 @@ class ResponseAPI(
     internal fun buildMessages(
         messages: List<UIMessage>,
         includeReasoning: Boolean = false,
+        useReasoningText: Boolean = false,
     ) = buildJsonArray {
         messages
             .filter { it.isValidToUpload() && it.role != MessageRole.SYSTEM }
             .forEach { message ->
                 if (message.role == MessageRole.ASSISTANT) {
-                    addAssistantItems(message, includeReasoning)
+                    addAssistantItems(message, includeReasoning, useReasoningText)
                 } else {
                     addUserItems(message)
                 }
@@ -326,7 +336,10 @@ class ResponseAPI(
     private fun JsonArrayBuilder.addAssistantItems(
         message: UIMessage,
         includeReasoning: Boolean,
+        useReasoningText: Boolean,
     ) {
+        var lastReasoning: UIMessagePart.Reasoning? = null
+        var toolEmittedSinceReasoning = false
         val groups = groupPartsByToolBoundary(
             if (includeReasoning) message.parts else message.parts.filterNot { it is UIMessagePart.Reasoning }
         )
@@ -344,24 +357,9 @@ class ResponseAPI(
                                     contentBuffer.clear()
                                 }
                                 // 输出 reasoning item
-                                add(buildJsonObject {
-                                    put("type", "reasoning")
-                                    part.metadata?.get("reasoning_id")?.jsonPrimitiveOrNull?.contentOrNull?.let {
-                                        put("id", it)
-                                    }
-                                    put("summary", buildJsonArray {
-                                        add(buildJsonObject {
-                                            put("type", "summary_text")
-                                            put("text", part.reasoning)
-                                        })
-                                    })
-                                    part.metadata?.get("encrypted_content")?.jsonPrimitiveOrNull?.contentOrNull?.let {
-                                        put(
-                                            "encrypted_content",
-                                            part.metadata?.get("encrypted_content")?.jsonPrimitive?.contentOrNull ?: ""
-                                        )
-                                    }
-                                })
+                                addReasoningItem(part, useReasoningText)
+                                lastReasoning = part
+                                toolEmittedSinceReasoning = false
                             }
 
                             is UIMessagePart.Image -> {
@@ -398,6 +396,10 @@ class ResponseAPI(
 
                     // 输出 function_call + function_call_output
                     group.tools.forEach { tool ->
+                        if (useReasoningText && toolEmittedSinceReasoning) {
+                            lastReasoning?.let { addReasoningItem(it, useReasoningText = true) }
+                            toolEmittedSinceReasoning = false
+                        }
                         add(buildJsonObject {
                             put("type", "function_call")
                             put("call_id", tool.toolCallId)
@@ -411,6 +413,7 @@ class ResponseAPI(
                                 "output",
                                 tool.output.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text })
                         })
+                        toolEmittedSinceReasoning = true
                     }
                 }
             }
@@ -420,6 +423,36 @@ class ResponseAPI(
         if (contentBuffer.isNotEmpty()) {
             addContentItem(MessageRole.ASSISTANT, contentBuffer)
         }
+    }
+
+    private fun JsonArrayBuilder.addReasoningItem(
+        part: UIMessagePart.Reasoning,
+        useReasoningText: Boolean,
+    ) {
+        add(buildJsonObject {
+            put("type", "reasoning")
+            part.metadata?.get("reasoning_id")?.jsonPrimitiveOrNull?.contentOrNull?.let {
+                put("id", it)
+            }
+            if (useReasoningText) {
+                putJsonArray("content") {
+                    add(buildJsonObject {
+                        put("type", "reasoning_text")
+                        put("text", part.reasoning)
+                    })
+                }
+            } else {
+                put("summary", buildJsonArray {
+                    add(buildJsonObject {
+                        put("type", "summary_text")
+                        put("text", part.reasoning)
+                    })
+                })
+                part.metadata?.get("encrypted_content")?.jsonPrimitiveOrNull?.contentOrNull?.let {
+                    put("encrypted_content", it)
+                }
+            }
+        })
     }
 
     private fun JsonArrayBuilder.addUserItems(message: UIMessage) {
@@ -686,11 +719,23 @@ class ResponseAPI(
             val type = output["type"]?.jsonPrimitive?.content ?: error("output type not found")
             when (type) {
                 "reasoning" -> {
-                    val summary = output["summary"]?.jsonArray ?: error("summary not found")
-                    summary.map { it.jsonObject }.forEach { part ->
-                        val partType = part["type"]?.jsonPrimitive?.content ?: error("part type not found")
-                        when (partType) {
-                            "summary_text" -> {
+                    val content = output["content"]?.jsonArray
+                    if (content != null) {
+                        content.map { it.jsonObject }.forEach { part ->
+                            if (part["type"]?.jsonPrimitive?.content == "reasoning_text") {
+                                val text = part["text"]?.jsonPrimitive?.content ?: error("text not found")
+                                parts.add(
+                                    UIMessagePart.Reasoning(
+                                        reasoning = text,
+                                        createdAt = Clock.System.now(),
+                                        finishedAt = Clock.System.now()
+                                    )
+                                )
+                            }
+                        }
+                    } else {
+                        output["summary"]?.jsonArray?.map { it.jsonObject }?.forEach { part ->
+                            if (part["type"]?.jsonPrimitive?.content == "summary_text") {
                                 val text = part["text"]?.jsonPrimitive?.content ?: error("text not found")
                                 parts.add(
                                     UIMessagePart.Reasoning(

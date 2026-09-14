@@ -74,3 +74,7 @@ class VoiceCallRuntimePromptTest {
         )
     }
 }
+
+private fun UIMessage.withVoiceCallRuntimeEventForRequest(
+    state: VoiceCallRuntimeState,
+): UIMessage = withVoiceCallRuntimeInstructionForRequest(state, includeConnectionEvent = true)

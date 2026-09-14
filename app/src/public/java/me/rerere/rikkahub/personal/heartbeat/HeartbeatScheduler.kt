@@ -23,26 +23,16 @@ object HeartbeatScheduler {
             cancel(context)
             return
         }
-        val now = System.currentTimeMillis()
         configs.forEach { config ->
             val store = HeartbeatConfigStore(context, config.assistantId)
             val triggerAt = store.readNextTriggerAt()
             store.close()
             val autonomousWakeAt = HeartbeatScheduleStore(context)
                 .nextWakeAtMillis(config.assistantId!!)
-            val storedAutonomousTrigger = autonomousWakeAt != null && triggerAt == autonomousWakeAt
             val autonomousTriggerEarlier = autonomousWakeAt != null &&
-                (triggerAt == null || autonomousWakeAt < triggerAt)
-            val triggerTooSoon = triggerAt != null &&
-                !storedAutonomousTrigger &&
-                triggerAt < now + config.minIntervalMinutes * 60_000L
-            if (
-                triggerAt == null ||
-                triggerAt <= now ||
-                storedAutonomousTrigger ||
-                autonomousTriggerEarlier ||
-                triggerTooSoon
-            ) {
+                triggerAt?.let { autonomousWakeAt < it } == true
+            // Reopening the app must not postpone an already scheduled heartbeat.
+            if (triggerAt == null || autonomousTriggerEarlier) {
                 scheduleNext(context, config)
             }
         }

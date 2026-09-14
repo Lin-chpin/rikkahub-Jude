@@ -119,6 +119,7 @@ class UpdateChecker(private val client: OkHttpClient) {
                                 "User-Agent",
                                 "RikkaHub ${BuildConfig.VERSION_NAME} #${BuildConfig.VERSION_CODE}"
                             )
+                            .addHeader("Cache-Control", "no-cache")
                             .build()
                     ).await()
                     response.use {

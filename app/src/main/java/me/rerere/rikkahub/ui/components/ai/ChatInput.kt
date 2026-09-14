@@ -106,6 +106,7 @@ import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.getAssistantById
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.datastore.getCurrentChatModel
+import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.datastore.getQuickMessagesOfAssistant
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
@@ -433,6 +434,7 @@ fun ChatInput(
                             val enableSearchMsg = stringResource(R.string.web_search_enabled)
                             val disableSearchMsg = stringResource(R.string.web_search_disabled)
                             val chatModel = settings.getCurrentChatModel()
+                            val chatProvider = chatModel?.findProvider(settings.providers)
                             SearchPickerButton(
                                 enableSearch = enableSearch,
                                 settings = settings,
@@ -450,6 +452,7 @@ fun ChatInput(
                                 },
                                 onUpdateSearchService = onUpdateSearchService,
                                 model = chatModel,
+                                provider = chatProvider,
                             )
 
                             // Reasoning
