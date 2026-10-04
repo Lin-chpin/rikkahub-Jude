@@ -60,6 +60,7 @@ class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
         val baseUrl = providerSetting.baseUrl.trim().trimEnd('/')
         val model = providerSetting.model.trim()
         val voiceId = providerSetting.voiceId.trim()
+        val timingId = System.nanoTime().toString(16)
         require(apiKey.isNotEmpty()) { "MiniMax API key is required" }
         require(baseUrl.isNotEmpty()) { "MiniMax base URL is required" }
         require(model.isNotEmpty()) { "MiniMax model is required" }
@@ -94,7 +95,7 @@ class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
             })
         }
 
-        Log.i(TAG, "generateSpeech: $requestBody")
+        Log.i(TAG, "tts_timing trace=$timingId stage=request_started model=$model chars=${request.text.length}")
 
         val httpRequest = Request.Builder()
             .url("$baseUrl/t2a_v2")
@@ -104,16 +105,21 @@ class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
             .build()
 
         var hasEmittedAudio = false
+        var firstAudioReceived = false
 
         httpClient.sseFlow(httpRequest).collect {
             when (it) {
-                is SseEvent.Open -> Log.i(TAG, "SSE connection opened")
+                is SseEvent.Open -> Log.i(TAG, "tts_timing trace=$timingId stage=sse_open")
                 is SseEvent.Event -> {
                     try {
                         val data = json.decodeFromString<MiniMaxResponse>(it.data)
 
                         // Convert hex string to bytes
                         val audioBytes = hexStringToBytes(data.data.audio)
+                        if (!firstAudioReceived && audioBytes.isNotEmpty()) {
+                            firstAudioReceived = true
+                            Log.i(TAG, "tts_timing trace=$timingId stage=first_audio_bytes_received bytes=${audioBytes.size}")
+                        }
 
                         emit(
                             AudioChunk(
@@ -126,7 +132,8 @@ class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
                                     "model" to model,
                                     "voice" to voiceId,
                                     "status" to data.data.status.toString(),
-                                    "ced" to data.data.ced
+                                    "ced" to data.data.ced,
+                                    "timing_id" to timingId,
                                 )
                             )
                         )

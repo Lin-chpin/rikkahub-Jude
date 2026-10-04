@@ -2,7 +2,11 @@ package me.rerere.rikkahub.data.ai
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
@@ -36,7 +40,9 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.handleMessageChunk
 import me.rerere.ai.ui.isEmptyUIMessage
-import me.rerere.ai.ui.limitContext
+import me.rerere.ai.ui.limitContextBySteps
+import me.rerere.ai.util.GenerationTimingTrace
+import me.rerere.ai.util.textCharacterCount
 import me.rerere.rikkahub.data.ai.transformers.InputMessageTransformer
 import me.rerere.rikkahub.data.ai.transformers.MessageTransformer
 import me.rerere.rikkahub.data.ai.transformers.OutputMessageTransformer
@@ -52,12 +58,17 @@ import me.rerere.rikkahub.data.model.AssistantMemory
 import me.rerere.rikkahub.data.model.MemoryScope
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
+import me.rerere.rikkahub.data.voice.CHAT_VOICE_REPLY_TOOL_NAME
+import me.rerere.rikkahub.data.voice.chatVoiceReplyError
 import me.rerere.rikkahub.utils.applyPlaceholders
+import java.io.IOException
 import java.util.Locale
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
 private const val TAG = "GenerationHandler"
+private const val MAX_PROVIDER_STREAM_RETRIES = 3
+private const val INITIAL_PROVIDER_STREAM_RETRY_DELAY_MS = 1_000L
 
 @Serializable
 sealed interface GenerationChunk {
@@ -105,6 +116,8 @@ class GenerationHandler(
         var messages: List<UIMessage> = messages
 
         for (stepIndex in 0 until maxSteps) {
+            val timing = GenerationTimingTrace("generation:$conversationId:$stepIndex")
+            timing.mark("step_started")
             Log.i(TAG, "streamText: start step #$stepIndex (${model.id})")
 
             val toolsInternal = buildList {
@@ -141,6 +154,8 @@ class GenerationHandler(
                     settings = settings,
                     messages = messages,
                     onUpdateMessages = {
+                        timing.markOnce("output_transforms_started")
+                        timing.firstText("text_before_transforms", it.lastOrNull())
                         messages = it.transforms(
                             transformers = outputTransformers,
                             context = context,
@@ -148,17 +163,19 @@ class GenerationHandler(
                             assistant = assistant,
                             settings = settings
                         )
-                        emit(
-                            GenerationChunk.Messages(
-                                messages.visualTransforms(
-                                    transformers = outputTransformers,
-                                    context = context,
-                                    model = model,
-                                    assistant = assistant,
-                                    settings = settings
-                                )
-                            )
+                        timing.firstText("text_after_transforms", messages.lastOrNull())
+                        timing.markOnce("output_transforms_finished")
+                        val visualMessages = messages.visualTransforms(
+                            transformers = outputTransformers,
+                            context = context,
+                            model = model,
+                            assistant = assistant,
+                            settings = settings,
                         )
+                        timing.firstText("text_after_visual_transforms", visualMessages.lastOrNull())
+                        timing.markOnce("visual_transforms_finished")
+                        emit(GenerationChunk.Messages(visualMessages))
+                        timing.firstText("text_event_emitted", visualMessages.lastOrNull())
                     },
                     transformers = inputTransformers,
                     model = model,
@@ -179,7 +196,9 @@ class GenerationHandler(
                     maxTokensOverride = maxTokensOverride,
                     conversationId = conversationId,
                     sessionIdOverride = sessionIdOverride,
+                    timing = timing,
                 )
+                timing.mark("generation_finish_transforms_started")
                 messages = messages.visualTransforms(
                     transformers = outputTransformers,
                     context = context,
@@ -198,7 +217,13 @@ class GenerationHandler(
                     finishedAt = Clock.System.now()
                         .toLocalDateTime(TimeZone.currentSystemDefault())
                 )
+                timing.mark("generation_finish_transforms_finished")
                 emit(GenerationChunk.Messages(messages))
+                timing.mark(
+                    "final_text_event_emitted",
+                    messages.lastOrNull()?.id?.toString(),
+                    messages.lastOrNull()?.textCharacterCount(),
+                )
 
                 val tools = messages.last().getTools().filter { !it.isExecuted }
                 if (tools.isEmpty()) {
@@ -300,7 +325,11 @@ class GenerationHandler(
                             }.getOrElse {
                                 error("Invalid tool arguments JSON for ${tool.toolName}: ${it.message}")
                             }
-                            Log.i(TAG, "generateText: executing tool ${toolDef.name} with args: $args")
+                            if (toolDef.name == CHAT_VOICE_REPLY_TOOL_NAME) {
+                                Log.i(TAG, "generateText: executing voice tool")
+                            } else {
+                                Log.i(TAG, "generateText: executing tool ${toolDef.name} with args: $args")
+                            }
                             val result = toolDef.execute(args)
                             executedTools += tool.copy(output = result)
                         }.onFailure {
@@ -351,6 +380,9 @@ class GenerationHandler(
                     )
                 )
             )
+            if (executedTools.all {
+                    it.toolName == CHAT_VOICE_REPLY_TOOL_NAME && it.chatVoiceReplyError() == null
+                }) break
         }
 
     }.flowOn(Dispatchers.IO)
@@ -379,7 +411,14 @@ class GenerationHandler(
         maxTokensOverride: Int? = null,
         conversationId: Uuid? = null,
         sessionIdOverride: String? = null,
+        timing: GenerationTimingTrace,
     ) {
+        val contextMessages = if (assistant.contextMessageLimitEnabled) {
+            val limit = assistant.contextMessageSize.coerceIn(1, 512)
+            messages.limitContextBySteps(limit)
+        } else {
+            messages
+        }
         val internalMessages = buildList {
             val effectiveSystemPrompt =
                 if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
@@ -417,7 +456,7 @@ class GenerationHandler(
                 // 工具prompt
                 tools.forEach { tool ->
                     appendLine()
-                    append(tool.systemPrompt(model, messages))
+                    append(tool.systemPrompt(model, contextMessages))
                 }
                 if (!runtimeStateSystemPrompt.isNullOrBlank()) {
                     appendLine()
@@ -440,11 +479,6 @@ class GenerationHandler(
                     listOf(UIMessagePart.Text(system))
                 }
                 add(UIMessage(role = MessageRole.SYSTEM, parts = parts))
-            }
-            val contextMessages = if (!conversationContextSummary.isNullOrBlank()) {
-                messages
-            } else {
-                messages.limitContext(assistant.contextMessageSize)
             }
             val requestContextMessages = if (
                 transientLastContextMessage != null && contextMessages.isNotEmpty()
@@ -492,6 +526,7 @@ class GenerationHandler(
             }
         )
         if (stream) {
+            timing.mark("model_request_prepared")
             aiLoggingManager.addLog(
                 AILogging.Generation(
                     params = params,
@@ -501,26 +536,76 @@ class GenerationHandler(
                 )
             )
             val responseBeforeStream = responseMessages
+            val responseBaseMessages = if (responseBeforeStream.lastOrNull()?.role == MessageRole.ASSISTANT) {
+                responseBeforeStream
+            } else {
+                responseBeforeStream + UIMessage(
+                    role = MessageRole.ASSISTANT,
+                    parts = emptyList(),
+                    modelId = model.id,
+                )
+            }
             var sawAssistantOutput = false
-            providerImpl.streamText(
-                providerSetting = provider,
-                messages = internalMessages,
-                params = params
-            ).collect {
-                if (it.hasAssistantOutput()) {
-                    sawAssistantOutput = true
-                }
-                responseMessages = responseMessages.handleMessageChunk(chunk = it, model = model)
-                it.usage?.let { usage ->
-                    responseMessages = responseMessages.mapIndexed { index, message ->
-                        if (index == responseMessages.lastIndex) {
-                            message.copy(usage = message.usage.merge(usage))
-                        } else {
-                            message
+            var retryCount = 0
+            while (true) {
+                var attemptMessages = responseBaseMessages
+                var attemptSawAssistantOutput = false
+                try {
+                    providerImpl.streamText(
+                        providerSetting = provider,
+                        messages = internalMessages,
+                        params = params
+                    ).collect {
+                        timing.markOnce("provider_first_chunk_consumed", it.id)
+                        timing.firstText(
+                            "provider_text_consumed",
+                            it.id,
+                            it.choices.sumOf { choice ->
+                                (choice.delta ?: choice.message)?.textCharacterCount() ?: 0
+                            },
+                        )
+                        if (it.hasAssistantOutput()) {
+                            attemptSawAssistantOutput = true
                         }
+                        attemptMessages = attemptMessages.handleMessageChunk(chunk = it, model = model)
+                        it.usage?.let { usage ->
+                            attemptMessages = attemptMessages.mapIndexed { index, message ->
+                                if (index == attemptMessages.lastIndex) {
+                                    message.copy(usage = message.usage.merge(usage))
+                                } else {
+                                    message
+                                }
+                            }
+                        }
+                        onUpdateMessages(attemptMessages)
+                        timing.markOnce("first_update_callback_returned")
                     }
+                    timing.mark(
+                        "provider_stream_collected",
+                        attemptMessages.lastOrNull()?.id?.toString(),
+                        attemptMessages.lastOrNull()?.textCharacterCount(),
+                    )
+                    responseMessages = attemptMessages
+                    sawAssistantOutput = attemptSawAssistantOutput
+                    break
+                } catch (error: Throwable) {
+                    if (error is CancellationException) {
+                        throw error
+                    }
+                    currentCoroutineContext().ensureActive()
+                    if (!isRetryableProviderStreamFailure(error, retryCount)) {
+                        throw error
+                    }
+                    retryCount++
+                    val retryDelay = providerStreamRetryDelayMillis(retryCount - 1)
+                    Log.w(
+                        TAG,
+                        "Provider stream failed; retrying in ${retryDelay}ms " +
+                            "($retryCount/$MAX_PROVIDER_STREAM_RETRIES)",
+                        error,
+                    )
+                    delay(retryDelay)
                 }
-                onUpdateMessages(responseMessages)
             }
 
             if (!sawAssistantOutput && !responseMessages.hasAssistantOutputAfter(responseBeforeStream)) {
@@ -692,3 +777,9 @@ class GenerationHandler(
         }
     }.flowOn(Dispatchers.IO)
 }
+
+internal fun isRetryableProviderStreamFailure(error: Throwable, retryCount: Int): Boolean =
+    error is IOException && retryCount < MAX_PROVIDER_STREAM_RETRIES
+
+internal fun providerStreamRetryDelayMillis(retryCount: Int): Long =
+    INITIAL_PROVIDER_STREAM_RETRY_DELAY_MS shl retryCount

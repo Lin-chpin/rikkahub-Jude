@@ -64,7 +64,7 @@
   <string name="assistant_page_clone">複製</string>
   <string name="assistant_page_confirm">確認</string>
   <string name="assistant_page_context_message_count">コンテキストメッセージサイズ: %d</string>
-  <string name="assistant_page_context_message_desc">モデルに送信される履歴メッセージの数を制御します。この数を超えるメッセージは無視され、最新のN個のメッセージのみが保持されます。これによりトークンを節約できます</string>
+  <string name="assistant_page_context_message_desc">有効にすると、上限を超えた際に古いユーザーターンを段階的に削り、リクエストの先頭を安定させます。制限するのはメッセージ数で、トークン数ではありません。無効時は利用可能な履歴をすべて送信します。</string>
   <string name="assistant_page_context_message_size">コンテキストメッセージサイズ</string>
   <string name="assistant_page_context_message_unlimited">無制限のコンテキストメッセージ</string>
   <string name="assistant_page_creative">創造的</string>

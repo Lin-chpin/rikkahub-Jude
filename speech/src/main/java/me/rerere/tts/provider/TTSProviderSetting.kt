@@ -281,3 +281,14 @@ fun TTSProviderSetting.isElevenLabsV3(): Boolean {
     return model.trim().equals("eleven_v3", ignoreCase = true) ||
         model.trim().equals("eleven_multilingual_v3", ignoreCase = true)
 }
+
+fun TTSProviderSetting.isElevenLabsV4(): Boolean =
+    this is TTSProviderSetting.ElevenLabs && model.trim().equals("eleven_v4", ignoreCase = true)
+
+fun TTSProviderSetting.isElevenLabsV4Turbo(): Boolean =
+    this is TTSProviderSetting.ElevenLabs && model.trim().equals("eleven_v4_turbo", ignoreCase = true)
+
+fun TTSProviderSetting.isElevenLabsV4Family(): Boolean = isElevenLabsV4() || isElevenLabsV4Turbo()
+
+fun TTSProviderSetting.supportsElevenLabsAudioTags(): Boolean =
+    isElevenLabsV3() || isElevenLabsV4Family()

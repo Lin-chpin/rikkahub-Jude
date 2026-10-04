@@ -13,6 +13,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
@@ -20,9 +21,11 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import me.rerere.tts.model.PlaybackState
 import me.rerere.tts.model.PlaybackStatus
+import me.rerere.tts.model.AudioFormat
 import me.rerere.tts.model.TTSResponse
 import me.rerere.tts.provider.TTSManager
 import me.rerere.tts.provider.TTSProviderSetting
+import me.rerere.tts.provider.isElevenLabsV4Turbo
 import java.util.UUID
 import java.io.ByteArrayOutputStream
 
@@ -176,6 +179,57 @@ class TtsController(
 
         if (workerJob?.isActive != true) startWorker()
         prefetchFrom((_currentChunk.value).coerceAtLeast(0))
+    }
+
+    fun speakRealtimeDialogue(
+        text: Flow<String>,
+        onAudioReady: suspend (TTSResponse) -> Unit,
+    ) {
+        val provider = currentProvider as? TTSProviderSetting.ElevenLabs
+        if (provider?.isElevenLabsV4Turbo() != true) {
+            _error.update { "Realtime dialogue requires ElevenLabs v4 Turbo" }
+            _playbackState.update { it.copy(status = PlaybackStatus.Error, errorMessage = _error.value) }
+            return
+        }
+
+        internalReset()
+        _playbackState.update { it.copy(status = PlaybackStatus.Buffering) }
+        workerJob = scope.launch {
+            _isSpeaking.update { true }
+            val captured = ByteArrayOutputStream()
+            var format = AudioFormat.MP3
+            var sampleRate: Int? = 44_100
+            try {
+                val audioFlow = ttsManager.generateRealtimeDialogue(provider, text).onEach { chunk ->
+                    format = chunk.format
+                    sampleRate = chunk.sampleRate ?: sampleRate
+                    captured.write(chunk.data)
+                }
+                audio.play(audioFlow)
+                onAudioReady(
+                    TTSResponse(
+                        audioData = captured.toByteArray(),
+                        format = format,
+                        sampleRate = sampleRate,
+                    ),
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Log.e(TAG, "Realtime dialogue playback error", error)
+                _error.update { error.message ?: "Realtime dialogue playback error" }
+                _playbackState.update {
+                    it.copy(status = PlaybackStatus.Error, errorMessage = _error.value)
+                }
+            } finally {
+                if (isActive) {
+                    _isSpeaking.update { false }
+                    if (_playbackState.value.status != PlaybackStatus.Error) {
+                        _playbackState.update { it.copy(status = PlaybackStatus.Ended) }
+                    }
+                }
+            }
+        }
     }
 
     private fun internalReset() {

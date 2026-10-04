@@ -6,9 +6,11 @@ import android.net.Uri
 import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedWriter
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.OutputStreamWriter
 import java.nio.charset.StandardCharsets
 import java.net.URLConnection
 import java.util.UUID
@@ -41,6 +43,18 @@ private data class StagedBackup(
 )
 
 private val RESTORABLE_FOLDERS = setOf("upload", "images", "skills", "fonts")
+
+// Keep this list aligned with the target app's LocalToolOption values.
+private val SUPPORTED_LOCAL_TOOL_TYPES = setOf(
+    "javascript_engine",
+    "time_info",
+    "clipboard",
+    "tts",
+    "ask_user",
+    "usage_stats",
+    "weather",
+    "voice_call",
+)
 
 private fun restorableRelativePath(path: String): String? {
     val normalized = path.replace('\\', '/').trimStart('/')
@@ -225,17 +239,19 @@ object RikkaHubTransferWriter {
                 val nodeReadResult = if (nodeTable != null) {
                     readNodes(database, nodeTable, warnings)
                 } else {
-                    NodeReadResult(emptyMap(), 0, 0)
+                    NodeReadResult(0, 0)
                 }
-                val conversations = readConversations(
+                val conversationsFile = File(staging, "conversations.json")
+                val conversationCount = writeConversations(
                     database = database,
                     table = conversationTable,
-                    nodesByConversation = nodeReadResult.nodesByConversation,
+                    nodeTable = nodeTable,
+                    output = conversationsFile,
                     warnings = warnings,
                     errors = errors,
                     attachments = attachments,
                 )
-                require(conversations.isNotEmpty()) {
+                require(conversationCount > 0) {
                     "数据库中读取到 $sourceConversationCount 个对话，但没有可转换的聊天消息"
                 }
 
@@ -243,7 +259,8 @@ object RikkaHubTransferWriter {
                     output = output,
                     databaseVersion = database.version,
                     tables = tables,
-                    conversations = conversations,
+                    conversationsFile = conversationsFile,
+                    conversationCount = conversationCount,
                     warnings = warnings,
                     errors = errors,
                     attachments = attachments.attachments.values.toList(),
@@ -253,7 +270,7 @@ object RikkaHubTransferWriter {
                 val distinctWarnings = warnings.distinct()
                 val distinctErrors = errors.distinct()
                 ConversionSummary(
-                    conversationCount = conversations.size,
+                    conversationCount = conversationCount,
                     warningCount = distinctWarnings.size,
                     errorCount = distinctErrors.size,
                     sourceConversationCount = sourceConversationCount,
@@ -268,7 +285,7 @@ object RikkaHubTransferWriter {
                         sourceConversationCount = sourceConversationCount,
                         sourceNodeCount = nodeReadResult.nodeCount,
                         sourceMessageCount = nodeReadResult.messageCount,
-                        convertedConversationCount = conversations.size,
+                        convertedConversationCount = conversationCount,
                         restoredFileCount = restoredFiles.size,
                         settingsFound = stagedBackup.settingsFile != null,
                         warnings = distinctWarnings,
@@ -289,7 +306,6 @@ object RikkaHubTransferWriter {
     )
 
     private data class NodeReadResult(
-        val nodesByConversation: Map<String, List<SourceNode>>,
         val nodeCount: Int,
         val messageCount: Int,
     )
@@ -312,81 +328,123 @@ object RikkaHubTransferWriter {
     ): NodeReadResult {
         val columns = readColumns(database, table)
         val conversationIdColumn = columns.firstOrNull { it.equals("conversation_id", true) }
-            ?: return NodeReadResult(emptyMap(), 0, 0)
+            ?: return NodeReadResult(0, 0)
         val messagesColumn = columns.firstOrNull { it.equals("messages", true) }
-            ?: return NodeReadResult(emptyMap(), 0, 0)
-        val idColumn = columns.firstOrNull { it.equals("id", true) } ?: "rowid"
-        val indexColumn = columns.firstOrNull { it.equals("node_index", true) }
-        val selectIndexColumn = columns.firstOrNull { it.equals("select_index", true) }
-        val result = linkedMapOf<String, MutableList<SourceNode>>()
+            ?: return NodeReadResult(0, 0)
+        var nodeCount = 0
         var messageCount = 0
         database.query(table, null, null, null, null, null, null).use { cursor ->
             while (cursor.moveToNext()) {
-                val conversationId = cursor.string(conversationIdColumn) ?: continue
+                cursor.string(conversationIdColumn) ?: continue
                 val messages = cursor.string(messagesColumn) ?: continue
+                nodeCount++
                 messageCount += runCatching { JSONArray(messages).length() }.getOrDefault(0)
-                val node = SourceNode(
-                    id = cursor.string(idColumn) ?: "row-${cursor.position}",
-                    index = cursor.int(indexColumn) ?: cursor.position,
-                    messages = messages,
-                    selectIndex = cursor.int(selectIndexColumn) ?: 0,
-                )
-                result.getOrPut(conversationId) { mutableListOf() } += node
             }
         }
-        if (result.isEmpty()) warnings += "message_node 表存在，但没有读取到可用消息节点"
-        return NodeReadResult(
-            nodesByConversation = result.mapValues { (_, nodes) -> nodes.sortedBy { it.index } },
-            nodeCount = result.values.sumOf { it.size },
-            messageCount = messageCount,
-        )
+        if (nodeCount == 0) warnings += "message_node 表存在，但没有读取到可用消息节点"
+        return NodeReadResult(nodeCount, messageCount)
     }
 
-    private fun readConversations(
+    private fun readNodesForConversation(
         database: SQLiteDatabase,
         table: String,
-        nodesByConversation: Map<String, List<SourceNode>>,
+        conversationId: String,
+    ): List<SourceNode> {
+        val columns = readColumns(database, table)
+        val conversationIdColumn = columns.firstOrNull { it.equals("conversation_id", true) }
+            ?: return emptyList()
+        val messagesColumn = columns.firstOrNull { it.equals("messages", true) }
+            ?: return emptyList()
+        val idColumn = columns.firstOrNull { it.equals("id", true) } ?: "rowid"
+        val indexColumn = columns.firstOrNull { it.equals("node_index", true) }
+        val selectIndexColumn = columns.firstOrNull { it.equals("select_index", true) }
+        return buildList {
+            database.query(
+                table,
+                null,
+                "$conversationIdColumn = ?",
+                arrayOf(conversationId),
+                null,
+                null,
+                null,
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val messages = cursor.string(messagesColumn) ?: continue
+                    add(
+                        SourceNode(
+                            id = cursor.string(idColumn) ?: "row-${cursor.position}",
+                            index = cursor.int(indexColumn) ?: cursor.position,
+                            messages = messages,
+                            selectIndex = cursor.int(selectIndexColumn) ?: 0,
+                        )
+                    )
+                }
+            }
+        }.sortedBy { it.index }
+    }
+
+    private fun writeConversations(
+        database: SQLiteDatabase,
+        table: String,
+        nodeTable: String?,
+        output: File,
         warnings: MutableList<String>,
         errors: MutableList<String>,
         attachments: AttachmentCollector,
-    ): List<JSONObject> {
-        val result = mutableListOf<JSONObject>()
-        database.query(table, null, null, null, null, null, null).use { cursor ->
-            while (cursor.moveToNext()) {
-                val sourceId = cursor.string("id") ?: run {
-                    errors += "第 ${cursor.position + 1} 条聊天记录缺少 id"
-                    continue
-                }
-                val nodes = nodesByConversation[sourceId].orEmpty().mapNotNull { node ->
-                    normalizeNode(node, sourceId, warnings, errors, attachments)
-                }.toMutableList()
-                if (nodes.isEmpty()) {
-                    val legacyNodes = cursor.string("nodes")
-                    nodes += parseLegacyNodes(legacyNodes, sourceId, warnings, errors, attachments)
-                }
-                if (nodes.isEmpty()) {
-                    warnings += "聊天记录 $sourceId 没有可读取的消息"
-                    continue
-                }
+    ): Int {
+        var convertedConversationCount = 0
+        var firstConversation = true
+        BufferedWriter(
+            OutputStreamWriter(FileOutputStream(output), StandardCharsets.UTF_8)
+        ).use { writer ->
+            writer.write("[")
+            database.query(table, null, null, null, null, null, null).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val sourceId = cursor.string("id") ?: run {
+                        errors += "第 ${cursor.position + 1} 条聊天记录缺少 id"
+                        continue
+                    }
+                    // ponytail: 单个会话仍在内存中组装；若单会话也超过堆上限，再把节点改为逐个写出。
+                    val nodes = nodeTable?.let { nodeTableName ->
+                        readNodesForConversation(database, nodeTableName, sourceId)
+                            .mapNotNull { node ->
+                                normalizeNode(node, sourceId, warnings, errors, attachments)
+                            }
+                            .toMutableList()
+                    } ?: mutableListOf()
+                    if (nodes.isEmpty()) {
+                        val legacyNodes = cursor.string("nodes")
+                        nodes += parseLegacyNodes(legacyNodes, sourceId, warnings, errors, attachments)
+                    }
+                    if (nodes.isEmpty()) {
+                        warnings += "聊天记录 $sourceId 没有可读取的消息"
+                        continue
+                    }
 
-                val now = System.currentTimeMillis()
-                val createAt = normalizeTimestamp(cursor.long("create_at") ?: now)
-                val updateAt = normalizeTimestamp(cursor.long("update_at") ?: createAt)
-                result += JSONObject().apply {
-                    put("id", stableUuid("conversation:$sourceId"))
-                    put("source_id", sourceId)
-                    cursor.string("assistant_id")?.takeIf(::isUuid)?.let { put("assistant_id", it) }
-                    put("title", cursor.string("title")?.takeIf { it.isNotBlank() } ?: sourceId)
-                    put("create_at", createAt)
-                    put("update_at", updateAt)
-                    put("custom_system_prompt", cursor.string("custom_system_prompt"))
-                    put("chat_suggestions", parseStringArray(cursor.string("suggestions")))
-                    put("is_pinned", cursor.int("is_pinned") == 1)
-                    put("message_nodes", JSONArray(nodes))
+                    val now = System.currentTimeMillis()
+                    val createAt = normalizeTimestamp(cursor.long("create_at") ?: now)
+                    val updateAt = normalizeTimestamp(cursor.long("update_at") ?: createAt)
+                    val conversation = JSONObject().apply {
+                        put("id", stableUuid("conversation:$sourceId"))
+                        put("source_id", sourceId)
+                        cursor.string("assistant_id")?.takeIf(::isUuid)?.let { put("assistant_id", it) }
+                        put("title", cursor.string("title")?.takeIf { it.isNotBlank() } ?: sourceId)
+                        put("create_at", createAt)
+                        put("update_at", updateAt)
+                        put("custom_system_prompt", cursor.string("custom_system_prompt"))
+                        put("chat_suggestions", parseStringArray(cursor.string("suggestions")))
+                        put("is_pinned", cursor.int("is_pinned") == 1)
+                        put("message_nodes", JSONArray(nodes))
+                    }
+                    if (!firstConversation) writer.write(",")
+                    writer.write(conversation.toString())
+                    firstConversation = false
+                    convertedConversationCount++
                 }
             }
+            writer.write("]")
         }
-        return result
+        return convertedConversationCount
     }
 
     private fun normalizeNode(
@@ -506,14 +564,16 @@ object RikkaHubTransferWriter {
         output: File,
         databaseVersion: Int,
         tables: List<String>,
-        conversations: List<JSONObject>,
-        warnings: List<String>,
+        conversationsFile: File,
+        conversationCount: Int,
+        warnings: MutableList<String>,
         errors: List<String>,
         attachments: List<AttachmentSource>,
         settingsFile: File?,
         restoredFiles: List<StagedFile>,
     ) {
         output.parentFile?.mkdirs()
+        val sanitizedSettings = settingsFile?.let { sanitizeSettings(it, warnings) }
         ZipOutputStream(FileOutputStream(output)).use { zip ->
             val manifest = JSONObject().apply {
                 put("format", FORMAT)
@@ -522,7 +582,7 @@ object RikkaHubTransferWriter {
                 put("source_version", JSONObject.NULL)
                 put("complete_restore", settingsFile != null)
                 put("source_database_version", databaseVersion)
-                put("conversation_count", conversations.size)
+                put("conversation_count", conversationCount)
                 put("attachment_count", attachments.size)
                 put("file_count", restoredFiles.size)
                 put("attachments", JSONArray(attachments.map { attachment ->
@@ -551,8 +611,10 @@ object RikkaHubTransferWriter {
                 put("warnings", JSONArray(warnings.distinct()))
             }
             putEntry(zip, "manifest.json", manifest.toString(2))
-            putEntry(zip, "conversations.json", JSONArray(conversations).toString())
-            settingsFile?.let { putFileEntry(zip, "settings.json", it) }
+            putFileEntry(zip, "conversations.json", conversationsFile)
+            sanitizedSettings?.let {
+                putEntry(zip, "settings.json", it)
+            }
             restoredFiles.forEach { file ->
                 putFileEntry(
                     zip,
@@ -619,6 +681,34 @@ object RikkaHubTransferWriter {
         zip.putNextEntry(ZipEntry(name))
         FileInputStream(file).use { input -> input.copyTo(zip) }
         zip.closeEntry()
+    }
+
+    private fun sanitizeSettings(settingsFile: File, warnings: MutableList<String>): String {
+        val settings = JSONObject(settingsFile.readText(StandardCharsets.UTF_8))
+        val assistants = settings.optJSONArray("assistants") ?: return settings.toString()
+        val skippedTypes = linkedSetOf<String>()
+        var skippedCount = 0
+
+        for (assistantIndex in 0 until assistants.length()) {
+            val assistant = assistants.optJSONObject(assistantIndex) ?: continue
+            val localTools = assistant.optJSONArray("localTools") ?: continue
+            val filteredTools = JSONArray()
+            for (toolIndex in 0 until localTools.length()) {
+                val type = localTools.optJSONObject(toolIndex)?.optString("type", "").orEmpty()
+                if (type in SUPPORTED_LOCAL_TOOL_TYPES) {
+                    filteredTools.put(localTools.get(toolIndex))
+                } else {
+                    skippedCount++
+                    skippedTypes += type.ifBlank { "未知工具" }
+                }
+            }
+            assistant.put("localTools", filteredTools)
+        }
+
+        if (skippedCount > 0) {
+            warnings += "已跳过 $skippedCount 个目标 App 不支持的本地工具：${skippedTypes.joinToString(", ")}"
+        }
+        return settings.toString()
     }
 
     private fun extractDatabase(input: File, staging: File): StagedBackup {

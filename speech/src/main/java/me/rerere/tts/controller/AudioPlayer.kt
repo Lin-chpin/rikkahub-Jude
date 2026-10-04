@@ -76,15 +76,17 @@ class AudioPlayer(context: Context) {
 
     @OptIn(UnstableApi::class)
     suspend fun play(stream: Flow<AudioChunk>) {
-        val dataSourceFactory = DataSource.Factory { FlowDataSource(stream) }
+        val streamTiming = StreamTiming()
+        val dataSourceFactory = DataSource.Factory { FlowDataSource(stream, streamTiming) }
         val mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory)
             .createMediaSource(MediaItem.fromUri(Uri.EMPTY))
-        playMediaSource(mediaSource, null)
+        playMediaSource(mediaSource, null, streamTiming)
     }
 
     private suspend fun playMediaSource(
         mediaSource: androidx.media3.exoplayer.source.MediaSource,
         durationMs: Long?,
+        streamTiming: StreamTiming? = null,
     ) = suspendCancellableCoroutine<Unit> { cont ->
         Log.i(TAG, "Preparing ExoPlayer media source: durationMs=" + durationMs)
         _playbackState.update {
@@ -113,6 +115,7 @@ class AudioPlayer(context: Context) {
                             )
                         }
                         Log.i(TAG, "Audio playback ready: isPlaying=" + isPlaying + ", volume=" + player.volume + ", durationMs=" + duration)
+                        streamTiming?.playerReady()
                         if (isPlaying) startPositionUpdates() else stopPositionUpdates()
                     }
                     Player.STATE_ENDED -> {
@@ -166,6 +169,7 @@ class AudioPlayer(context: Context) {
 
     private class FlowDataSource(
         private val audioFlow: Flow<AudioChunk>,
+        private val streamTiming: StreamTiming,
     ) : DataSource {
         private var input: java.io.PipedInputStream? = null
         private var output: java.io.PipedOutputStream? = null
@@ -175,6 +179,7 @@ class AudioPlayer(context: Context) {
         override fun addTransferListener(transferListener: TransferListener) = Unit
 
         override fun open(dataSpec: DataSpec): Long {
+            streamTiming.opened()
             val pipeInput = java.io.PipedInputStream(64 * 1024)
             val pipeOutput = java.io.PipedOutputStream(pipeInput)
             input = pipeInput
@@ -182,6 +187,7 @@ class AudioPlayer(context: Context) {
             producerJob = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
                 try {
                     audioFlow.collect { chunk ->
+                        streamTiming.chunkReceived(chunk)
                         pipeOutput.write(chunk.data)
                         pipeOutput.flush()
                     }
@@ -201,6 +207,7 @@ class AudioPlayer(context: Context) {
                 producerError?.let { throw java.io.IOException("TTS stream failed", it) }
                 return C.RESULT_END_OF_INPUT
             }
+            streamTiming.bytesRead(bytesRead)
             return bytesRead
         }
 
@@ -213,6 +220,44 @@ class AudioPlayer(context: Context) {
             runCatching { input?.close() }
             output = null
             input = null
+        }
+    }
+
+    private class StreamTiming {
+        private var traceId = "unknown"
+        private var openedAtNanos = 0L
+        private var firstChunkLogged = false
+        private var firstReadLogged = false
+        private var playerReadyLogged = false
+
+        @Synchronized
+        fun opened() {
+            if (openedAtNanos == 0L) openedAtNanos = System.nanoTime()
+        }
+
+        @Synchronized
+        fun chunkReceived(chunk: AudioChunk) {
+            if (traceId == "unknown") traceId = chunk.metadata["timing_id"] ?: traceId
+            if (!firstChunkLogged && chunk.data.isNotEmpty() && traceId != "unknown") {
+                firstChunkLogged = true
+                Log.i(TAG, "tts_timing trace=$traceId stage=audio_chunk_to_player bytes=${chunk.data.size}")
+            }
+        }
+
+        @Synchronized
+        fun bytesRead(bytes: Int) {
+            if (!firstReadLogged && bytes > 0 && traceId != "unknown") {
+                firstReadLogged = true
+                Log.i(TAG, "tts_timing trace=$traceId stage=first_audio_bytes_read elapsedSinceStreamOpenMs=${(System.nanoTime() - openedAtNanos) / 1_000_000} bytes=$bytes")
+            }
+        }
+
+        @Synchronized
+        fun playerReady() {
+            if (!playerReadyLogged && traceId != "unknown") {
+                playerReadyLogged = true
+                Log.i(TAG, "tts_timing trace=$traceId stage=player_ready elapsedSinceStreamOpenMs=${(System.nanoTime() - openedAtNanos) / 1_000_000}")
+            }
         }
     }
 

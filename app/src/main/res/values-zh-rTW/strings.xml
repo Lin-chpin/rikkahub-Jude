@@ -64,7 +64,7 @@
   <string name="assistant_page_clone">複製</string>
   <string name="assistant_page_confirm">確定</string>
   <string name="assistant_page_context_message_count">上下文訊息數量: %d</string>
-  <string name="assistant_page_context_message_desc">控制多少條歷史訊息會被作為上下文發送給模型, 超過此數量的訊息會被忽略，只有最近的N條訊息會被保留，可以節省token</string>
+  <string name="assistant_page_context_message_desc">啟用後，超過上限時會分段裁掉較早的完整使用者回合，讓請求前綴更穩定。限制的是訊息數量，不是 token 數；關閉時會傳送所有可用歷史。</string>
   <string name="assistant_page_context_message_size">上下文訊息數量</string>
   <string name="assistant_page_context_message_unlimited">無限上下文訊息</string>
   <string name="assistant_page_creative">創造</string>

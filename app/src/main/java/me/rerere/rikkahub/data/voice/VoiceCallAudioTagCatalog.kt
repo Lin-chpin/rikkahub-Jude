@@ -1,12 +1,13 @@
 package me.rerere.rikkahub.data.voice
 
 import me.rerere.tts.provider.TTSProviderSetting
-import me.rerere.tts.provider.isElevenLabsV3
+import me.rerere.tts.provider.isElevenLabsV4
+import me.rerere.tts.provider.supportsElevenLabsAudioTags
 
 internal const val NO_VOICE_CALL_AUDIO_TAG_ID = "NONE"
 
 /**
- * Provider-neutral vocabulary selected by the second-pass voice director.
+ * Provider-neutral vocabulary used by voice-call audio-tag protocols.
  *
  * The model returns stable IDs only. Provider syntax is applied by
  * [VoiceCallAudioTagFormat], so square or round delimiters never enter the
@@ -80,6 +81,13 @@ internal enum class VoiceCallAudioTagFormat(
         allowsNoTag = false,
         speechSeparator = " ",
     ),
+    ELEVEN_LABS_V4(
+        providerName = "ElevenLabs v4",
+        openingDelimiter = "[",
+        closingDelimiter = "]",
+        allowsNoTag = true,
+        speechSeparator = " ",
+    ),
     MINIMAX_SPEECH_2_8(
         providerName = "MiniMax Speech 2.8",
         openingDelimiter = "(",
@@ -95,7 +103,8 @@ internal enum class VoiceCallAudioTagFormat(
 
 internal fun TTSProviderSetting.voiceCallAudioTagFormatOrNull(): VoiceCallAudioTagFormat? {
     return when {
-        isElevenLabsV3() -> VoiceCallAudioTagFormat.ELEVEN_LABS_V3
+        isElevenLabsV4() -> VoiceCallAudioTagFormat.ELEVEN_LABS_V4
+        supportsElevenLabsAudioTags() -> VoiceCallAudioTagFormat.ELEVEN_LABS_V3
         this is TTSProviderSetting.MiniMax && model.trim().lowercase() in MINIMAX_SPEECH_2_8_MODELS ->
             VoiceCallAudioTagFormat.MINIMAX_SPEECH_2_8
 

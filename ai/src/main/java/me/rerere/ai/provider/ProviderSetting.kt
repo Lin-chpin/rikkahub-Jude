@@ -87,6 +87,7 @@ sealed class ProviderSetting {
         var useResponseApi: Boolean = false,
         var authType: OpenAIAuthType = OpenAIAuthType.API_KEY,
         var codexCredentials: OpenAICodexCredentials? = null,
+        var responsesPath: String = "/responses",
     ) : ProviderSetting() {
         override fun addModel(model: Model): ProviderSetting {
             return copy(models = models + model)

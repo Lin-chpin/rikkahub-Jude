@@ -75,7 +75,7 @@ class ChatVoiceReplyMaterializer(
         try {
             parsedReply.segments.mapIndexedNotNull { index, segment ->
                 index.takeIf { segment.type == ChatVoiceReplySegmentType.VOICE }
-            }.asReversed().forEach { segmentIndex ->
+            }.forEach { segmentIndex ->
                 val audioGroups = audioGenerator.generate(
                     text = parsedReply.segments[segmentIndex].text,
                     provider = provider,
@@ -124,13 +124,6 @@ internal data class ChatVoiceReplyMaterializationTarget(
     val toolMessageId: Uuid,
     val parsedReply: ParsedChatVoiceReply,
     val toolError: ChatVoiceReplyError?,
-    val usedProtocolFallback: Boolean = false,
-)
-
-private data class ChatVoiceReplyCandidate(
-    val message: UIMessage,
-    val parsedReply: ParsedChatVoiceReply,
-    val usedProtocolFallback: Boolean,
 )
 
 internal data class ChatVoiceReplyMaterializationInspection(
@@ -141,10 +134,8 @@ internal data class ChatVoiceReplyMaterializationInspection(
     val latestNewExecutedToolIndex: Int?,
     val latestNewToolMessageId: Uuid?,
     val assistantCandidatesAfterTool: Int,
-    val markerCandidatesAfterTool: Int,
+    val argumentCandidatesAfterTool: Int,
     val parseableCandidatesAfterTool: Int,
-    val fallbackCandidatesAfterTool: Int,
-    val usedProtocolFallback: Boolean,
     val matchedReplyMessageId: Uuid?,
 )
 
@@ -163,14 +154,10 @@ internal fun ChatVoiceReplyMaterializationInspection.toDiagnosticDetails(): Stri
     append(latestNewToolMessageId ?: "none")
     append(" assistantCandidatesAfterTool=")
     append(assistantCandidatesAfterTool)
-    append(" markerCandidatesAfterTool=")
-    append(markerCandidatesAfterTool)
+    append(" argumentCandidatesAfterTool=")
+    append(argumentCandidatesAfterTool)
     append(" parseableCandidatesAfterTool=")
     append(parseableCandidatesAfterTool)
-    append(" fallbackCandidatesAfterTool=")
-    append(fallbackCandidatesAfterTool)
-    append(" usedProtocolFallback=")
-    append(usedProtocolFallback)
     append(" matchedReplyMessageId=")
     append(matchedReplyMessageId ?: "none")
 }
@@ -202,25 +189,8 @@ internal fun inspectChatVoiceReplyMaterialization(
         ?.let { messages.drop(it).asReversed() }
         .orEmpty()
     val assistantCandidates = candidates.filter { it.role == MessageRole.ASSISTANT }
-    val markerCandidates = assistantCandidates.filter { message ->
-        message.chatVoiceReplySourceText().contains("【语音条】")
-    }
-    val candidateMatches = assistantCandidates.mapNotNull(::chatVoiceReplyCandidate)
-    val parsedCandidates = candidateMatches.count { !it.usedProtocolFallback }
-    val fallbackCandidates = candidateMatches.count { it.usedProtocolFallback }
-    val matchedReply = candidateMatches.firstOrNull()
-    val target = matchedReply?.let { candidate ->
-        ChatVoiceReplyMaterializationTarget(
-            replyMessage = candidate.message,
-            toolMessageId = requireNotNull(latestNewExecutedToolEntry).value.id,
-            parsedReply = candidate.parsedReply,
-            toolError = latestNewExecutedToolEntry?.value?.parts
-                ?.filterIsInstance<UIMessagePart.Tool>()
-                ?.lastOrNull { it.toolName == CHAT_VOICE_REPLY_TOOL_NAME }
-                ?.chatVoiceReplyError(),
-            usedProtocolFallback = candidate.usedProtocolFallback,
-        )
-    }
+    val argumentCandidates = assistantCandidates.filter { it.chatVoiceReplyDraft() != null }
+    val target = findChatVoiceReplyMaterializationTarget(messages, generationBaseMessageIds)
 
     return ChatVoiceReplyMaterializationInspection(
         voiceToolMessages = voiceToolEntries.size,
@@ -230,25 +200,10 @@ internal fun inspectChatVoiceReplyMaterialization(
         latestNewExecutedToolIndex = latestNewExecutedToolIndex,
         latestNewToolMessageId = latestNewExecutedToolEntry?.value?.id,
         assistantCandidatesAfterTool = assistantCandidates.size,
-        markerCandidatesAfterTool = markerCandidates.size,
-        parseableCandidatesAfterTool = parsedCandidates,
-        fallbackCandidatesAfterTool = fallbackCandidates,
-        usedProtocolFallback = target?.usedProtocolFallback == true,
+        argumentCandidatesAfterTool = argumentCandidates.size,
+        parseableCandidatesAfterTool = argumentCandidates.size,
         matchedReplyMessageId = target?.replyMessage?.id,
     )
-}
-
-private fun chatVoiceReplyCandidate(message: UIMessage): ChatVoiceReplyCandidate? {
-    if (message.role != MessageRole.ASSISTANT) return null
-    val structuredReply = parseChatVoiceReply(message.chatVoiceReplySourceText())
-    val parsedReply = structuredReply ?: parseChatVoiceReplyAsVoiceFallback(message.toText())
-    return parsedReply?.let {
-        ChatVoiceReplyCandidate(
-            message = message,
-            parsedReply = it,
-            usedProtocolFallback = structuredReply == null,
-        )
-    }
 }
 
 internal fun findChatVoiceReplyMaterializationTarget(
@@ -264,23 +219,16 @@ internal fun findChatVoiceReplyMaterializationTarget(
     }
     if (toolMessageIndex < 0) return null
 
-    val candidates = messages
-        .drop(toolMessageIndex)
-        .asReversed()
-    return candidates.firstNotNullOfOrNull { message ->
-        chatVoiceReplyCandidate(message)?.let { candidate ->
-            ChatVoiceReplyMaterializationTarget(
-                replyMessage = candidate.message,
-                toolMessageId = messages[toolMessageIndex].id,
-                parsedReply = candidate.parsedReply,
-                toolError = messages[toolMessageIndex].parts
-                    .filterIsInstance<UIMessagePart.Tool>()
-                    .lastOrNull { it.toolName == CHAT_VOICE_REPLY_TOOL_NAME }
-                    ?.chatVoiceReplyError(),
-                usedProtocolFallback = candidate.usedProtocolFallback,
-            )
-        }
-    }
+    val toolMessage = messages[toolMessageIndex]
+    if (toolMessage.role != MessageRole.ASSISTANT) return null
+    val reply = toolMessage.chatVoiceReplyDraft() ?: return null
+    return ChatVoiceReplyMaterializationTarget(
+        replyMessage = toolMessage,
+        toolMessageId = toolMessage.id,
+        parsedReply = reply,
+        toolError = toolMessage.parts.filterIsInstance<UIMessagePart.Tool>()
+            .firstNotNullOfOrNull { it.chatVoiceReplyError() },
+    )
 }
 
 private fun Conversation.updateReplyMessage(

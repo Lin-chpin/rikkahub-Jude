@@ -14,5 +14,5 @@
     <string name="diagnostics_copied">诊断信息已复制。</string>
     <string name="failed_diagnostics">诊断信息
 失败原因：%1$s
-请确认选择的是上游 RikkaHub 的备份 ZIP，并且导出时至少勾选了“聊天记录”。</string>
+如果文件来源和导出选项无误，请尝试减少备份内容后重试。</string>
 </resources>

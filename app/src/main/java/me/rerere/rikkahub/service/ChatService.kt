@@ -16,6 +16,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,12 +35,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
-import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
-import me.rerere.ai.core.Tool
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ModelType
@@ -53,6 +53,7 @@ import me.rerere.ai.ui.canResumeToolExecution
 import me.rerere.ai.ui.finishPendingTools
 import me.rerere.ai.ui.finishReasoning
 import me.rerere.ai.ui.isEmptyInputMessage
+import me.rerere.ai.util.GenerationTimingTrace
 import me.rerere.common.android.Logging
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.CHAT_COMPLETED_NOTIFICATION_CHANNEL_ID
@@ -64,12 +65,9 @@ import me.rerere.rikkahub.data.ai.GenerationHandler
 import me.rerere.rikkahub.data.ai.mcp.McpManager
 import me.rerere.rikkahub.data.ai.prompts.buildVoiceCallAudioTagPrompt
 import me.rerere.rikkahub.data.ai.prompts.buildVoiceCallAudioTaggingRequest
-import me.rerere.rikkahub.data.ai.tools.LocalTools
 import me.rerere.rikkahub.data.ai.tools.LocalToolOption
 import me.rerere.rikkahub.data.ai.tools.REQUEST_VOICE_CALL_TOOL_NAME
-import me.rerere.rikkahub.data.ai.tools.createSearchTools
-import me.rerere.rikkahub.data.ai.tools.createSkillTools
-import me.rerere.rikkahub.data.files.SkillManager
+import me.rerere.rikkahub.data.ai.tools.ChatToolFactory
 import me.rerere.rikkahub.data.ai.transformers.Base64ImageToLocalFileTransformer
 import me.rerere.rikkahub.data.ai.transformers.DocumentAsPromptTransformer
 import me.rerere.rikkahub.data.ai.transformers.OcrTransformer
@@ -112,6 +110,8 @@ import me.rerere.rikkahub.data.voice.selectVoiceCallAudioTaggingSegmentIndexes
 import me.rerere.rikkahub.data.voice.parseVoiceCallAudioTagResponse
 import me.rerere.rikkahub.data.voice.voiceCallAudioTagFormatOrNull
 import me.rerere.rikkahub.data.voice.VoiceCallAudioTagAssignment
+import me.rerere.rikkahub.data.voice.VoiceCallSpeechInput
+import me.rerere.rikkahub.data.voice.VoiceCallSpeechSource
 import me.rerere.rikkahub.data.voice.VoiceCallAudioTagMode
 import me.rerere.rikkahub.data.voice.forVoiceCallProvider
 import me.rerere.rikkahub.data.voice.VoiceCallTagSelectionSource
@@ -136,8 +136,6 @@ import me.rerere.rikkahub.data.repository.MomentEntry
 import me.rerere.rikkahub.data.repository.MomentRepository
 import me.rerere.rikkahub.data.repository.AnonymousQuestionRepository
 import me.rerere.rikkahub.data.repository.AnonymousQuestionEntry
-import me.rerere.rikkahub.web.BadRequestException
-import me.rerere.rikkahub.web.NotFoundException
 import me.rerere.rikkahub.utils.applyPlaceholders
 import me.rerere.rikkahub.utils.sendNotification
 import me.rerere.rikkahub.utils.cancelNotification
@@ -240,10 +238,9 @@ class ChatService(
     private val generationHandler: GenerationHandler,
     private val templateTransformer: TemplateTransformer,
     private val providerManager: ProviderManager,
-    private val localTools: LocalTools,
+    private val chatToolFactory: ChatToolFactory,
     val mcpManager: McpManager,
     private val filesManager: FilesManager,
-    private val skillManager: SkillManager,
     private val momentRepository: MomentRepository,
     private val anonymousQuestionRepository: AnonymousQuestionRepository,
     private val chatVoiceReplyMaterializer: ChatVoiceReplyMaterializer,
@@ -367,6 +364,9 @@ class ChatService(
     fun getConversationFlow(conversationId: Uuid): StateFlow<Conversation> {
         return getOrCreateSession(conversationId).state
     }
+
+    internal fun getVoiceCallSpeechFlow(conversationId: Uuid): StateFlow<VoiceCallSpeechInput> =
+        getOrCreateSession(conversationId).voiceCallSpeech.state
 
     fun getGenerationJobStateFlow(conversationId: Uuid): Flow<Job?> {
         val session = sessions[conversationId] ?: return flowOf(null)
@@ -747,7 +747,7 @@ class ChatService(
                     val hasAiContent = completedCallMessages.any { message ->
                         message.role == MessageRole.ASSISTANT && message.toText().isNotBlank()
                     }
-                    if (hasAiContent) {
+                    if (hasVoiceCallConversation) {
                         val recordNode = UIMessage(
                             role = MessageRole.ASSISTANT,
                             parts = emptyList(),
@@ -755,11 +755,11 @@ class ChatService(
                                 UIMessageAnnotation.VoiceCallRecord(
                                     callId = completion.callId,
                                     durationSeconds = completion.durationSeconds,
-                                    cardAnchor = true,
+                                    cardAnchor = hasAiContent,
                                     standalone = true,
-                                    messageIds = completion.messageIds,
+                                    messageIds = if (hasAiContent) completion.messageIds else emptySet(),
                                     audioSegmentsByMessageId = completion.audioSegmentsByMessageId,
-                                    pendingEndedEvent = hasVoiceCallConversation,
+                                    pendingEndedEvent = true,
                                 )
                             ),
                         ).toMessageNode()
@@ -837,6 +837,10 @@ class ChatService(
         additionalSystemPrompt: String? = null,
         allowVoiceCallAudioTags: Boolean = true,
     ) {
+        val timing = if (requestMode == ChatRequestMode.VoiceCall) {
+            GenerationTimingTrace("voice_call:$conversationId")
+        } else null
+        timing?.mark("completion_handler_started")
         val settings = settingsStore.settingsFlow.first()
         val initialConversation = getConversationFlow(conversationId).value
         val assistant = settings.getAssistantById(initialConversation.assistantId)
@@ -849,6 +853,7 @@ class ChatService(
             model.displayName
         }
 
+        var speechReply: VoiceCallSpeechSource.Reply? = null
         runCatching {
 
             // reset suggestions
@@ -882,6 +887,14 @@ class ChatService(
                 }
             }
             val generationBaseMessageIds = conversation.currentMessages.mapTo(mutableSetOf()) { it.id }
+            if (requestMode == ChatRequestMode.VoiceCall) {
+                speechReply = session.voiceCallSpeech.begin(
+                    generationJob = currentCoroutineContext().job,
+                    historyMessageIds = generationBaseMessageIds,
+                    tagMode = voiceCallAudioTagMode,
+                    tagFormat = voiceCallAudioTagFormat,
+                )
+            }
             val transientLastContextMessage = if (
                 requestMode == ChatRequestMode.VoiceCall || voiceCallUserEventState != null
             ) {
@@ -956,50 +969,24 @@ class ChatService(
                     add(templateTransformer)
                 },
                 outputTransformers = outputTransformers,
-                tools = buildList {
-                    if (settings.enableWebSearch) {
-                        addAll(createSearchTools(settings))
-                    }
-                    addAll(
-                        localTools.getTools(
-                            options = localToolOptions,
-                            usageLockEnabled = settings.usageReminderConfig.lockEnabled,
-                            voiceCallConfigured = voiceCallConfigured,
-                            momentAssistantId = when {
-                                requestMode == ChatRequestMode.Normal && assistant.momentsEnabled -> momentScopeId
-                                else -> null
-                            },
-                            anonymousQuestionScopeId = when {
-                                requestMode == ChatRequestMode.Normal && assistant.anonymousQuestionBoxEnabled -> anonymousQuestionScopeId
-                                else -> null
-                            },
-                            includeBuildTools = requestMode == ChatRequestMode.Normal,
-                            buildToolAssistantId = assistant.id,
-                        )
-                    )
-                    if (assistant.enabledSkills.isNotEmpty()) {
-                        addAll(
-                            createSkillTools(
-                                enabledSkills = assistant.enabledSkills,
-                                allSkills = skillManager.listSkills(),
-                                skillManager = skillManager,
-                            )
-                        )
-                    }
-                    mcpManager.getAllAvailableTools().forEach { (serverId, tool) ->
-                        add(
-                            Tool(
-                                name = "mcp__" + tool.name,
-                                description = tool.description ?: "",
-                                parameters = { tool.inputSchema },
-                                needsApproval = tool.needsApproval,
-                                execute = {
-                                    mcpManager.callTool(serverId, tool.name, it.jsonObject)
-                                },
-                            )
-                        )
-                    }
-                },
+                tools = chatToolFactory.createTools(
+                    settings = settings,
+                    model = model,
+                    localToolOptions = localToolOptions,
+                    usageLockEnabled = settings.usageReminderConfig.lockEnabled,
+                    voiceCallConfigured = voiceCallConfigured,
+                    momentAssistantId = when {
+                        requestMode == ChatRequestMode.Normal && assistant.momentsEnabled -> momentScopeId
+                        else -> null
+                    },
+                    anonymousQuestionScopeId = when {
+                        requestMode == ChatRequestMode.Normal && assistant.anonymousQuestionBoxEnabled -> anonymousQuestionScopeId
+                        else -> null
+                    },
+                    includeBuildTools = requestMode == ChatRequestMode.Normal,
+                    buildToolAssistantId = assistant.id,
+                    enabledSkills = assistant.enabledSkills,
+                ),
             )
             var latestPrimaryMessages: List<UIMessage>? = null
             val incrementalVoiceCallTagging =
@@ -1018,7 +1005,7 @@ class ChatService(
                 val tagJobs = mutableListOf<Job>()
                 fun enqueueVoiceCallTagging(messages: List<UIMessage>, includeUnfinishedTail: Boolean) {
                     if (!incrementalVoiceCallTagging) return
-                    val primaryReply = messages.lastOrNull { it.role == MessageRole.ASSISTANT && it.toText().isNotBlank() }
+                    val primaryReply = speechReply?.currentReply(messages)?.takeIf { it.toText().isNotBlank() }
                         ?: return
                     val segments = splitVoiceCallAudioTaggingSegments(primaryReply.toText().trim())
                     val lastEligibleIndex = if (includeUnfinishedTail) {
@@ -1070,6 +1057,7 @@ class ChatService(
                                         assignments = tagAssignmentsByMessageId.getValue(primaryReply.id),
                                         format = voiceCallAudioTagFormat,
                                     )
+                                    speechReply?.publishTagged(projectedReply)
                                     updateConversation(
                                         conversationId,
                                         currentConversation.updateMessageAtNodeIndex(
@@ -1087,6 +1075,7 @@ class ChatService(
                 }
 
                 generationFlow.onCompletion {
+                    timing?.mark("generation_flow_completed")
                     // 取消 Live Update 通知
                     cancelLiveUpdateNotification(conversationId)
 
@@ -1124,6 +1113,7 @@ class ChatService(
                         updateAt = Instant.now()
                     )
                     updateConversation(conversationId, updatedConversation)
+                    timing?.mark("final_state_published")
 
                     // Show notification if app is not in foreground
                     if (!isForeground.value && settings.displaySetting.enableNotificationOnMessageGeneration) {
@@ -1133,6 +1123,7 @@ class ChatService(
                     when (chunk) {
                         is GenerationChunk.Messages -> {
                             val chunkMessages = chunk.messages
+                            timing?.firstText("generation_text_received", chunkMessages.lastOrNull())
                             latestPrimaryMessages = chunkMessages
                             if (!voiceCallNotificationSent && !isForeground.value) {
                                 chunkMessages.asSequence()
@@ -1166,6 +1157,7 @@ class ChatService(
                                 }
                             }
                             synchronized(tagProjectionLock) {
+                                speechReply?.publish(projectedMessages)
                                 val currentConversation = getConversationFlow(conversationId).value
                                 val streamedMessage = projectedMessages.lastOrNull()
                                 val now = System.nanoTime()
@@ -1191,6 +1183,7 @@ class ChatService(
                                         updatedConversation,
                                         checkFiles = false,
                                     )
+                                    timing?.firstText("text_state_published", streamedMessage)
                                 }
                             }
                             enqueueVoiceCallTagging(chunkMessages, includeUnfinishedTail = false)
@@ -1305,6 +1298,7 @@ class ChatService(
                 )
             }
         }.onFailure {
+            speechReply?.finish(cancelled = true)
             // 取消 Live Update 通知
             cancelLiveUpdateNotification(conversationId)
 
@@ -1318,7 +1312,12 @@ class ChatService(
             Logging.log(TAG, it.stackTraceToString())
         }.onSuccess {
             val finalConversation = getConversationFlow(conversationId).value
+            speechReply?.publish(finalConversation.currentMessages)
+            speechReply?.finish()
+            timing?.mark("speech_input_finished")
+            timing?.mark("conversation_save_started")
             saveConversation(conversationId, finalConversation)
+            timing?.mark("conversation_save_finished")
 
             finalConversation.currentMessages
                 .lastOrNull { it.role == MessageRole.ASSISTANT && it.toText().isNotBlank() }
@@ -1337,6 +1336,7 @@ class ChatService(
                 generateSuggestion(conversationId, finalConversation)
             }
         }
+        timing?.mark("completion_handler_returning")
     }
 
     private suspend fun tagVoiceCallSentence(
@@ -2596,7 +2596,7 @@ class ChatService(
             node.messages.any { it.id == messageId }
         }
         if (targetNodeIndex == -1) {
-            throw NotFoundException("Message not found")
+            throw NoSuchElementException("Message not found")
         }
         compressionDiagnostics.record(
             conversationId = conversationId,
@@ -2666,10 +2666,10 @@ class ChatService(
     ) {
         val currentConversation = getConversationFlow(conversationId).value
         val targetNode = currentConversation.messageNodes.firstOrNull { it.id == nodeId }
-            ?: throw NotFoundException("Message node not found")
+            ?: throw NoSuchElementException("Message node not found")
 
         if (selectIndex !in targetNode.messages.indices) {
-            throw BadRequestException("Invalid selectIndex")
+            throw IllegalArgumentException("Invalid selectIndex")
         }
 
         if (targetNode.selectIndex == selectIndex) {
@@ -2746,7 +2746,7 @@ class ChatService(
 
         if (updatedConversation == null) {
             if (failIfMissing) {
-                throw NotFoundException("Message not found")
+                throw NoSuchElementException("Message not found")
             }
             return
         }

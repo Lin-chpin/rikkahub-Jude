@@ -8,8 +8,13 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.rikkahub.service.ChatRequestMode
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.data.voice.chatVoiceReply
+import me.rerere.rikkahub.data.voice.hasChatVoiceReplyTool
+import me.rerere.rikkahub.ui.context.LocalTTSState
 import me.rerere.rikkahub.ui.hooks.rememberChatTtsPlayback
 import me.rerere.rikkahub.utils.toChatTtsText
+import me.rerere.tts.model.AudioFormat
+import me.rerere.tts.model.CachedAudioSource
 
 @Composable
 fun TTSAutoPlay(
@@ -20,6 +25,7 @@ fun TTSAutoPlay(
 ) {
     // Auto-play TTS after generation completes
     val chatTts = rememberChatTtsPlayback()
+    val tts = LocalTTSState.current
     val currentConversation by rememberUpdatedState(conversation)
     val updatedSetting by rememberUpdatedState(setting)
     LaunchedEffect(Unit) {
@@ -37,6 +43,23 @@ fun TTSAutoPlay(
 
                     var isFirstSpeak = true
                     assistantMessages.forEach { message ->
+                        message.chatVoiceReply()?.let { reply ->
+                            val audios = reply.segments.flatMap { segment ->
+                                segment.audioSegments.map { audio ->
+                                    CachedAudioSource(
+                                        audioUri = audio.audioUri,
+                                        format = AudioFormat.valueOf(audio.format),
+                                        sampleRate = audio.sampleRate,
+                                    )
+                                }
+                            }
+                            if (audios.isNotEmpty()) {
+                                tts.playCachedAudios(audios, flushCalled = isFirstSpeak)
+                                isFirstSpeak = false
+                            }
+                            return@forEach
+                        }
+                        if (message.hasChatVoiceReplyTool()) return@forEach
                         val text = message.toText()
                         val textToSpeak = text.toChatTtsText(
                             ttsOnlyReadQuoted = updatedSetting.displaySetting.ttsOnlyReadQuoted,

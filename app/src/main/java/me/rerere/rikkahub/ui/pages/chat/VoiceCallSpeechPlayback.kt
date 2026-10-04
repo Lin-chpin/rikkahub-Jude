@@ -13,10 +13,13 @@ import androidx.compose.runtime.setValue
 import androidx.core.net.toUri
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import me.rerere.ai.ui.VoiceCallAudioSegment
+import me.rerere.ai.util.GenerationTimingTrace
+import me.rerere.rikkahub.data.voice.VoiceCallSpeechInput
 import me.rerere.rikkahub.data.files.FileFolders
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.service.sanitizeVoiceCallTextForSpeech
@@ -34,6 +37,8 @@ import me.rerere.tts.model.PlaybackStatus
 internal class VoiceCallSpeechPlaybackState(initialReplyPending: Boolean) {
     var replyPending by mutableStateOf(initialReplyPending)
         private set
+    var replyGeneration by mutableStateOf(0L)
+        private set
     var visibleTextLength by mutableStateOf(0)
         private set
 
@@ -46,6 +51,7 @@ internal class VoiceCallSpeechPlaybackState(initialReplyPending: Boolean) {
     private val audioSegmentsByMessageId = mutableStateMapOf<String, List<VoiceCallAudioSegment>>()
 
     fun beginReply() {
+        replyGeneration++
         replyPending = true
         resetProgress(null)
     }
@@ -125,8 +131,8 @@ internal class VoiceCallSpeechPlaybackState(initialReplyPending: Boolean) {
 
     fun queuedSegment(index: Int): VoiceCallSpeechSegment? = queuedSpeechSegments.getOrNull(index)
 
-    fun canFinishReply(latestLoadingJob: Job?, latestAssistantText: String): Boolean {
-        return latestLoadingJob == null &&
+    fun canFinishReply(inputFinished: Boolean, latestAssistantText: String): Boolean {
+        return inputFinished &&
             latestAssistantText.isNotBlank() &&
             queuedTextLength >= latestAssistantText.length &&
             visibleTextLength >= latestAssistantText.length
@@ -165,64 +171,62 @@ internal fun rememberVoiceCallSpeechPlaybackState(
 internal fun BindVoiceCallSpeechPlayback(
     state: VoiceCallSpeechPlaybackState,
     awaitInitialAssistantReply: Boolean,
-    currentAssistantId: String?,
-    currentAssistantDisplayText: String,
-    currentAssistantSpeechText: String,
-    currentAssistantEmotion: String?,
+    speechInput: StateFlow<VoiceCallSpeechInput>,
     loadingJob: Job?,
     useWholeReplyTts: Boolean,
     tts: CustomTtsState,
     filesManager: FilesManager,
     recordFlow: (String) -> Unit,
 ) {
-    val latestAssistantDisplayText by rememberUpdatedState(currentAssistantDisplayText)
-    val latestAssistantSpeechText by rememberUpdatedState(currentAssistantSpeechText)
-    val latestAssistantEmotion by rememberUpdatedState(currentAssistantEmotion)
     val latestLoadingJob by rememberUpdatedState(loadingJob)
 
-    LaunchedEffect(state.replyPending, currentAssistantId) {
-        state.synchronizeMessage(currentAssistantId)
-    }
-
     LaunchedEffect(awaitInitialAssistantReply) {
-        if (awaitInitialAssistantReply) state.beginReply()
+        if (awaitInitialAssistantReply && !state.replyPending) state.beginReply()
     }
 
-    LaunchedEffect(
-        state.replyPending,
-        currentAssistantId,
-        currentAssistantDisplayText,
-        currentAssistantSpeechText,
-        currentAssistantEmotion,
-        loadingJob,
-        useWholeReplyTts,
-    ) {
-        if (!state.replyPending || currentAssistantId == null) return@LaunchedEffect
-        state.synchronizeMessage(currentAssistantId)
-        // Sentence-based providers can synthesize while the text model is still
-        // producing later sentences. Whole-reply v3 remains completion-bound.
-        if (loadingJob != null && useWholeReplyTts) return@LaunchedEffect
-        recordFlow(
-            "TTS队列更新 displayLength=" + currentAssistantDisplayText.length +
-                ", speechLength=" + currentAssistantSpeechText.length +
-                ", loading=" + (loadingJob != null) +
-                ", includeTail=" + (loadingJob == null)
-        )
-        state.queueReply(
-            displayText = currentAssistantDisplayText,
-            speechText = currentAssistantSpeechText,
-            includeUnfinishedTail = loadingJob == null,
-        )
+    LaunchedEffect(state.replyPending, state.replyGeneration, useWholeReplyTts) {
+        if (!state.replyPending) return@LaunchedEffect
+        var generationJob: Job? = null
+        val timing = GenerationTimingTrace("voice_call_speech_queue")
+        while (state.replyPending) {
+            val input = speechInput.value
+            if (generationJob == null) {
+                if (input.generationJob == null || !input.generationJob.isActive || input.generationJob !== latestLoadingJob) {
+                    delay(20)
+                    continue
+                }
+                generationJob = input.generationJob
+            }
+            if (input.generationJob !== generationJob || input.cancelled) break
+            if (input.finished && input.displayText().isBlank()) {
+                state.completeReply()
+                break
+            }
+            val reply = input.message
+            if (reply != null && (!useWholeReplyTts || input.finished)) {
+                val displayText = input.displayText()
+                val speechText = input.speechText()
+                state.synchronizeMessage(reply.id.toString())
+                state.queueReply(displayText, speechText, includeUnfinishedTail = input.finished)
+                timing.firstText("speech_queue_ready", reply.id.toString(), speechText.length)
+                if (input.finished) break
+            }
+            delay(20)
+        }
     }
 
-    LaunchedEffect(state.activeMessageId()) {
+    LaunchedEffect(state.activeMessageId(), state.replyGeneration) {
         val messageId = state.activeMessageId() ?: return@LaunchedEffect
         val speechQueue = VoiceCallSpeechQueue()
         var nextSpeechIndex = 0
         while (state.activeMessageId() == messageId) {
+            val input = speechInput.value
+            if (input.cancelled || input.message?.id?.toString() != messageId) break
+            val displayText = input.displayText()
+            val speechText = input.speechText()
             val segment = state.queuedSegment(nextSpeechIndex)
             if (segment == null) {
-                if (state.canFinishReply(latestLoadingJob, latestAssistantDisplayText)) {
+                if (state.canFinishReply(input.finished, displayText)) {
                     state.completeReply()
                     break
                 }
@@ -230,7 +234,7 @@ internal fun BindVoiceCallSpeechPlayback(
                 continue
             }
 
-            if (segment.waitsForSpeechProjection(latestLoadingJob != null)) {
+            if (segment.waitsForSpeechProjection(!input.finished)) {
                 delay(60)
                 continue
             }
@@ -242,7 +246,7 @@ internal fun BindVoiceCallSpeechPlayback(
             }
 
             val ttsText = if (useWholeReplyTts) {
-                latestAssistantSpeechText.sanitizeVoiceCallTextForSpeech()
+                speechText.sanitizeVoiceCallTextForSpeech()
             } else {
                 segment.text.sanitizeVoiceCallTextForSpeech()
             }
@@ -256,7 +260,7 @@ internal fun BindVoiceCallSpeechPlayback(
                 text = ttsText,
                 flushCalled = flushCalled,
                 chunked = false,
-                emotion = latestAssistantEmotion,
+                emotion = null,
                 onAudioReady = { response ->
                     recordFlow(
                         "收到TTS音频回调 messageId=" + messageId +
@@ -300,7 +304,7 @@ internal fun BindVoiceCallSpeechPlayback(
                     ", mode=" + (if (useWholeReplyTts) "whole_reply" else "sentence") +
                         ", flush=" + flushCalled +
                         ", chunked=false" +
-                        ", emotion=" + (latestAssistantEmotion ?: "none") +
+                        ", emotion=none" +
                         ", text=" + ttsText.take(80)
             )
 
@@ -321,7 +325,7 @@ internal fun BindVoiceCallSpeechPlayback(
                     if (state.activeMessageId() != messageId) return@LaunchedEffect
                     if (useWholeReplyTts) {
                         // 整段合成：单条音频按估算节奏逐句揭示，近似跟随朗读进度。
-                        latestAssistantDisplayText.voiceCallDisplaySegments().forEach { displaySegment ->
+                        displayText.voiceCallDisplaySegments().forEach { displaySegment ->
                             if (state.activeMessageId() != messageId) return@LaunchedEffect
                             state.revealThrough(displaySegment.endLength)
                             delay(voiceCallRevealDelayMillis(displaySegment.text))
@@ -362,7 +366,7 @@ internal fun BindVoiceCallSpeechPlayback(
             }
 
             if (useWholeReplyTts) {
-                state.revealThrough(latestAssistantDisplayText.length)
+                state.revealThrough(displayText.length)
                 state.completeReply()
                 break
             }

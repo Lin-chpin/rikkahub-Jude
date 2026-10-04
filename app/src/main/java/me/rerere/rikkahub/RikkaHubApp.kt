@@ -1,16 +1,13 @@
 package me.rerere.rikkahub
 
 import android.app.Application
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
 import android.util.Log
+import android.widget.Toast
 import androidx.compose.foundation.ComposeFoundationFlags
 import androidx.compose.runtime.Composer
 import androidx.compose.runtime.tooling.ComposeStackTraceMode
 import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationManagerCompat
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
@@ -26,6 +23,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import me.rerere.common.android.appTempFolder
 import okhttp3.ConnectionPool
 import com.whl.quickjs.android.QuickJSLoader
@@ -35,11 +33,13 @@ import me.rerere.rikkahub.di.repositoryModule
 import me.rerere.rikkahub.di.viewModelModule
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.data.sync.BackupManager
+import me.rerere.rikkahub.data.sync.RestoreFailedException
 import me.rerere.rikkahub.local.LocalBuildIntegration
-import me.rerere.rikkahub.service.WebServerService
 import me.rerere.rikkahub.service.UsageReminderService
 import me.rerere.rikkahub.utils.CrashHandler
 import me.rerere.rikkahub.utils.DatabaseUtil
+import me.rerere.rikkahub.utils.JsonInstant
 import org.koin.android.ext.android.get
 import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
@@ -50,13 +50,23 @@ private const val TAG = "RikkaHubApp"
 
 const val CHAT_COMPLETED_NOTIFICATION_CHANNEL_ID = "chat_completed"
 const val CHAT_LIVE_UPDATE_NOTIFICATION_CHANNEL_ID = "chat_live_update"
-const val WEB_SERVER_NOTIFICATION_CHANNEL_ID = "web_server"
 const val USAGE_REMINDER_MONITOR_CHANNEL_ID = "usage_reminder_monitor"
 const val USAGE_LIMIT_REMINDER_CHANNEL_ID = "usage_limit_reminder"
 
 class RikkaHubApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        try {
+            val restored = runBlocking(Dispatchers.IO) {
+                BackupManager.applyPendingRestore(this@RikkaHubApp, JsonInstant)
+            }
+            if (restored) {
+                Toast.makeText(this, R.string.backup_page_restore_success, Toast.LENGTH_LONG).show()
+            }
+        } catch (e: RestoreFailedException) {
+            Log.e(TAG, "Backup restore rolled back", e)
+            Toast.makeText(this, "备份恢复失败，已保留原数据。请重新导入备份。", Toast.LENGTH_LONG).show()
+        }
         startKoin {
             androidLogger()
             androidContext(this@RikkaHubApp)
@@ -88,9 +98,6 @@ class RikkaHubApp : Application() {
             setDefaultsAsync(R.xml.remote_config_defaults)
             fetchAndActivate()
         }
-
-        // Start WebServer if enabled in settings
-        startWebServerIfEnabled()
 
         // Start usage reminders if enabled in settings
         startUsageReminderIfEnabled()
@@ -147,44 +154,6 @@ class RikkaHubApp : Application() {
         }
     }
 
-    private fun startWebServerIfEnabled() {
-        get<AppScope>().launch {
-            runCatching {
-                delay(500)
-                val settings = get<SettingsStore>().settingsFlowRaw.first()
-                if (settings.webServerEnabled) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                        ContextCompat.checkSelfPermission(
-                            this@RikkaHubApp,
-                            android.Manifest.permission.POST_NOTIFICATIONS
-                        ) != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        Log.w(TAG, "startWebServerIfEnabled: notification permission not granted, skipping")
-                        return@launch
-                    }
-                    if (Build.VERSION.SDK_INT >= 37 &&
-                        !settings.webServerLocalhostOnly &&
-                        ContextCompat.checkSelfPermission(
-                            this@RikkaHubApp,
-                            android.Manifest.permission.ACCESS_LOCAL_NETWORK
-                        ) != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        Log.w(TAG, "startWebServerIfEnabled: local network permission not granted, skipping")
-                        return@launch
-                    }
-                    val intent = Intent(this@RikkaHubApp, WebServerService::class.java).apply {
-                        action = WebServerService.ACTION_START
-                        putExtra(WebServerService.EXTRA_PORT, settings.webServerPort)
-                        putExtra(WebServerService.EXTRA_LOCALHOST_ONLY, settings.webServerLocalhostOnly)
-                    }
-                    startForegroundService(intent)
-                }
-            }.onFailure {
-                Log.e(TAG, "startWebServerIfEnabled failed", it)
-            }
-        }
-    }
-
     private fun startUsageReminderIfEnabled() {
         get<AppScope>().launch {
             runCatching {
@@ -225,14 +194,6 @@ class RikkaHubApp : Application() {
             .build()
         notificationManager.createNotificationChannel(chatLiveUpdateChannel)
 
-        val webServerChannel = NotificationChannelCompat
-            .Builder(WEB_SERVER_NOTIFICATION_CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_LOW)
-            .setName(getString(R.string.notification_channel_web_server))
-            .setVibrationEnabled(false)
-            .setShowBadge(false)
-            .build()
-        notificationManager.createNotificationChannel(webServerChannel)
-
         val usageReminderMonitorChannel = NotificationChannelCompat
             .Builder(USAGE_REMINDER_MONITOR_CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_LOW)
             .setName(getString(R.string.notification_channel_usage_reminder_monitor))
@@ -252,7 +213,6 @@ class RikkaHubApp : Application() {
     override fun onTerminate() {
         super.onTerminate()
         get<AppScope>().cancel()
-        stopService(Intent(this, WebServerService::class.java))
     }
 }
 

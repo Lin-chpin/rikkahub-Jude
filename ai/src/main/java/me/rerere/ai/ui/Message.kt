@@ -14,6 +14,7 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.provider.Model
 import me.rerere.ai.util.json
+import kotlin.math.roundToInt
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
@@ -377,6 +378,17 @@ fun List<UIMessage>.limitContext(size: Int): List<UIMessage> {
     }
 
     return this.subList(adjustedStartIndex, this.size)
+}
+
+fun List<UIMessage>.limitContextBySteps(limit: Int): List<UIMessage> {
+    if (limit <= 0 || size <= limit) return this
+
+    val target = (limit * 0.5f).roundToInt().coerceIn(1, limit)
+    val stride = (limit - target).coerceAtLeast(1)
+    val startIndex = (((size - limit) / stride + 1) * stride).coerceAtMost(size - 1)
+    val userTurnStart = subList(0, startIndex + 1).indexOfLast { it.role == MessageRole.USER }
+
+    return subList(if (userTurnStart >= 0) userTurnStart else startIndex, size)
 }
 
 @Serializable

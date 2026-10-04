@@ -9,6 +9,7 @@ import me.rerere.highlight.Highlighter
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.ai.AILoggingManager
 import me.rerere.rikkahub.data.ai.tools.LocalTools
+import me.rerere.rikkahub.data.ai.tools.ChatToolFactory
 import me.rerere.rikkahub.data.event.AppEventBus
 import me.rerere.rikkahub.data.voice.ChatVoiceReplyAudioGenerator
 import me.rerere.rikkahub.data.voice.ChatVoiceReplyMaterializer
@@ -18,7 +19,6 @@ import me.rerere.rikkahub.utils.EmojiUtils
 import me.rerere.rikkahub.utils.JsonInstant
 import me.rerere.rikkahub.utils.SoundEffectPlayer
 import me.rerere.rikkahub.utils.UpdateChecker
-import me.rerere.rikkahub.web.WebServerManager
 import me.rerere.tts.provider.TTSManager
 import me.rerere.weather.WeatherRepository
 import org.koin.dsl.module
@@ -36,6 +36,14 @@ val appModule = module {
 
     single {
         LocalTools(get(), get(), get(), get(), get())
+    }
+
+    single {
+        ChatToolFactory(
+            localTools = get(),
+            mcpManager = get(),
+            skillManager = get(),
+        )
     }
 
     single {
@@ -96,24 +104,13 @@ val appModule = module {
             generationHandler = get(),
             templateTransformer = get(),
             providerManager = get(),
-            localTools = get(),
+            chatToolFactory = get(),
             mcpManager = get(),
             filesManager = get(),
-            skillManager = get(),
             momentRepository = get(),
             anonymousQuestionRepository = get(),
             chatVoiceReplyMaterializer = get(),
         )
     }
 
-    single {
-        WebServerManager(
-            context = get(),
-            appScope = get(),
-            chatService = get(),
-            conversationRepo = get(),
-            settingsStore = get(),
-            filesManager = get()
-        )
-    }
 }

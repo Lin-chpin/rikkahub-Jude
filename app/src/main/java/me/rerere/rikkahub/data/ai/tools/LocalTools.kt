@@ -26,6 +26,7 @@ import me.rerere.rikkahub.data.repository.MomentRepository
 import me.rerere.rikkahub.data.repository.AnonymousQuestionRepository
 import me.rerere.rikkahub.data.voice.CHAT_VOICE_REPLY_TOOL_NAME
 import me.rerere.rikkahub.data.voice.CHAT_VOICE_REPLY_TOOL_RESULT_PROMPT
+import me.rerere.rikkahub.data.voice.parseChatVoiceReplyArguments
 import me.rerere.rikkahub.data.voice.VOICE_CALL_UNAVAILABLE_MESSAGE
 import me.rerere.rikkahub.local.LocalBuildIntegration
 import me.rerere.rikkahub.service.UsageReminderService
@@ -246,17 +247,37 @@ class LocalTools(
         Tool(
             name = CHAT_VOICE_REPLY_TOOL_NAME,
             description = """
-                Switch the current reply into voice-message composition mode.
-                Call this tool exactly once when all or part of your reply would feel more natural as one or more voice messages.
-                After calling it, you will receive a hard protocol lock for a complete mixed text-and-voice reply. Your next assistant message is invalid unless it contains at least one 【语音条】 segment.
-                Do not call it merely because the user mentioned audio, and do not call it again for additional voice segments in the same reply.
+                Choose voice as a way to speak directly to the user when it adds natural expression to this conversation. Consider the user's intent, context, tone, and how much information they need to read. Ordinary answers, code, commands, lists, and detailed explanations usually work better as text. A short reply or strong emotion alone does not require voice.
+                For a reply containing voice, call this tool once as your final reply. Put the entire reply in the ordered segments argument: type voice for words to synthesize, type text for content to display without speech. Do not output the same reply outside this call or use voice/text markers. If the reply is text only, answer normally without calling this tool.
+                Keep a continuous spoken thought in one voice segment; use another only for a distinct conversational purpose. In voice segments, stay in your current conversational role. Speak in the first person and include only words you would actually say to the user; omit inner thoughts, actions, scene descriptions, and stage directions. Do not call this tool just because the user mentioned audio.
             """.trimIndent().replace("\n", " "),
             parameters = {
                 InputSchema.Obj(
-                    properties = buildJsonObject { }
+                    properties = buildJsonObject {
+                        put("segments", buildJsonObject {
+                            put("type", "array")
+                            put("description", "The complete reply in display order. Only voice segments are sent to TTS.")
+                            put("items", buildJsonObject {
+                                put("type", "object")
+                                put("properties", buildJsonObject {
+                                    put("type", buildJsonObject {
+                                        put("type", "string")
+                                        put("enum", buildJsonArray { add("text"); add("voice") })
+                                    })
+                                    put("text", buildJsonObject {
+                                        put("type", "string")
+                                        put("description", "Visible text, or exact first-person words spoken in the current conversational role when type is voice.")
+                                    })
+                                })
+                                put("required", buildJsonArray { add("type"); add("text") })
+                            })
+                        })
+                    },
+                    required = listOf("segments")
                 )
             },
-            execute = {
+            execute = { arguments ->
+                requireNotNull(parseChatVoiceReplyArguments(arguments)) { "segments must contain at least one nonempty voice segment" }
                 listOf(UIMessagePart.Text(CHAT_VOICE_REPLY_TOOL_RESULT_PROMPT.trimIndent()))
             }
         )

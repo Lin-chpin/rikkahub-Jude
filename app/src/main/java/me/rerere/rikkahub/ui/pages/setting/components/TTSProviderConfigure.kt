@@ -63,6 +63,14 @@ private val elevenLabsModelOptions = listOf(
         id = "eleven_v3",
         name = "Eleven v3",
     ),
+    ElevenLabsModelOption(
+        id = "eleven_v4",
+        name = "Eleven v4",
+    ),
+    ElevenLabsModelOption(
+        id = "eleven_v4_turbo",
+        name = "Eleven v4 Turbo",
+    ),
 )
 
 private val elevenLabsLanguageOptions = listOf(
@@ -571,49 +579,51 @@ private fun ElevenLabsTTSConfiguration(
         )
     }
 
-    FormItem(
-        label = { Text("Speaker boost") },
-        description = { Text("Boosts similarity to the original speaker; may increase latency") },
-        tail = {
-            Switch(
-                checked = setting.useSpeakerBoost,
-                onCheckedChange = { enabled ->
-                    onValueChange(setting.copy(useSpeakerBoost = enabled))
+    if (!setting.model.trim().startsWith("eleven_v4", ignoreCase = true)) {
+        FormItem(
+            label = { Text("Speaker boost") },
+            description = { Text("Boosts similarity to the original speaker; may increase latency") },
+            tail = {
+                Switch(
+                    checked = setting.useSpeakerBoost,
+                    onCheckedChange = { enabled ->
+                        onValueChange(setting.copy(useSpeakerBoost = enabled))
+                    },
+                )
+            },
+        )
+
+        FormItem(
+            label = { Text("Style") },
+            description = { Text("0.0–1.0. Default is 0; high values can sound theatrical or unstable") }
+        ) {
+            OutlinedNumberInput(
+                value = setting.style,
+                onValueChange = { newStyle ->
+                    if (newStyle in TTSProviderSetting.ElevenLabs.MIN_STYLE..TTSProviderSetting.ElevenLabs.MAX_STYLE) {
+                        onValueChange(setting.copy(style = newStyle))
+                    }
                 },
+                modifier = Modifier.fillMaxWidth(),
+                label = "Style",
             )
-        },
-    )
+        }
 
-    FormItem(
-        label = { Text("Style") },
-        description = { Text("0.0–1.0. Default is 0; high values can sound theatrical or unstable") }
-    ) {
-        OutlinedNumberInput(
-            value = setting.style,
-            onValueChange = { newStyle ->
-                if (newStyle in TTSProviderSetting.ElevenLabs.MIN_STYLE..TTSProviderSetting.ElevenLabs.MAX_STYLE) {
-                    onValueChange(setting.copy(style = newStyle))
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            label = "Style",
-        )
-    }
-
-    FormItem(
-        label = { Text("Speed") },
-        description = { Text("0.7–1.2. Default is 1.0; Eleven v3 may ignore this setting") }
-    ) {
-        OutlinedNumberInput(
-            value = setting.speed,
-            onValueChange = { newSpeed ->
-                if (newSpeed in TTSProviderSetting.ElevenLabs.MIN_SPEED..TTSProviderSetting.ElevenLabs.MAX_SPEED) {
-                    onValueChange(setting.copy(speed = newSpeed))
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            label = "Speed",
-        )
+        FormItem(
+            label = { Text("Speed") },
+            description = { Text("0.7–1.2. Default is 1.0; Eleven v3 may ignore this setting") }
+        ) {
+            OutlinedNumberInput(
+                value = setting.speed,
+                onValueChange = { newSpeed ->
+                    if (newSpeed in TTSProviderSetting.ElevenLabs.MIN_SPEED..TTSProviderSetting.ElevenLabs.MAX_SPEED) {
+                        onValueChange(setting.copy(speed = newSpeed))
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                label = "Speed",
+            )
+        }
     }
 }
 

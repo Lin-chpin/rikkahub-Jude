@@ -200,6 +200,27 @@ class VoiceCallAudioTaggingTest {
     }
 
     @Test
+    fun enablesOptionalOnePassTagsForElevenLabsV4() {
+        val provider = TTSProviderSetting.ElevenLabs(model = "eleven_v4")
+        assertEquals(VoiceCallAudioTagFormat.ELEVEN_LABS_V4, provider.voiceCallAudioTagFormatOrNull())
+        assertEquals(VoiceCallAudioTagMode.REALTIME_MODEL, VoiceCallAudioTagMode.DISABLED.forVoiceCallProvider(provider))
+    }
+
+    @Test
+    fun keepsElevenLabsV3OnSecondPass() {
+        val provider = TTSProviderSetting.ElevenLabs(model = "eleven_v3")
+        assertEquals(VoiceCallAudioTagFormat.ELEVEN_LABS_V3, provider.voiceCallAudioTagFormatOrNull())
+        assertEquals(VoiceCallAudioTagMode.SECOND_PASS, VoiceCallAudioTagMode.DISABLED.forVoiceCallProvider(provider))
+    }
+
+    @Test
+    fun enablesRealtimeCallTagsForElevenLabsV4Turbo() {
+        val provider = TTSProviderSetting.ElevenLabs(model = "eleven_v4_turbo")
+        assertEquals(VoiceCallAudioTagFormat.ELEVEN_LABS_V3, provider.voiceCallAudioTagFormatOrNull())
+        assertEquals(VoiceCallAudioTagMode.REALTIME_MODEL, VoiceCallAudioTagMode.DISABLED.forVoiceCallProvider(provider))
+    }
+
+    @Test
     fun preservesMiniMaxSpeechTwoPointSixModelAndGlobalEmotionSetting() {
         val setting = TTSProviderSetting.MiniMax(
             model = "speech-2.6-hd",

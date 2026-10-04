@@ -5,6 +5,7 @@ import android.util.Log
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.isActive
 import me.rerere.tts.model.AudioChunk
 import me.rerere.tts.model.AudioFormat
@@ -24,6 +25,7 @@ private const val DEFAULT_OUTPUT_FORMAT = "mp3_44100_128"
 private fun normalizeElevenLabsModelId(model: String): String {
     return when {
         model.trim().equals("eleven_multilingual_v3", ignoreCase = true) -> "eleven_v3"
+        model.trim().equals("eleven_v4", ignoreCase = true) -> "eleven_v4"
         else -> model.trim()
     }
 }
@@ -48,6 +50,8 @@ class ElevenLabsTTSProvider : TTSProvider<TTSProviderSetting.ElevenLabs> {
         return normalizeElevenLabsModelId(providerSetting.model) in setOf(
             "eleven_multilingual_v2",
             "eleven_v3",
+            "eleven_v4",
+            "eleven_v4_turbo",
         )
     }
 
@@ -55,13 +59,26 @@ class ElevenLabsTTSProvider : TTSProvider<TTSProviderSetting.ElevenLabs> {
         context: Context,
         providerSetting: TTSProviderSetting.ElevenLabs,
         request: TTSRequest
-    ): Flow<AudioChunk> = generateSpeechFlow(providerSetting, request, streaming = false)
+    ): Flow<AudioChunk> = if (normalizeElevenLabsModelId(providerSetting.model) == "eleven_v4_turbo") {
+        generateElevenLabsRealtimeDialogue(providerSetting, flowOf(request.text))
+    } else {
+        generateSpeechFlow(providerSetting, request, streaming = false)
+    }
 
     override fun generateStreamingSpeech(
         context: Context,
         providerSetting: TTSProviderSetting.ElevenLabs,
         request: TTSRequest,
-    ): Flow<AudioChunk> = generateSpeechFlow(providerSetting, request, streaming = true)
+    ): Flow<AudioChunk> = if (normalizeElevenLabsModelId(providerSetting.model) == "eleven_v4_turbo") {
+        generateElevenLabsRealtimeDialogue(providerSetting, flowOf(request.text))
+    } else {
+        generateSpeechFlow(providerSetting, request, streaming = true)
+    }
+
+    fun generateRealtimeDialogue(
+        providerSetting: TTSProviderSetting.ElevenLabs,
+        text: Flow<String>,
+    ): Flow<AudioChunk> = generateElevenLabsRealtimeDialogue(providerSetting, text)
 
     private fun generateSpeechFlow(
         providerSetting: TTSProviderSetting.ElevenLabs,
@@ -77,6 +94,7 @@ class ElevenLabsTTSProvider : TTSProvider<TTSProviderSetting.ElevenLabs> {
         require(baseUrl.isNotEmpty()) { "ElevenLabs base URL is required" }
 
         val requestUrl = buildElevenLabsRequestUrl(baseUrl, voiceId, streaming)
+        val timingId = System.nanoTime().toString(16)
         val requestBody = JSONObject().apply {
             put("text", request.text)
             if (modelId.isNotBlank()) {
@@ -105,28 +123,30 @@ class ElevenLabsTTSProvider : TTSProvider<TTSProviderSetting.ElevenLabs> {
                             TTSProviderSetting.ElevenLabs.MAX_SIMILARITY_BOOST,
                         ),
                     )
-                    put("use_speaker_boost", providerSetting.useSpeakerBoost)
-                    put(
-                        "style",
-                        providerSetting.style.coerceIn(
-                            TTSProviderSetting.ElevenLabs.MIN_STYLE,
-                            TTSProviderSetting.ElevenLabs.MAX_STYLE,
-                        ),
-                    )
-                    put(
-                        "speed",
-                        providerSetting.speed.coerceIn(
-                            TTSProviderSetting.ElevenLabs.MIN_SPEED,
-                            TTSProviderSetting.ElevenLabs.MAX_SPEED,
-                        ),
-                    )
+                    if (!modelId.startsWith("eleven_v4")) {
+                        put("use_speaker_boost", providerSetting.useSpeakerBoost)
+                        put(
+                            "style",
+                            providerSetting.style.coerceIn(
+                                TTSProviderSetting.ElevenLabs.MIN_STYLE,
+                                TTSProviderSetting.ElevenLabs.MAX_STYLE,
+                            ),
+                        )
+                        put(
+                            "speed",
+                            providerSetting.speed.coerceIn(
+                                TTSProviderSetting.ElevenLabs.MIN_SPEED,
+                                TTSProviderSetting.ElevenLabs.MAX_SPEED,
+                            ),
+                        )
+                    }
                 },
             )
         }
 
         Log.i(
             TAG,
-            "generateSpeech: streaming=$streaming, url=$requestUrl, model=$modelId, voiceId=$voiceId"
+            "tts_timing trace=$timingId stage=request_started streaming=$streaming model=$modelId chars=${request.text.length}"
         )
 
         val httpRequest = Request.Builder()
@@ -142,20 +162,27 @@ class ElevenLabsTTSProvider : TTSProvider<TTSProviderSetting.ElevenLabs> {
                 Log.e(TAG, "generateSpeech: ${response.code} ${response.message}, body=$errorBody")
                 throw Exception("ElevenLabs TTS request failed: ${response.code} ${response.message}; body=$errorBody")
             }
+            Log.i(TAG, "tts_timing trace=$timingId stage=response_headers status=${response.code}")
 
             val responseBody = response.body ?: error("ElevenLabs TTS returned an empty response")
             val metadata = mapOf(
                 "provider" to "elevenlabs",
                 "model" to modelId,
                 "voice_id" to voiceId,
+                "timing_id" to timingId,
             )
             if (streaming) {
                 responseBody.byteStream().use { input ->
                     val buffer = ByteArray(16 * 1024)
+                    var firstChunkReceived = false
                     while (currentCoroutineContext().isActive) {
                         val bytesRead = input.read(buffer)
                         if (bytesRead < 0) break
                         if (bytesRead == 0) continue
+                        if (!firstChunkReceived) {
+                            firstChunkReceived = true
+                            Log.i(TAG, "tts_timing trace=$timingId stage=first_audio_bytes_received bytes=$bytesRead")
+                        }
                         emit(
                             AudioChunk(
                                 data = buffer.copyOf(bytesRead),
@@ -166,9 +193,11 @@ class ElevenLabsTTSProvider : TTSProvider<TTSProviderSetting.ElevenLabs> {
                     }
                 }
             } else {
+                val audioBytes = responseBody.bytes()
+                Log.i(TAG, "tts_timing trace=$timingId stage=first_audio_bytes_received bytes=${audioBytes.size}")
                 emit(
                     AudioChunk(
-                        data = responseBody.bytes(),
+                        data = audioBytes,
                         format = AudioFormat.MP3,
                         isLast = true,
                         metadata = metadata,

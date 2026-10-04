@@ -119,6 +119,25 @@ internal fun buildVoiceCallRealtimeAudioTagPrompt(format: VoiceCallAudioTagForma
             """.trimIndent()
         }
 
+        VoiceCallAudioTagFormat.ELEVEN_LABS_V4 -> {
+            val allowedWords = VoiceCallAudioTag.entries.joinToString(", ") { it.word }
+            """
+            [VOICE_CALL_AUDIO_TAG_PROTOCOL]
+            Stay in the configured assistant character and speak directly to the caller in first
+            person, as in a live phone conversation. Use "I/me" or "我" where natural without
+            forcing the pronoun into every sentence. Never refer to yourself in third person or
+            narrate your actions, expressions, feelings, or surroundings; output only words meant
+            to be spoken to the caller.
+            For every completed spoken sentence, choose one delivery tag from this exact catalog:
+            $allowedWords
+            Put the chosen word in square brackets immediately before the sentence. Use only catalog
+            words; never invent a tag, use a mood word, or write a tag explanation. Keep the tag in
+            the reply text because it is part of the speech protocol. Do not output a separate tag
+            list or JSON object. If a sentence has no suitable event, choose the closest catalog
+            event that is natural rather than omitting the required tag.
+            """.trimIndent()
+        }
+
         VoiceCallAudioTagFormat.MINIMAX_SPEECH_2_8 -> {
             val allowedEmotions = TTSProviderSetting.MiniMax.GLOBAL_EMOTION_OPTIONS
                 .filter { it != "whipser" }

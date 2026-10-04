@@ -43,6 +43,8 @@ import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.encodeBase64
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
+import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
 import me.rerere.ai.util.parseErrorDetail
 import me.rerere.ai.util.stringSafe
 import me.rerere.ai.util.toHeaders
@@ -101,7 +103,7 @@ class ResponseAPI(
         )
         val responsesBaseUrl = providerSetting.responsesBaseUrl()
         val requestBuilder = Request.Builder()
-            .url("$responsesBaseUrl/responses")
+            .url("$responsesBaseUrl${providerSetting.responsesPath}")
             .headers(params.customHeaders.toHeaders())
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .addHeader("Content-Type", "application/json")
@@ -133,13 +135,14 @@ class ResponseAPI(
         )
         val responsesBaseUrl = providerSetting.responsesBaseUrl()
         val requestBuilder = Request.Builder()
-            .url("$responsesBaseUrl/responses")
+            .url("$responsesBaseUrl${providerSetting.responsesPath}")
             .headers(params.customHeaders.toHeaders())
             .acceptEventStream()
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .configureReferHeaders(responsesBaseUrl)
         val request = authenticator.authenticate(requestBuilder, providerSetting).build()
 
+        val completedNormally = AtomicBoolean(false)
         val listener = object : EventSourceListener() {
             override fun onEvent(
                 eventSource: EventSource,
@@ -148,6 +151,7 @@ class ResponseAPI(
                 data: String
             ) {
                 if (data == "[DONE]") {
+                    completedNormally.set(true)
                     close()
                     return
                 }
@@ -158,11 +162,16 @@ class ResponseAPI(
                     trySend(chunk)
                 }
                 if (type == "response.completed") {
+                    completedNormally.set(true)
                     close()
                 }
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                if (completedNormally.get()) {
+                    close()
+                    return
+                }
                 var exception = t
 
                 t?.printStackTrace()
@@ -184,7 +193,11 @@ class ResponseAPI(
             }
 
             override fun onClosed(eventSource: EventSource) {
-                close()
+                if (completedNormally.get()) {
+                    close()
+                } else {
+                    close(IOException("SSE stream closed before response.completed"))
+                }
             }
         }
 

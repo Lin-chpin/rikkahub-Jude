@@ -71,7 +71,8 @@ internal fun buildVoiceCallRuntimeContext(state: VoiceCallRuntimeState): VoiceCa
                 state=ENDED
                 The previously active voice call has just been disconnected.
                 The current user message is the first normal text message after hangup. Answer that message with awareness that the call is no longer active.
-                Acknowledge the hangup only when it is natural and relevant to the user's message.
+                Continue in normal text-chat mode. Do not speak as if you are still on the phone or follow the active-call first-person and spoken-only instructions.
+                Briefly acknowledge that the call ended when relevant, then answer the user's message normally.
                 Do not use audio or emotion tags, do not wait for more voice input, and do not restart the call unless the user explicitly makes a new request later.
             """.trimIndent(),
         )
@@ -97,16 +98,26 @@ internal fun UIMessage.withVoiceCallRuntimeInstructionForRequest(
     val prefix = buildString {
         appendLine("[VOICE_CALL_RUNTIME_TURN]")
         appendLine("state=${state.name}")
-        appendLine("Speak in the first person and output only words you would actually say to the user on the phone.")
-        appendLine("Do not include inner thoughts, private mental state, actions, expressions, environment details, narration, stage directions, or other non-spoken descriptions.")
-        appendLine("If audio tags are required by the active audio-tag mode, keep only the required protocol tags and do not turn them into narration.")
+        when (state) {
+            VoiceCallRuntimeState.ACTIVE -> {
+                appendLine("Speak in the first person and output only words you would actually say to the user on the phone.")
+                appendLine("Do not include inner thoughts, private mental state, actions, expressions, environment details, narration, stage directions, or other non-spoken descriptions.")
+                appendLine("If audio tags are required by the active audio-tag mode, keep only the required protocol tags and do not turn them into narration.")
+            }
+
+            VoiceCallRuntimeState.ENDED -> {
+                appendLine("The call has ended. Continue in normal text-chat mode and do not use phone-call speech or first-person call instructions.")
+            }
+
+            VoiceCallRuntimeState.INACTIVE -> return@buildString
+        }
         if (includeConnectionEvent) {
             val eventDescription = when (state) {
                 VoiceCallRuntimeState.ACTIVE ->
                     "The voice call is connected. The following is the user's first spoken message after connection, regardless of who initiated the call."
 
                 VoiceCallRuntimeState.ENDED ->
-                    "The voice call has ended. The following is the user's first normal text message after hangup."
+                    "The voice call has ended. The following is the user's first normal text message after hangup; respond as a normal text conversation."
 
                 VoiceCallRuntimeState.INACTIVE -> return@buildString
             }

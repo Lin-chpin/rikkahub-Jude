@@ -22,7 +22,7 @@ android {
         minSdk = 26
         targetSdk = 37
         versionCode = 175
-        versionName = "v1.1.9"
+        versionName = "v1.1.10"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -282,9 +282,6 @@ dependencies {
     // mcp
     implementation(libs.modelcontextprotocol.kotlin.sdk)
 
-    // jmDNS (mDNS/Bonjour for .local hostname)
-    implementation(libs.jmdns)
-
     // SLF4J Android binding — routes Ktor/SLF4J logs to logcat
     implementation(libs.slf4j.api)
     implementation(libs.slf4j.android)
@@ -294,7 +291,6 @@ dependencies {
 
     // modules
     implementation(project(":ai"))
-    implementation(project(":web"))
     implementation(project(":document"))
     implementation(project(":highlight"))
     implementation(project(":search"))

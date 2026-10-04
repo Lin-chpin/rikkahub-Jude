@@ -16,6 +16,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicLong
 import me.rerere.tts.model.PlaybackState
@@ -111,6 +113,12 @@ interface CustomTtsState {
         emotion: String? = null,
     )
 
+    /** Streams live dialogue text through one provider WebSocket for the current reply. */
+    fun speakRealtimeDialogue(
+        text: Flow<String>,
+        onAudioReady: suspend (TTSResponse) -> Unit,
+    ): Long
+
     /** Stops the current speech and clears the queue. */
     fun stop()
     fun playCachedAudio(audioUri: String, format: String, sampleRate: Int? = null)
@@ -200,6 +208,19 @@ private class CustomTtsStateImpl(
             },
             emotion = emotion,
         )
+    }
+
+    override fun speakRealtimeDialogue(
+        text: Flow<String>,
+        onAudioReady: suspend (TTSResponse) -> Unit,
+    ): Long {
+        val sessionId = beginPlaybackSession()
+        val englishOnly = settingsStore.settingsFlow.value.displaySetting.ttsEnglishOnly
+        controller.speakRealtimeDialogue(
+            text = if (englishOnly) text.map { it.keepEnglishOnlyForTts() } else text,
+            onAudioReady = onAudioReady,
+        )
+        return sessionId
     }
 
     override fun stop() {

@@ -1,10 +1,12 @@
 package me.rerere.rikkahub.data.voice
 
+import kotlinx.serialization.json.Json
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.ChatVoiceReplySegmentType
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.tts.provider.TTSProviderSetting
+import me.rerere.tts.provider.isElevenLabsV4Family
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -13,42 +15,89 @@ import org.junit.Test
 
 class ChatVoiceReplyTest {
     @Test
-    fun parsesMixedVoiceAndTextSegmentsInOrder() {
+    fun parsesMixedVoiceAndTextToolArgumentsInOrder() {
         val parsed = requireNotNull(
-            parseChatVoiceReply("【语音条】我好想你【文本】你刚刚没听见吧")
+            parseChatVoiceReplyArguments(Json.parseToJsonElement("""
+                {"segments":[
+                  {"type":"text","text":"先看说明"},
+                  {"type":"voice","text":"我陪你试试。"},
+                  {"type":"text","text":"接着检查配置"},
+                  {"type":"voice","text":"我等你。"}
+                ]}
+            """))
         )
 
         assertEquals(
-            listOf(ChatVoiceReplySegmentType.VOICE, ChatVoiceReplySegmentType.TEXT),
+            listOf(
+                ChatVoiceReplySegmentType.TEXT,
+                ChatVoiceReplySegmentType.VOICE,
+                ChatVoiceReplySegmentType.TEXT,
+                ChatVoiceReplySegmentType.VOICE,
+            ),
             parsed.segments.map { it.type },
         )
-        assertEquals(listOf("我好想你", "你刚刚没听见吧"), parsed.segments.map { it.text })
+        assertEquals(listOf("先看说明", "我陪你试试。", "接着检查配置", "我等你。"), parsed.segments.map { it.text })
     }
 
     @Test
-    fun supportsAWholeReplyAndMultipleVoiceSegments() {
-        val wholeVoice = requireNotNull(parseChatVoiceReply("【语音条】整段都是语音"))
+    fun supportsOneWholeVoiceSegmentAndRejectsTextOnlyArguments() {
+        val wholeVoice = requireNotNull(parseChatVoiceReplyArguments(Json.parseToJsonElement(
+            """{"segments":[{"type":"voice","text":"第一句。第二句！第三句？"}]}"""
+        )))
         assertEquals(ChatVoiceReplySegmentType.VOICE, wholeVoice.segments.single().type)
-
-        val multiple = requireNotNull(
-            parseChatVoiceReply("【语音条】第一条【语音条】第二条【文本】最后一句")
-        )
-        assertEquals(3, multiple.segments.size)
+        assertNull(parseChatVoiceReplyArguments(Json.parseToJsonElement(
+            """{"segments":[{"type":"text","text":"普通回复"}]}"""
+        )))
     }
 
     @Test
-    fun ignoresUnstructuredOrdinaryReplies() {
-        assertNull(parseChatVoiceReply("这是一条普通文字回复。"))
-        assertNull(parseChatVoiceReply("【文本】只有普通文字"))
+    fun sendsThreeSentenceMiniMaxVoiceSegmentAsOneRequestChunk() {
+        val text = "第一句。第二句！第三句？"
+        assertEquals(listOf(text), miniMaxChatVoiceReplyChunks(text).map { it.text })
     }
 
     @Test
-    fun materializationRemovesMarkersFromModelContext() {
+    fun sendsElevenLabsV4VoiceSegmentAsOneRequestWithinModelLimit() {
+        val text = "第一句。第二句！第三句？"
+        assertEquals(listOf(text), elevenLabsV4ChatVoiceReplyChunks(text).map { it.text })
+        assertTrue(TTSProviderSetting.ElevenLabs(model = "eleven_v4_turbo").isElevenLabsV4Family())
+        assertTrue(runCatching { elevenLabsV4ChatVoiceReplyChunks("字".repeat(10_001)) }.isFailure)
+    }
+
+    @Test
+    fun splitsMiniMaxVoiceOnlyWhenTheSingleRequestLimitIsExceeded() {
+        val text = "这是一段很长的语音。".repeat(1_100)
+        val chunks = miniMaxChatVoiceReplyChunks(text)
+
+        assertTrue(chunks.size > 1)
+        assertTrue(chunks.all { it.text.length < 10_000 })
+        assertEquals(text, chunks.joinToString("") { it.text })
+    }
+
+    @Test
+    fun rejectsMissingOrInvalidToolArguments() {
+        assertNull(parseChatVoiceReplyArguments(Json.parseToJsonElement("{}")))
+        assertNull(parseChatVoiceReplyArguments(Json.parseToJsonElement(
+            """{"segments":[{"type":"voice","text":""}]}"""
+        )))
+    }
+
+    @Test
+    fun plainTextReplyNeedsNoVoiceTool() {
+        val message = UIMessage.assistant("这是普通文字回复")
+        assertNull(message.chatVoiceReplyDraft())
+        assertNull(findChatVoiceReplyMaterializationTarget(listOf(message), emptySet()))
+    }
+
+    @Test
+    fun materializationKeepsReadableTextAndOrderedSegments() {
         val message = UIMessage(
             role = MessageRole.ASSISTANT,
-            parts = listOf(UIMessagePart.Text("【语音条】我好想你【文本】你刚刚没听见吧")),
+            parts = listOf(UIMessagePart.Text("模型流式前缀")),
         )
-        val parsed = requireNotNull(parseChatVoiceReply(message.toText()))
+        val parsed = requireNotNull(parseChatVoiceReplyArguments(Json.parseToJsonElement(
+            """{"segments":[{"type":"voice","text":"我好想你"},{"type":"text","text":"你刚刚没听见吧"}]}"""
+        )))
         val materialized = message.withChatVoiceReply(parsed)
 
         assertEquals("我好想你\n\n你刚刚没听见吧", materialized.toText())
@@ -56,7 +105,7 @@ class ChatVoiceReplyTest {
     }
 
     @Test
-    fun findsStructuredReplyMergedIntoTheExecutedToolMessage() {
+    fun findsReplyInExecutedToolArguments() {
         val existingMessage = UIMessage.user("请发一条语音")
         val toolReply = UIMessage(
             role = MessageRole.ASSISTANT,
@@ -64,10 +113,9 @@ class ChatVoiceReplyTest {
                 UIMessagePart.Tool(
                     toolCallId = "voice-1",
                     toolName = CHAT_VOICE_REPLY_TOOL_NAME,
-                    input = "{}",
+                    input = """{"segments":[{"type":"voice","text":"我好想你"},{"type":"text","text":"你刚刚没听见吧"}]}""",
                     output = listOf(UIMessagePart.Text(CHAT_VOICE_REPLY_TOOL_RESULT_PROMPT)),
                 ),
-                UIMessagePart.Text("【语音条】我好想你【文本】你刚刚没听见吧"),
             ),
         )
 
@@ -84,7 +132,7 @@ class ChatVoiceReplyTest {
     }
 
     @Test
-    fun prefersTheFinalStructuredReplyAfterTheToolMessage() {
+    fun ignoresTextAfterTheVoiceToolInsteadOfReadingItAgain() {
         val existingMessage = UIMessage.user("请发一条语音")
         val firstToolReply = UIMessage(
             role = MessageRole.ASSISTANT,
@@ -92,15 +140,14 @@ class ChatVoiceReplyTest {
                 UIMessagePart.Tool(
                     toolCallId = "voice-first",
                     toolName = CHAT_VOICE_REPLY_TOOL_NAME,
-                    input = "{}",
+                    input = """{"segments":[{"type":"voice","text":"第一次流式输出"}]}""",
                     output = listOf(UIMessagePart.Text("done")),
                 ),
-                UIMessagePart.Text("【语音条】第一次流式输出"),
             ),
         )
         val finalReply = UIMessage(
             role = MessageRole.ASSISTANT,
-            parts = listOf(UIMessagePart.Text("【语音条】最终输出【文本】补充说明")),
+            parts = listOf(UIMessagePart.Text("额外普通文本")),
         )
 
         val target = findChatVoiceReplyMaterializationTarget(
@@ -108,12 +155,12 @@ class ChatVoiceReplyTest {
             generationBaseMessageIds = setOf(existingMessage.id),
         )
 
-        assertEquals(finalReply.id, target?.replyMessage?.id)
-        assertEquals(listOf("最终输出", "补充说明"), target?.parsedReply?.segments?.map { it.text })
+        assertEquals(firstToolReply.id, target?.replyMessage?.id)
+        assertEquals(listOf("第一次流式输出"), target?.parsedReply?.segments?.map { it.text })
     }
 
     @Test
-    fun fallsBackToPlainAssistantReplyWhenVoiceMarkersAreMissing() {
+    fun doesNotTreatFollowingPlainTextAsMissingVoiceArguments() {
         val existingMessage = UIMessage.user("请发一条语音")
         val toolReply = UIMessage(
             role = MessageRole.ASSISTANT,
@@ -126,20 +173,14 @@ class ChatVoiceReplyTest {
                 )
             ),
         )
-        val plainReply = UIMessage.assistant("这是模型忘记加语音标记后的普通回复")
+        val plainReply = UIMessage.assistant("这是普通回复")
 
         val target = findChatVoiceReplyMaterializationTarget(
             messages = listOf(existingMessage, toolReply, plainReply),
             generationBaseMessageIds = setOf(existingMessage.id),
         )
 
-        assertEquals(plainReply.id, target?.replyMessage?.id)
-        assertTrue(target?.usedProtocolFallback == true)
-        assertEquals(
-            listOf(ChatVoiceReplySegmentType.VOICE),
-            target?.parsedReply?.segments?.map { it.type },
-        )
-        assertEquals("这是模型忘记加语音标记后的普通回复", target?.parsedReply?.plainText)
+        assertNull(target)
     }
 
     @Test
@@ -167,18 +208,18 @@ class ChatVoiceReplyTest {
     }
 
     @Test
-    fun usesTheLatestStructuredTextPartWhenStreamingRepeatedTheProtocol() {
+    fun readsToolArgumentsInsteadOfSurroundingTextParts() {
         val message = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
-                UIMessagePart.Text("【语音条】旧的流式内容"),
+                UIMessagePart.Text("流式前缀"),
                 UIMessagePart.Tool(
                     toolCallId = "voice-repeat",
                     toolName = CHAT_VOICE_REPLY_TOOL_NAME,
-                    input = "{}",
+                    input = """{"segments":[{"type":"voice","text":"最终内容"},{"type":"text","text":"补充内容"}]}""",
                     output = listOf(UIMessagePart.Text("done")),
                 ),
-                UIMessagePart.Text("【语音条】最终内容【文本】补充内容"),
+                UIMessagePart.Text("后续流式文本"),
             ),
         )
 
@@ -205,40 +246,38 @@ class ChatVoiceReplyTest {
     }
 
     @Test
-    fun hidesStructuredReplyUntilVoiceReplyIsMaterialized() {
+    fun hidesToolReplyUntilVoiceReplyIsMaterialized() {
         val message = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
                 UIMessagePart.Tool(
                     toolCallId = "voice-2",
                     toolName = CHAT_VOICE_REPLY_TOOL_NAME,
-                    input = "{}",
+                    input = """{"segments":[{"type":"voice","text":"先隐藏这段语音正文"}]}""",
                     output = listOf(UIMessagePart.Text("done")),
                 ),
-                UIMessagePart.Text("【语音条】先隐藏这段结构化文本"),
             ),
         )
 
         assertTrue(message.hasPendingChatVoiceReply())
-        val parsed = requireNotNull(parseChatVoiceReply(message.toText()))
+        val parsed = requireNotNull(message.chatVoiceReplyDraft())
         assertFalse(message.withChatVoiceReply(parsed).hasPendingChatVoiceReply())
     }
 
     @Test
-    fun failedVoiceToolIsDetectedAndStructuredReplyFallsBackToPlainText() {
+    fun failedVoiceToolRetainsReadableReplyFromArguments() {
         val message = UIMessage(
             role = MessageRole.ASSISTANT,
             parts = listOf(
                 UIMessagePart.Tool(
                     toolCallId = "voice-error",
                     toolName = CHAT_VOICE_REPLY_TOOL_NAME,
-                    input = "{}",
+                    input = """{"segments":[{"type":"voice","text":"我好想你"},{"type":"text","text":"但这句话仍然要显示"}]}""",
                     output = listOf(UIMessagePart.Text("rikkahub.chat_voice_reply.error:BALANCE")),
                 ),
-                UIMessagePart.Text("【语音条】我好想你【文本】但这句话仍然要显示"),
             ),
         )
-        val parsed = requireNotNull(parseChatVoiceReply(message.toText()))
+        val parsed = requireNotNull(message.chatVoiceReplyDraft())
 
         assertEquals(
             ChatVoiceReplyErrorCode.BALANCE,

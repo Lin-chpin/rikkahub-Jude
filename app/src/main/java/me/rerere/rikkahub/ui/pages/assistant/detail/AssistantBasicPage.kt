@@ -362,30 +362,55 @@ internal fun AssistantBasicContent(
                     Text(
                         text = stringResource(R.string.assistant_page_context_message_desc),
                     )
-                }
-            ) {
-                Slider(
-                    value = assistant.contextMessageSize.toFloat(),
-                    onValueChange = {
-                        onUpdate(
-                            assistant.copy(
-                                contextMessageSize = it.roundToInt()
+                },
+                tail = {
+                    Switch(
+                        checked = assistant.contextMessageLimitEnabled,
+                        onCheckedChange = { enabled ->
+                            onUpdate(
+                                assistant.copy(
+                                    contextMessageLimitEnabled = enabled,
+                                    contextMessageSize = if (enabled && assistant.contextMessageSize <= 0) {
+                                        80
+                                    } else {
+                                        assistant.contextMessageSize
+                                    },
+                                )
                             )
-                        )
-                    },
-                    valueRange = 0f..512f,
-                    steps = 0,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                        },
+                    )
+                },
+            ) {
+                if (assistant.contextMessageLimitEnabled) {
+                    Slider(
+                        value = assistant.contextMessageSize.coerceIn(1, 512).toFloat(),
+                        onValueChange = {
+                            onUpdate(
+                                assistant.copy(
+                                    contextMessageSize = it.roundToInt()
+                                )
+                            )
+                        },
+                        valueRange = 1f..512f,
+                        steps = 0,
+                        modifier = Modifier.fillMaxWidth()
+                    )
 
-                Text(
-                    text = if (assistant.contextMessageSize > 0) stringResource(
-                        R.string.assistant_page_context_message_count,
-                        assistant.contextMessageSize
-                    ) else stringResource(R.string.assistant_page_context_message_unlimited),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.75f),
-                )
+                    Text(
+                        text = stringResource(
+                            R.string.assistant_page_context_message_count,
+                            assistant.contextMessageSize.coerceIn(1, 512)
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.75f),
+                    )
+                } else {
+                    Text(
+                        text = stringResource(R.string.assistant_page_context_message_unlimited),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.75f),
+                    )
+                }
             }
             HorizontalDivider()
             FormItem(

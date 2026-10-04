@@ -40,10 +40,14 @@ import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.isEmptyUIMessage
 import me.rerere.ai.util.KeyRoulette
+import me.rerere.ai.util.GenerationTimingTrace
+import me.rerere.ai.util.textCharacterCount
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.encodeBase64
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
+import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
 import me.rerere.ai.util.parseErrorDetail
 import me.rerere.ai.util.stringSafe
 import me.rerere.ai.util.toHeaders
@@ -133,6 +137,8 @@ class ChatCompletionsAPI(
         messages: List<UIMessage>,
         params: TextGenerationParams,
     ): Flow<MessageChunk> = callbackFlow {
+        val timing = GenerationTimingTrace("chat_completions:${params.model.id}")
+        var receivedCharacters = 0
         val requestBody = buildChatCompletionRequest(
             messages = messages,
             params = params,
@@ -153,6 +159,8 @@ class ChatCompletionsAPI(
         // just for debugging response body
         // println(client.newCall(request).await().body?.string())
 
+        val completedNormally = AtomicBoolean(false)
+        timing.mark("request_ready")
         val listener = object : EventSourceListener() {
             override fun onEvent(
                 eventSource: EventSource,
@@ -160,14 +168,18 @@ class ChatCompletionsAPI(
                 type: String?,
                 data: String
             ) {
-                if (data == "[DONE]") {
-                    println("[onEvent] (done) 结束流: $data")
+                val normalizedData = data.trim()
+                if (normalizedData == "[DONE]") {
+                    timing.mark("sse_done", characters = receivedCharacters)
+                    Log.i(TAG, "stream completed: [DONE]")
+                    completedNormally.set(true)
                     close()
                     return
                 }
-                Log.d(TAG, "onEvent: $data")
-                data
-                    .trim()
+                if (normalizedData.isBlank()) return
+                timing.markOnce("sse_first_event_received")
+                Log.d(TAG, "onEvent: $normalizedData")
+                normalizedData
                     .split("\n")
                     .filter { it.isNotBlank() }
                     .map { json.parseToJsonElement(it).jsonObject }
@@ -183,21 +195,23 @@ class ChatCompletionsAPI(
                         val choiceList = buildList {
                             if (choices.isNotEmpty()) {
                                 val choice = choices[0].jsonObject
-                                val message =
-                                    choice["delta"]?.jsonObject ?: choice["message"]?.jsonObject
-                                    ?: throw Exception("delta/message is null")
-                                val finishReason =
-                                    choice["finish_reason"]?.jsonPrimitive?.contentOrNull
-                                        ?: "unknown"
-                                val parsedMessage = parseMessage(message).withEmptyResponseReason(finishReason)
-                                add(
-                                    UIMessageChoice(
-                                        index = 0,
-                                        delta = parsedMessage,
-                                        message = null,
-                                        finishReason = finishReason,
+                                val message = choice["delta"]?.jsonObject ?: choice["message"]?.jsonObject
+                                if (message == null) {
+                                    Log.w(TAG, "Ignoring chat completion choice without delta/message")
+                                } else {
+                                    val finishReason =
+                                        choice["finish_reason"]?.jsonPrimitive?.contentOrNull
+                                            ?: "unknown"
+                                    val parsedMessage = parseMessage(message).withEmptyResponseReason(finishReason)
+                                    add(
+                                        UIMessageChoice(
+                                            index = 0,
+                                            delta = parsedMessage,
+                                            message = null,
+                                            finishReason = finishReason,
+                                        )
                                     )
-                                )
+                                }
                             }
                         }
                         val usage = parseTokenUsage(it["usage"] as? JsonObject)
@@ -208,11 +222,22 @@ class ChatCompletionsAPI(
                             choices = choiceList,
                             usage = usage
                         )
-                        trySend(messageChunk)
+                        val textCharacters = choiceList.sumOf {
+                            (it.delta ?: it.message)?.textCharacterCount() ?: 0
+                        }
+                        receivedCharacters += textCharacters
+                        timing.firstText("sse_text_received", messageChunk.id, textCharacters)
+                        if (trySend(messageChunk).isFailure) {
+                            timing.firstText("sse_text_delivery_failed", messageChunk.id, textCharacters)
+                        }
                     }
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                if (completedNormally.get()) {
+                    close()
+                    return
+                }
                 var exception = t
 
                 t?.printStackTrace()
@@ -236,14 +261,18 @@ class ChatCompletionsAPI(
             }
 
             override fun onClosed(eventSource: EventSource) {
-                close()
+                if (completedNormally.get()) {
+                    close()
+                } else {
+                    Log.w(TAG, "stream closed before [DONE]")
+                    close(IOException("SSE stream closed before [DONE]"))
+                }
             }
         }
 
         val eventSource = EventSources.createFactory(client).newEventSource(request, listener)
 
         awaitClose {
-            println("[awaitClose] 关闭eventSource ")
             eventSource.cancel()
         }
     }

@@ -491,11 +491,17 @@ private fun ColumnScope.ProviderConfigureOpenAI(
         enabled = selectedAuthType == OpenAIAuthType.API_KEY,
     )
 
-    if (!provider.useResponseApi && selectedAuthType == OpenAIAuthType.API_KEY) {
+    if (selectedAuthType == OpenAIAuthType.API_KEY) {
         OutlinedTextField(
-            value = provider.chatCompletionsPath,
+            value = if (provider.useResponseApi) provider.responsesPath else provider.chatCompletionsPath,
             onValueChange = {
-                onEdit(provider.copy(chatCompletionsPath = it.trim()))
+                onEdit(
+                    if (provider.useResponseApi) {
+                        provider.copy(responsesPath = it.trim())
+                    } else {
+                        provider.copy(chatCompletionsPath = it.trim())
+                    }
+                )
             },
             label = {
                 Text(stringResource(id = R.string.setting_provider_page_api_path))

@@ -67,7 +67,7 @@
   <string name="assistant_page_clone">Clone</string>
   <string name="assistant_page_confirm">Confirm</string>
   <string name="assistant_page_context_message_count">Context Message Size: %d</string>
-  <string name="assistant_page_context_message_desc">Controls how many historical messages will be sent to the model as context. Messages exceeding this number will be ignored, only the most recent N messages will be retained, which can save tokens</string>
+  <string name="assistant_page_context_message_desc">When enabled, older messages are dropped in larger steps after this limit is exceeded, keeping complete user turns and a more stable prompt prefix. This limits message count, not tokens. When disabled, all available history is sent.</string>
   <string name="assistant_page_context_message_size">Context Message Size</string>
   <string name="assistant_page_context_message_unlimited">Unlimited context messages</string>
   <string name="assistant_page_creative">Creative</string>

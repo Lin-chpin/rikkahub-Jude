@@ -75,6 +75,11 @@ class TTSManager(private val context: Context) {
         }
     }
 
+    fun generateRealtimeDialogue(
+        providerSetting: TTSProviderSetting.ElevenLabs,
+        text: Flow<String>,
+    ): Flow<AudioChunk> = elevenLabsProvider.generateRealtimeDialogue(providerSetting, text)
+
     private fun TTSProviderSetting.normalizeKnownProvider(): TTSProviderSetting {
         return when (this) {
             is TTSProviderSetting.OpenAI -> {

@@ -90,6 +90,8 @@ class ChatVM(
             .getGenerationJobStateFlow(_conversationId)
             .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    internal val voiceCallSpeech = chatService.getVoiceCallSpeechFlow(_conversationId)
+
     val processingStatus: StateFlow<String?> =
         chatService
             .getProcessingStatusFlow(_conversationId)
