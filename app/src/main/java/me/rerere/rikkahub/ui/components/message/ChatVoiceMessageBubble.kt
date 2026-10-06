@@ -38,6 +38,8 @@ import me.rerere.hugeicons.stroke.MagicWand01
 import me.rerere.hugeicons.stroke.Pause
 import me.rerere.hugeicons.stroke.Play
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.data.voice.flexibleVoiceCallAudioTags
+import me.rerere.rikkahub.data.voice.withoutFlexibleVoiceCallAudioTags
 import me.rerere.rikkahub.ui.context.LocalTTSState
 import me.rerere.rikkahub.ui.pages.chat.estimateVoiceCallDurationSeconds
 import me.rerere.tts.model.AudioFormat
@@ -57,8 +59,10 @@ internal fun ChatVoiceMessageBubble(
     var textExpanded by remember { mutableStateOf(false) }
     var voicePlaybackSessionId by remember { mutableStateOf<Long?>(null) }
     val audioReady = segment.audioSegments.isNotEmpty()
-    val durationSeconds = remember(segment.text) {
-        estimateVoiceCallDurationSeconds(segment.text)
+    val audioTags = remember(segment.text) { segment.text.flexibleVoiceCallAudioTags() }
+    val speechText = remember(segment.text) { segment.text.withoutFlexibleVoiceCallAudioTags() }
+    val durationSeconds = remember(speechText) {
+        estimateVoiceCallDurationSeconds(speechText)
     }
     val isCurrentPlayback = voicePlaybackSessionId != null &&
         voicePlaybackSessionId == playbackSessionId
@@ -133,6 +137,15 @@ internal fun ChatVoiceMessageBubble(
                         strokeWidth = 2.dp,
                     )
                 }
+            }
+
+            if (!textExpanded && audioTags.isNotEmpty()) {
+                Text(
+                    text = audioTags.joinToString(" "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(start = 40.dp, top = 2.dp),
+                )
             }
 
             if (audioReady) {

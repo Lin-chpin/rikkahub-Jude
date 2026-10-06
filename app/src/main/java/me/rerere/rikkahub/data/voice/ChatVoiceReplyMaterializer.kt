@@ -222,8 +222,16 @@ internal fun findChatVoiceReplyMaterializationTarget(
     val toolMessage = messages[toolMessageIndex]
     if (toolMessage.role != MessageRole.ASSISTANT) return null
     val reply = toolMessage.chatVoiceReplyDraft() ?: return null
+    val replyMessage = messages
+        .drop(toolMessageIndex + 1)
+        .asReversed()
+        .firstOrNull { message ->
+            message.role == MessageRole.ASSISTANT && message.parts.any { part ->
+                part is UIMessagePart.Text && part.text.isNotBlank()
+            }
+        } ?: toolMessage
     return ChatVoiceReplyMaterializationTarget(
-        replyMessage = toolMessage,
+        replyMessage = replyMessage,
         toolMessageId = toolMessage.id,
         parsedReply = reply,
         toolError = toolMessage.parts.filterIsInstance<UIMessagePart.Tool>()

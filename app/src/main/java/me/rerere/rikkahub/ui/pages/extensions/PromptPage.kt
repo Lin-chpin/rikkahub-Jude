@@ -151,7 +151,11 @@ fun PromptPage(vm: PromptVM = koinViewModel()) {
             when (page) {
                 0 -> ModeInjectionTab(
                     modeInjections = settings.modeInjections,
-                    onUpdate = { vm.updateSettings(settings.copy(modeInjections = it)) }
+                    voiceDirectorPrompt = settings.elevenLabsVoiceDirectorPrompt,
+                    onUpdate = { vm.updateSettings(settings.copy(modeInjections = it)) },
+                    onVoiceDirectorPromptUpdate = {
+                        vm.updateSettings(settings.copy(elevenLabsVoiceDirectorPrompt = it))
+                    },
                 )
 
                 1 -> LorebookTab(
@@ -166,7 +170,9 @@ fun PromptPage(vm: PromptVM = koinViewModel()) {
 @Composable
 private fun ModeInjectionTab(
     modeInjections: List<PromptInjection.ModeInjection>,
-    onUpdate: (List<PromptInjection.ModeInjection>) -> Unit
+    voiceDirectorPrompt: String,
+    onUpdate: (List<PromptInjection.ModeInjection>) -> Unit,
+    onVoiceDirectorPromptUpdate: (String) -> Unit,
 ) {
     var expanded by rememberSaveable { mutableStateOf(true) }
     val lazyListState = rememberLazyListState()
@@ -188,7 +194,14 @@ private fun ModeInjectionTab(
     }
     val importSuccessMsg = stringResource(R.string.export_import_success)
     val importFailedMsg = stringResource(R.string.export_import_failed)
-    val importer = rememberImporter(ModeInjectionSerializer) { result ->
+    val importer = rememberImporter(
+        ModeInjectionSerializer,
+        listOf(
+            "application/json",
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+    ) { result ->
         result.onSuccess { imported ->
             onUpdate(currentModeInjections + imported)
             toaster.show(importSuccessMsg)
@@ -210,6 +223,12 @@ private fun ModeInjectionTab(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             state = lazyListState
         ) {
+            item(key = "elevenlabs-voice-worldbook") {
+                VoiceWorldbookPromptCard(
+                    prompt = voiceDirectorPrompt,
+                    onSave = onVoiceDirectorPromptUpdate,
+                )
+            }
             if (modeInjections.isEmpty()) {
                 item {
                     Column(

@@ -49,4 +49,24 @@ class VoiceCallAudioTagPromptTest {
         assertTrue(prompt.contains("only when no supported tag is natural"))
         assertTrue(prompt.contains("LAUGHS, CHUCKLE, BREATH, SIGHS"))
     }
+
+    @Test
+    fun sharesDirectorGuidanceBetweenVoiceCallsAndVoiceBars() {
+        val voiceCallPrompt = buildVoiceCallRealtimeAudioTagPrompt(VoiceCallAudioTagFormat.ELEVEN_LABS_V3)
+        val voiceBarPrompt = buildElevenLabsVoiceDirectorGuidance()
+
+        assertTrue(voiceCallPrompt.contains("[trying not to laugh]"))
+        assertTrue(voiceBarPrompt.contains("[trying not to laugh]"))
+        assertTrue(voiceCallPrompt.contains(voiceBarPrompt))
+    }
+
+    @Test
+    fun enforcesEnglishTagsAfterCustomWorldbookPrompt() {
+        val customPrompt = "中文世界书：请把声音标签写成中文。"
+        val guidance = buildElevenLabsVoiceDirectorGuidance(customPrompt)
+
+        assertTrue(guidance.startsWith(customPrompt))
+        assertTrue(guidance.contains("Every ElevenLabs audio tag must be written in English"))
+        assertTrue(guidance.contains("Keep spoken dialogue in its natural language"))
+    }
 }

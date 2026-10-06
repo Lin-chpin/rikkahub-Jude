@@ -3,6 +3,7 @@ agp = "9.2.1"
 barcodeScanning = "17.3.0"
 cameraCore = "1.6.1"
 dom4j = "2.2.0"
+apache-poi = "5.5.1"
 jlatexmath = "1.3"
 kotlin = "2.3.21"
 coreKtx = "1.18.0"
@@ -71,6 +72,7 @@ androidx-media3-exoplayer = { module = "androidx.media3:media3-exoplayer", versi
 androidx-media3-ui = { module = "androidx.media3:media3-ui", version.ref = "media3" }
 barcode-scanning = { module = "com.google.mlkit:barcode-scanning", version.ref = "barcodeScanning" }
 dom4j = { module = "org.dom4j:dom4j", version.ref = "dom4j" }
+poi-scratchpad = { module = "org.apache.poi:poi-scratchpad", version.ref = "apache-poi" }
 jlatexmath = { module = "com.github.rikkahub.jlatexmath-android:jlatexmath", version.ref = "jlatexmath" }
 jlatexmath-font-greek = { module = "com.github.rikkahub.jlatexmath-android:jlatexmath-font-greek", version.ref = "jlatexmath" }
 jlatexmath-font-cyrillic = { module = "com.github.rikkahub.jlatexmath-android:jlatexmath-font-cyrillic", version.ref = "jlatexmath" }

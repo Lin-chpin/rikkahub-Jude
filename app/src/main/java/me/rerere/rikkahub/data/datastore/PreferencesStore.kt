@@ -26,6 +26,7 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.ai.mcp.McpServerConfig
 import me.rerere.rikkahub.data.ai.prompts.DEFAULT_COMPRESS_PROMPT
+import me.rerere.rikkahub.data.ai.prompts.DEFAULT_ELEVENLABS_VOICE_DIRECTOR_PROMPT
 import me.rerere.rikkahub.data.ai.prompts.DEFAULT_OCR_PROMPT
 import me.rerere.rikkahub.data.ai.prompts.DEFAULT_SUGGESTION_PROMPT
 import me.rerere.rikkahub.data.ai.prompts.DEFAULT_TITLE_PROMPT
@@ -102,6 +103,7 @@ class SettingsStore(
         val OCR_OPENAI_CONFIG = stringPreferencesKey("ocr_openai_config")
         val COMPRESS_MODEL = stringPreferencesKey("compress_model")
         val COMPRESS_PROMPT = stringPreferencesKey("compress_prompt")
+        val ELEVENLABS_VOICE_DIRECTOR_PROMPT = stringPreferencesKey("elevenlabs_voice_director_prompt")
         val COMPRESS_OPENAI_CONFIG = stringPreferencesKey("compress_openai_config")
         val VOICE_CALL_AUDIO_TAG_CONFIG = stringPreferencesKey("voice_call_audio_tag_config")
         val VOICE_CALL_AUDIO_TAG_MODEL = stringPreferencesKey("voice_call_audio_tag_model")
@@ -193,6 +195,8 @@ class SettingsStore(
                 } ?: OcrOpenAIConfig(),
                 compressModelId = preferences[COMPRESS_MODEL]?.let { Uuid.parse(it) },
                 compressPrompt = preferences[COMPRESS_PROMPT] ?: DEFAULT_COMPRESS_PROMPT,
+                elevenLabsVoiceDirectorPrompt = preferences[ELEVENLABS_VOICE_DIRECTOR_PROMPT]
+                    ?: DEFAULT_ELEVENLABS_VOICE_DIRECTOR_PROMPT,
                 compressOpenAIConfig = preferences[COMPRESS_OPENAI_CONFIG]?.let {
                     JsonInstant.decodeFromString(it)
                 } ?: CompressOpenAIConfig(),
@@ -476,6 +480,7 @@ private suspend fun persistSettings(dataStore: DataStore<Preferences>, settings:
         settings.compressModelId?.let { preferences[SettingsStore.COMPRESS_MODEL] = it.toString() }
             ?: preferences.remove(SettingsStore.COMPRESS_MODEL)
         preferences[SettingsStore.COMPRESS_PROMPT] = settings.compressPrompt
+        preferences[SettingsStore.ELEVENLABS_VOICE_DIRECTOR_PROMPT] = settings.elevenLabsVoiceDirectorPrompt
         preferences[SettingsStore.COMPRESS_OPENAI_CONFIG] = JsonInstant.encodeToString(settings.compressOpenAIConfig)
         preferences[SettingsStore.VOICE_CALL_AUDIO_TAG_CONFIG] =
             JsonInstant.encodeToString(settings.voiceCallAudioTagConfig)
@@ -542,6 +547,7 @@ data class Settings(
     val ocrOpenAIConfig: OcrOpenAIConfig = OcrOpenAIConfig(),
     val compressModelId: Uuid? = null,
     val compressPrompt: String = DEFAULT_COMPRESS_PROMPT,
+    val elevenLabsVoiceDirectorPrompt: String = DEFAULT_ELEVENLABS_VOICE_DIRECTOR_PROMPT,
     val voiceCallAudioTagConfig: VoiceCallAudioTagConfig = VoiceCallAudioTagConfig(),
     val voiceCallAudioTagModelId: Uuid? = null,
     val voiceCallAudioTagMode: VoiceCallAudioTagMode = VoiceCallAudioTagMode.SECOND_PASS,

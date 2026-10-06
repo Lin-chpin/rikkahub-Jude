@@ -25,6 +25,7 @@ class ChatToolFactory(
         includeBuildTools: Boolean,
         buildToolAssistantId: Uuid?,
         enabledSkills: Set<String>,
+        ttsVoiceDirectorGuidance: String? = null,
     ): List<Tool> = buildList {
         if (settings.enableWebSearch && BuiltInTools.Search !in model.tools) {
             addAll(createSearchTools(settings))
@@ -38,6 +39,7 @@ class ChatToolFactory(
                 anonymousQuestionScopeId = anonymousQuestionScopeId,
                 includeBuildTools = includeBuildTools,
                 buildToolAssistantId = buildToolAssistantId,
+                ttsVoiceDirectorGuidance = ttsVoiceDirectorGuidance,
             )
         )
         if (enabledSkills.isNotEmpty()) {

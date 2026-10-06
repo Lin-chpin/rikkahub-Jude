@@ -19,16 +19,12 @@ enum class VoiceCallAudioTagMode {
     REALTIME_MODEL,
 }
 
-/**
- * Provider policy is independent from the user preference. The preference
- * remains the fallback for other providers, while the two supported marker
- * providers use their tested modes consistently.
- */
+/** ElevenLabs v3/v4 tags come inline from the primary model; other providers use the saved preference. */
 internal fun VoiceCallAudioTagMode.forVoiceCallProvider(
     provider: TTSProviderSetting?,
 ): VoiceCallAudioTagMode = when {
-    provider?.isElevenLabsV4Family() == true -> VoiceCallAudioTagMode.REALTIME_MODEL
-    provider?.supportsElevenLabsAudioTags() == true -> VoiceCallAudioTagMode.SECOND_PASS
+    provider?.isElevenLabsV4Family() == true || provider?.supportsElevenLabsAudioTags() == true ->
+        VoiceCallAudioTagMode.REALTIME_MODEL
     provider is TTSProviderSetting.MiniMax &&
         provider.model.trim().lowercase() in setOf("speech-2.8-hd", "speech-2.8-turbo") ->
         VoiceCallAudioTagMode.DISABLED

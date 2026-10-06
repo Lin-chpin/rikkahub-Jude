@@ -10,18 +10,22 @@ import org.junit.Test
 
 class VoiceCallSpeechSourceTest {
     @Test
-    fun filtersUnknownInlineTagsForRegularV4Speech() {
-        val input = VoiceCallSpeechInput(
-            message = UIMessage(
-                role = MessageRole.ASSISTANT,
-                parts = listOf(UIMessagePart.Text("[laughs]Hello [unknown]world")),
-            ),
-            finished = true,
-            tagMode = VoiceCallAudioTagMode.REALTIME_MODEL,
-            tagFormat = VoiceCallAudioTagFormat.ELEVEN_LABS_V4,
-        )
+    fun preservesFlexibleInlineTagsForElevenLabsRealtimeSpeech() {
+        listOf(VoiceCallAudioTagFormat.ELEVEN_LABS_V3, VoiceCallAudioTagFormat.ELEVEN_LABS_V4)
+            .forEach { format ->
+                val script = "[annoyed, but amused]Hello [quietly, pretending not to care]world"
+                val input = VoiceCallSpeechInput(
+                    message = UIMessage(
+                        role = MessageRole.ASSISTANT,
+                        parts = listOf(UIMessagePart.Text(script)),
+                    ),
+                    finished = true,
+                    tagMode = VoiceCallAudioTagMode.REALTIME_MODEL,
+                    tagFormat = format,
+                )
 
-        assertEquals("[laughs]Hello world", input.speechText())
+                assertEquals(script, input.speechText())
+            }
     }
 
     @Test

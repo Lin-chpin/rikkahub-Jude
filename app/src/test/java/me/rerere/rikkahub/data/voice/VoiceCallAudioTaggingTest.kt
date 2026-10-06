@@ -207,10 +207,10 @@ class VoiceCallAudioTaggingTest {
     }
 
     @Test
-    fun keepsElevenLabsV3OnSecondPass() {
+    fun usesPrimaryModelTagsForElevenLabsV3() {
         val provider = TTSProviderSetting.ElevenLabs(model = "eleven_v3")
         assertEquals(VoiceCallAudioTagFormat.ELEVEN_LABS_V3, provider.voiceCallAudioTagFormatOrNull())
-        assertEquals(VoiceCallAudioTagMode.SECOND_PASS, VoiceCallAudioTagMode.DISABLED.forVoiceCallProvider(provider))
+        assertEquals(VoiceCallAudioTagMode.REALTIME_MODEL, VoiceCallAudioTagMode.DISABLED.forVoiceCallProvider(provider))
     }
 
     @Test

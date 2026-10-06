@@ -21,6 +21,7 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.rikkahub.data.ai.prompts.buildElevenLabsVoiceDirectorGuidance
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.repository.MomentRepository
 import me.rerere.rikkahub.data.repository.AnonymousQuestionRepository
@@ -243,30 +244,39 @@ class LocalTools(
         )
     }
 
-    val ttsTool by lazy {
-        Tool(
+    private fun ttsTool(voiceDirectorGuidance: String?): Tool {
+        val description = buildString {
+            append(
+                """
+                    Use voice as a way to speak directly to the user when it adds natural expression. In direct first-person conversation, voice may be used whenever it fits; it does not require a phone or recording scene. Prefer text for code, commands, lists, and detailed explanations unless spoken delivery clearly helps. In narrative or novel-style roleplay, use this tool only when the scene explicitly has a character recording or sending a phone/audio voice message. Spoken dialogue by itself is not an in-world recording. If no such message is happening, answer normally as text.
+                    For a voice reply, call this tool once with the complete reply in ordered segments: type=voice for the exact words actually spoken into the recording, type=text for visible narration or other content that is not spoken. Keep actions, inner thoughts, and scene descriptions in text; never put them in voice. Do not repeat the reply outside this call. Keep a continuous spoken thought in one voice segment and use another only for a distinct conversational purpose. Do not wrap text in HTML (such as <div> or <pre>) or add display/style markup. Do not call this tool just because audio was mentioned. Only invoke it when you are actually choosing to send spoken audio. If you answer normally in text, do not claim that you called, sent, or delivered a voice reply. The tool result confirms only that segments were accepted for client-side synthesis, not that audio generation or delivery succeeded.
+                """.trimIndent().replace("\n", " ")
+            )
+            if (voiceDirectorGuidance != null) {
+                append("\n\nFor type=voice segments only, follow these ElevenLabs performance directions:\n")
+                append(buildElevenLabsVoiceDirectorGuidance(voiceDirectorGuidance))
+            }
+        }
+        return Tool(
             name = CHAT_VOICE_REPLY_TOOL_NAME,
-            description = """
-                Choose voice as a way to speak directly to the user when it adds natural expression to this conversation. Consider the user's intent, context, tone, and how much information they need to read. Ordinary answers, code, commands, lists, and detailed explanations usually work better as text. A short reply or strong emotion alone does not require voice.
-                For a reply containing voice, call this tool once as your final reply. Put the entire reply in the ordered segments argument: type voice for words to synthesize, type text for content to display without speech. Do not output the same reply outside this call or use voice/text markers. If the reply is text only, answer normally without calling this tool.
-                Keep a continuous spoken thought in one voice segment; use another only for a distinct conversational purpose. In voice segments, stay in your current conversational role. Speak in the first person and include only words you would actually say to the user; omit inner thoughts, actions, scene descriptions, and stage directions. Do not call this tool just because the user mentioned audio.
-            """.trimIndent().replace("\n", " "),
+            description = description,
             parameters = {
                 InputSchema.Obj(
                     properties = buildJsonObject {
                         put("segments", buildJsonObject {
                             put("type", "array")
-                            put("description", "The complete reply in display order. Only voice segments are sent to TTS.")
+                            put("description", "Complete reply in display order. Use text for visible narration/content that is not spoken, and voice only for exact words spoken in an eligible conversational reply or explicit in-world phone/audio message. Never put HTML or style wrappers here. ElevenLabs delivery tags belong inline only in voice text.")
                             put("items", buildJsonObject {
                                 put("type", "object")
                                 put("properties", buildJsonObject {
                                     put("type", buildJsonObject {
                                         put("type", "string")
+                                        put("description", "text = displayed only, not spoken; voice = synthesized speech containing only actual spoken words.")
                                         put("enum", buildJsonArray { add("text"); add("voice") })
                                     })
                                     put("text", buildJsonObject {
                                         put("type", "string")
-                                        put("description", "Visible text, or exact first-person words spoken in the current conversational role when type is voice.")
+                                        put("description", "Plain text with no HTML/style wrapper. For type=voice, use only the exact first-person words spoken by the character; write every ElevenLabs vocal delivery tag in English even when the spoken words are Chinese. For type=text, use visible narration or other non-spoken content.")
                                     })
                                 })
                                 put("required", buildJsonArray { add("type"); add("text") })
@@ -963,6 +973,7 @@ class LocalTools(
         anonymousQuestionScopeId: Uuid? = null,
         includeBuildTools: Boolean = false,
         buildToolAssistantId: Uuid? = null,
+        ttsVoiceDirectorGuidance: String? = null,
     ): List<Tool> {
         val tools = mutableListOf<Tool>()
         if (options.contains(LocalToolOption.JavascriptEngine)) {
@@ -975,7 +986,7 @@ class LocalTools(
             tools.add(clipboardTool)
         }
         if (options.contains(LocalToolOption.Tts)) {
-            tools.add(ttsTool)
+            tools.add(ttsTool(ttsVoiceDirectorGuidance))
         }
         if (options.contains(LocalToolOption.AskUser)) {
             tools.add(askUserTool)

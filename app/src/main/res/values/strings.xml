@@ -579,6 +579,9 @@
   <string name="prompt_page_lorebook_tab">Lorebook</string>
   <string name="prompt_page_mode_injection_empty">No mode injections</string>
   <string name="prompt_page_mode_injection_tab">Mode Injection</string>
+  <string name="prompt_page_voice_worldbook_title">《Elevenlab v4通用语音世界书》</string>
+  <string name="prompt_page_voice_worldbook_pinned">Pinned</string>
+  <string name="prompt_page_voice_worldbook_description">Shared by ElevenLabs voice calls and voice replies. It does not enter ordinary chat prompts.</string>
   <string name="prompt_page_name">Name</string>
   <string name="prompt_page_new_keyword">New Keyword</string>
   <string name="prompt_page_position_after_system">After System Prompt</string>

@@ -103,13 +103,14 @@ fun <T> rememberExporter(
 @Stable
 class ImporterState<T>(
     private val serializer: ExportSerializer<T>,
+    private val mimeTypes: List<String>,
     private val context: Context,
     private val scope: CoroutineScope,
     private val openDocumentLauncher: ManagedActivityResultLauncher<Array<String>, Uri?>,
     private val onResult: (Result<T>) -> Unit,
 ) {
     fun importFromFile() {
-        openDocumentLauncher.launch(arrayOf("application/json"))
+        openDocumentLauncher.launch(mimeTypes.toTypedArray())
     }
 
     internal fun handleUri(uri: Uri) {
@@ -125,6 +126,7 @@ class ImporterState<T>(
 @Composable
 fun <T> rememberImporter(
     serializer: ExportSerializer<T>,
+    mimeTypes: List<String> = listOf("application/json"),
     onResult: (Result<T>) -> Unit,
 ): ImporterState<T> {
     val context = LocalContext.current
@@ -138,9 +140,10 @@ fun <T> rememberImporter(
         uri?.let { pendingState?.handleUri(it) }
     }
 
-    val state = remember(serializer) {
+    val state = remember(serializer, mimeTypes) {
         ImporterState(
             serializer = serializer,
+            mimeTypes = mimeTypes,
             context = context,
             scope = scope,
             openDocumentLauncher = openDocumentLauncher,

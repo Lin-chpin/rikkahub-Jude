@@ -7,7 +7,7 @@ import me.rerere.rikkahub.data.voice.VoiceCallAudioTagFormat
 import me.rerere.tts.provider.TTSProviderSetting
 
 /**
- * Builds the provider-neutral second-pass direction prompt.
+ * Builds the provider-neutral second-pass direction prompt for formats that still use one.
  *
  * The selected IDs come from the shared catalog. Provider delimiters are added
  * only after validation, outside the model response.
@@ -104,37 +104,21 @@ internal fun buildVoiceCallAudioTagPrompt(format: VoiceCallAudioTagFormat): Stri
 
 /**
  * Prompt used by the primary voice-call reply when tags are produced inline.
- * The provider/model branch is selected by the client; the model only sees
- * the finite vocabulary and output contract.
  */
-internal fun buildVoiceCallRealtimeAudioTagPrompt(format: VoiceCallAudioTagFormat): String {
+internal fun buildVoiceCallRealtimeAudioTagPrompt(
+    format: VoiceCallAudioTagFormat,
+    voiceDirectorPrompt: String = DEFAULT_ELEVENLABS_VOICE_DIRECTOR_PROMPT,
+): String {
     return when (format) {
-        VoiceCallAudioTagFormat.ELEVEN_LABS_V3 -> {
-            val allowedWords = VoiceCallAudioTag.entries.joinToString(", ") { it.word }
+        VoiceCallAudioTagFormat.ELEVEN_LABS_V3,
+        VoiceCallAudioTagFormat.ELEVEN_LABS_V4,
+            -> {
             """
             [VOICE_CALL_AUDIO_TAG_PROTOCOL]
-            For every completed spoken sentence, choose one delivery tag from this exact catalog:
-            $allowedWords
-            Put the chosen word in square brackets immediately before the sentence. Use only catalog words; never invent a tag, use a mood word, or write a tag explanation. Keep the tag in the reply text because it is part of the speech protocol. Do not output a separate tag list or JSON object. If a sentence has no suitable event, choose the closest catalog event that is natural rather than omitting the required tag.
-            """.trimIndent()
-        }
-
-        VoiceCallAudioTagFormat.ELEVEN_LABS_V4 -> {
-            val allowedWords = VoiceCallAudioTag.entries.joinToString(", ") { it.word }
-            """
-            [VOICE_CALL_AUDIO_TAG_PROTOCOL]
-            Stay in the configured assistant character and speak directly to the caller in first
-            person, as in a live phone conversation. Use "I/me" or "我" where natural without
-            forcing the pronoun into every sentence. Never refer to yourself in third person or
-            narrate your actions, expressions, feelings, or surroundings; output only words meant
-            to be spoken to the caller.
-            For every completed spoken sentence, choose one delivery tag from this exact catalog:
-            $allowedWords
-            Put the chosen word in square brackets immediately before the sentence. Use only catalog
-            words; never invent a tag, use a mood word, or write a tag explanation. Keep the tag in
-            the reply text because it is part of the speech protocol. Do not output a separate tag
-            list or JSON object. If a sentence has no suitable event, choose the closest catalog
-            event that is natural rather than omitting the required tag.
+            ${buildElevenLabsVoiceDirectorGuidance(voiceDirectorPrompt)}
+            Output only the final speakable script with inline square-bracketed audio directions. Do not
+            explain tags or your process. Do not output analysis, Markdown, code fences, angle-bracket
+            control markers, visual actions, or unspoken narration.
             """.trimIndent()
         }
 

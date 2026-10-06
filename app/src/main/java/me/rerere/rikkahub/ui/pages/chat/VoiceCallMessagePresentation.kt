@@ -5,6 +5,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.VoiceCallAudioSegment
 import me.rerere.rikkahub.data.voice.voiceCallDisplayTextOrPlainText
+import me.rerere.rikkahub.data.voice.withoutVoiceCallRealtimeEmotionMarker
 
 internal sealed interface VoiceCallDisplayItem {
     data class Text(val text: String) : VoiceCallDisplayItem
@@ -42,7 +43,7 @@ internal fun UIMessage.voiceCallDisplayItems(
             .flatMap { it.audioSegments }
     }
     val fullText = when (role) {
-        MessageRole.ASSISTANT -> voiceCallDisplayTextOrPlainText()
+        MessageRole.ASSISTANT -> voiceCallDisplayTextOrPlainText().withoutVoiceCallRealtimeEmotionMarker()
         else -> toText()
     }
     val isCurrentAssistant = role == MessageRole.ASSISTANT && id.toString() == currentAssistantId

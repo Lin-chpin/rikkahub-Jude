@@ -9,6 +9,7 @@ import me.rerere.ai.ui.ChatVoiceReplySegmentType
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.voice.withoutFlexibleVoiceCallAudioTags
 import java.util.Locale
 
 @Composable
@@ -39,7 +40,7 @@ internal fun ChatVoiceReplyContent(
                 ChatVoiceReplySegmentType.VOICE -> ChatVoiceMessageBubble(
                     segment = segment,
                     onTranslate = onTranslateSegment?.let { callback ->
-                        { locale -> callback(message, index, segment.text, locale) }
+                        { locale -> callback(message, index, segment.text.withoutFlexibleVoiceCallAudioTags(), locale) }
                     },
                     onClearTranslation = onClearSegmentTranslation?.let { callback ->
                         { callback(message, index) }

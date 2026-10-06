@@ -545,6 +545,9 @@
   <string name="prompt_page_lorebook_tab">世界书</string>
   <string name="prompt_page_mode_injection_empty">暂无模式注入</string>
   <string name="prompt_page_mode_injection_tab">模式注入</string>
+  <string name="prompt_page_voice_worldbook_title">《Elevenlab v4通用语音世界书》</string>
+  <string name="prompt_page_voice_worldbook_pinned">置顶</string>
+  <string name="prompt_page_voice_worldbook_description">通话和语音条共用；不会注入普通聊天提示词。</string>
   <string name="prompt_page_name">名称</string>
   <string name="prompt_page_new_keyword">新关键词</string>
   <string name="prompt_page_position_after_system">系统提示词后</string>

@@ -914,6 +914,14 @@ class ChatService(
                 (voiceCallRuntimeState != VoiceCallRuntimeState.INACTIVE && it == LocalToolOption.VoiceCall) ||
                     (it == LocalToolOption.Tts && (requestMode != ChatRequestMode.Normal || !voiceCallConfigured))
             }
+            val ttsVoiceDirectorGuidance = settings.getSelectedTTSProvider()
+                ?.voiceCallAudioTagFormatOrNull()
+                ?.takeIf {
+                    requestMode == ChatRequestMode.Normal &&
+                        LocalToolOption.Tts in localToolOptions &&
+                        (it == VoiceCallAudioTagFormat.ELEVEN_LABS_V3 || it == VoiceCallAudioTagFormat.ELEVEN_LABS_V4)
+                }
+                ?.let { settings.elevenLabsVoiceDirectorPrompt }
             val proactiveVoiceCallEnabled = voiceCallToolEnabled
             val momentScopeId = conversation.momentScopeId(assistant)
             val anonymousQuestionScopeId = conversation.personaScopeId(assistant)
@@ -949,7 +957,11 @@ class ChatService(
                         ChatRequestMode.Normal -> null
                         ChatRequestMode.VoiceCall -> listOf(
                             VOICE_CALL_SYSTEM_PROMPT_COMMON.trimIndent(),
-                            buildVoiceCallAudioTagPrompt(voiceCallAudioTagMode, voiceCallAudioTagFormat),
+                            buildVoiceCallAudioTagPrompt(
+                                voiceCallAudioTagMode,
+                                voiceCallAudioTagFormat,
+                                settings.elevenLabsVoiceDirectorPrompt,
+                            ),
                         ).joinToString("\n\n")
                     },
                     PROACTIVE_VOICE_CALL_SYSTEM_PROMPT.trimIndent().takeIf { proactiveVoiceCallEnabled },
@@ -986,6 +998,7 @@ class ChatService(
                     includeBuildTools = requestMode == ChatRequestMode.Normal,
                     buildToolAssistantId = assistant.id,
                     enabledSkills = assistant.enabledSkills,
+                    ttsVoiceDirectorGuidance = ttsVoiceDirectorGuidance,
                 ),
             )
             var latestPrimaryMessages: List<UIMessage>? = null

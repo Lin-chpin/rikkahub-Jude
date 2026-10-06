@@ -40,6 +40,22 @@ class ChatVoiceReplyTest {
     }
 
     @Test
+    fun keepsInlineTagsInVoiceBubbleButHidesThemFromMainReplyText() {
+        val parsed = requireNotNull(parseChatVoiceReplyArguments(Json.parseToJsonElement("""
+            {"segments":[
+              {"type":"voice","text":"[softly, affectionate]我想你。"},
+              {"type":"text","text":"普通说明 [literal]"}
+            ]}
+        """)))
+        val materialized = UIMessage(role = MessageRole.ASSISTANT, parts = emptyList()).withChatVoiceReply(parsed)
+
+        assertEquals("[softly, affectionate]我想你。", parsed.segments.first().text)
+        assertEquals("我想你。\n\n普通说明 [literal]", parsed.plainText)
+        assertEquals("[softly, affectionate]我想你。", materialized.chatVoiceReply()?.segments?.first()?.text)
+        assertFalse(materialized.toText().contains("[softly, affectionate]"))
+    }
+
+    @Test
     fun supportsOneWholeVoiceSegmentAndRejectsTextOnlyArguments() {
         val wholeVoice = requireNotNull(parseChatVoiceReplyArguments(Json.parseToJsonElement(
             """{"segments":[{"type":"voice","text":"第一句。第二句！第三句？"}]}"""
@@ -132,7 +148,7 @@ class ChatVoiceReplyTest {
     }
 
     @Test
-    fun ignoresTextAfterTheVoiceToolInsteadOfReadingItAgain() {
+    fun materializesToolSegmentsOnTheFinalVisibleAssistantMessage() {
         val existingMessage = UIMessage.user("请发一条语音")
         val firstToolReply = UIMessage(
             role = MessageRole.ASSISTANT,
@@ -155,7 +171,7 @@ class ChatVoiceReplyTest {
             generationBaseMessageIds = setOf(existingMessage.id),
         )
 
-        assertEquals(firstToolReply.id, target?.replyMessage?.id)
+        assertEquals(finalReply.id, target?.replyMessage?.id)
         assertEquals(listOf("第一次流式输出"), target?.parsedReply?.segments?.map { it.text })
     }
 

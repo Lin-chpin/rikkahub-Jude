@@ -21,7 +21,6 @@ import me.rerere.ai.util.GenerationTimingTrace
 import me.rerere.rikkahub.data.files.FileFolders
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.voice.VoiceCallSpeechInput
-import me.rerere.rikkahub.data.voice.withOnlyKnownVoiceCallAudioTags
 import me.rerere.rikkahub.data.voice.withoutIncompleteVoiceCallAudioTag
 import me.rerere.rikkahub.data.voice.withoutVoiceCallRealtimeEmotionMarker
 import me.rerere.rikkahub.service.sanitizeVoiceCallTextForSpeech
@@ -117,7 +116,6 @@ internal fun BindVoiceCallRealtimeTtsPlayback(
                         .withoutIncompleteVoiceCallAudioTag()
                         .withoutVoiceCallRealtimeEmotionMarker()
                     val speechText = stableRawText
-                        .withOnlyKnownVoiceCallAudioTags()
                         .sanitizeVoiceCallTextForSpeech()
 
                     if (speechText.startsWith(sentSpeechText)) {

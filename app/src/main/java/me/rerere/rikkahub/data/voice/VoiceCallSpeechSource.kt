@@ -30,15 +30,6 @@ internal data class VoiceCallSpeechInput(
             tagMode == VoiceCallAudioTagMode.REALTIME_MODEL -> reply.toText()
                 .withoutIncompleteVoiceCallAudioTag()
                 .withoutVoiceCallRealtimeEmotionMarker()
-                .let {
-                    if (tagFormat == VoiceCallAudioTagFormat.ELEVEN_LABS_V3 ||
-                        tagFormat == VoiceCallAudioTagFormat.ELEVEN_LABS_V4
-                    ) {
-                        it.withOnlyKnownVoiceCallAudioTags()
-                    } else {
-                        it
-                    }
-                }
             tagMode == VoiceCallAudioTagMode.SECOND_PASS && tagFormat != null &&
                 !reply.hasVoiceCallAudioTagMetadata() && !finished -> ""
             else -> reply.voiceCallSpeechTextOrPlainText().withoutVoiceCallRealtimeEmotionMarker()

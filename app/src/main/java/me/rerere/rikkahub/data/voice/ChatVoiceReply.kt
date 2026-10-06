@@ -13,13 +13,17 @@ import me.rerere.ai.ui.UIMessagePart
 
 const val CHAT_VOICE_REPLY_TOOL_NAME = "text_to_speech"
 
-const val CHAT_VOICE_REPLY_TOOL_RESULT_PROMPT = "Reply delivered. Do not repeat it."
+const val CHAT_VOICE_REPLY_TOOL_RESULT_PROMPT =
+    "Voice segments accepted for client-side synthesis. Audio generation and delivery are not confirmed. Do not repeat the segments or claim they were sent."
 
 data class ParsedChatVoiceReply(
     val segments: List<ChatVoiceReplySegment>,
 ) {
-    val plainText: String = segments.joinToString("\n\n") { it.text }
+    val plainText: String = segments.joinToString("\n\n") { it.displayText() }
 }
+
+private fun ChatVoiceReplySegment.displayText(): String =
+    if (type == ChatVoiceReplySegmentType.VOICE) text.withoutFlexibleVoiceCallAudioTags() else text
 
 internal fun parseChatVoiceReplyArguments(arguments: JsonElement): ParsedChatVoiceReply? {
     val items = ((arguments as? JsonObject)?.get("segments") as? JsonArray) ?: return null

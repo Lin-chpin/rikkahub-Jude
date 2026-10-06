@@ -14,13 +14,33 @@ class VoiceCallRealtimeAudioTagTest {
     }
 
     @Test
-    fun asksRegularV4ToTagEverySentenceLikeTurboAndStayInFirstPerson() {
-        val prompt = buildVoiceCallRealtimeAudioTagPrompt(VoiceCallAudioTagFormat.ELEVEN_LABS_V4)
-            .replace(Regex("\\s+"), " ")
+    fun extractsInlineAudioTagsForVoiceBarDisplay() {
+        assertEquals(
+            listOf("[softly]", "[laughs]"),
+            "[softly]你好。[laughs]".flexibleVoiceCallAudioTags(),
+        )
+    }
 
-        assertTrue(prompt.contains("first person"))
-        assertTrue(prompt.contains("For every completed spoken sentence"))
-        assertTrue(prompt.contains("choose the closest catalog event"))
-        assertFalse(prompt.contains("No tag is the normal choice"))
+    @Test
+    fun sharesFlexiblePerformanceDirectionBetweenElevenLabsV3AndV4() {
+        listOf(VoiceCallAudioTagFormat.ELEVEN_LABS_V3, VoiceCallAudioTagFormat.ELEVEN_LABS_V4)
+            .forEach { format ->
+                val prompt = buildVoiceCallRealtimeAudioTagPrompt(format)
+                    .replace(Regex("\\s+"), " ")
+
+                assertTrue(prompt.contains("first person"))
+                assertTrue(prompt.contains("Tags may be concise free-form directions"))
+                assertTrue(prompt.contains("Every ElevenLabs audio tag must be written in English"))
+                assertTrue(prompt.contains("Do not tag every sentence"))
+                assertFalse(prompt.contains("exact catalog"))
+            }
+    }
+
+    @Test
+    fun parsesAndRemovesAngleBracketedMiniMaxEmotionControlMarkers() {
+        val response = "__VOICE_CALL_EMOTION__: <happy>\n[softly]你好。"
+
+        assertEquals("happy", response.voiceCallRealtimeEmotionOrNull())
+        assertEquals("[softly]你好。", response.withoutVoiceCallRealtimeEmotionMarker())
     }
 }

@@ -12,6 +12,9 @@ import me.rerere.rikkahub.data.model.InjectionPosition
 import me.rerere.rikkahub.data.model.Lorebook
 import me.rerere.rikkahub.data.model.PromptInjection
 import me.rerere.rikkahub.utils.toLocalString
+import me.rerere.document.DocParser
+import me.rerere.document.DocxParser
+import java.io.File
 import java.time.LocalDateTime
 import kotlin.uuid.Uuid
 
@@ -78,10 +81,50 @@ object ModeInjectionSerializer : ExportSerializer<PromptInjection.ModeInjection>
 
     override fun import(context: Context, uri: Uri): Result<PromptInjection.ModeInjection> {
         return runCatching {
-            val json = readUri(context, uri)
-            // 首先尝试解析为自己的格式
-            tryImportNative(json)
-                ?: throw IllegalArgumentException("Unsupported format")
+            val fileName = getUriFileName(context, uri).orEmpty()
+            val mimeType = context.contentResolver.getType(uri)
+            val extension = fileName.substringAfterLast('.', "").lowercase()
+            val documentType = when {
+                extension == "docx" || mimeType == DOCX_MIME_TYPE -> "docx"
+                extension == "doc" || mimeType == DOC_MIME_TYPE -> "doc"
+                else -> null
+            }
+            if (documentType != null) {
+                importDocument(context, uri, fileName, documentType)
+            } else {
+                val json = readUri(context, uri)
+                tryImportNative(json)
+                    ?: throw IllegalArgumentException("Unsupported format")
+            }
+        }
+    }
+
+    private fun importDocument(
+        context: Context,
+        uri: Uri,
+        fileName: String,
+        documentType: String,
+    ): PromptInjection.ModeInjection {
+        val file = File.createTempFile("prompt-injection-", ".$documentType", context.cacheDir)
+        try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                file.outputStream().use(input::copyTo)
+            } ?: error("Failed to read file")
+            val content = when (documentType) {
+                "doc" -> DocParser.parse(file)
+                else -> DocxParser.parse(file).also {
+                    require(!it.startsWith("Error parsing") && it != "Unable to find document content in DOCX file") {
+                        it
+                    }
+                }
+            }
+            require(content.isNotBlank()) { "Document contains no text" }
+            return PromptInjection.ModeInjection(
+                name = fileName.substringBeforeLast('.', fileName),
+                content = content,
+            )
+        } finally {
+            file.delete()
         }
     }
 
@@ -97,6 +140,10 @@ object ModeInjectionSerializer : ExportSerializer<PromptInjection.ModeInjection>
                 .copy(id = Uuid.random())
         }.getOrNull()
     }
+
+    private const val DOC_MIME_TYPE = "application/msword"
+    private const val DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
 }
 
 object LorebookSerializer : ExportSerializer<Lorebook> {

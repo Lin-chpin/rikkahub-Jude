@@ -6,6 +6,7 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.voice.VoiceCallAudioTagFormat
 import me.rerere.rikkahub.data.voice.VoiceCallAudioTagMode
 import me.rerere.rikkahub.data.ai.prompts.buildVoiceCallRealtimeAudioTagPrompt
+import me.rerere.rikkahub.data.ai.prompts.DEFAULT_ELEVENLABS_VOICE_DIRECTOR_PROMPT
 
 private const val ACTIVE_VOICE_CALL_REPLY_CHARACTER_LIMIT = 200
 
@@ -22,9 +23,10 @@ internal data class VoiceCallRuntimeContext(
 internal fun buildVoiceCallAudioTagPrompt(
     mode: VoiceCallAudioTagMode,
     format: VoiceCallAudioTagFormat?,
+    voiceDirectorPrompt: String = DEFAULT_ELEVENLABS_VOICE_DIRECTOR_PROMPT,
 ): String = when {
     mode == VoiceCallAudioTagMode.REALTIME_MODEL && format != null ->
-        buildVoiceCallRealtimeAudioTagPrompt(format)
+        buildVoiceCallRealtimeAudioTagPrompt(format, voiceDirectorPrompt)
 
     else -> """
         [VOICE_CALL_AUDIO_TAG_MODE]
@@ -36,10 +38,11 @@ internal fun buildVoiceCallAudioTagPrompt(
 internal fun buildVoiceCallToolTagStatus(
     mode: VoiceCallAudioTagMode,
     format: VoiceCallAudioTagFormat?,
+    voiceDirectorPrompt: String = DEFAULT_ELEVENLABS_VOICE_DIRECTOR_PROMPT,
 ): String = """
     Voice-call state: ACTIVE. The call is connected.
     Follow the current voice-call audio-tag mode exactly: ${mode.name}.
-    ${buildVoiceCallAudioTagPrompt(mode, format)}
+    ${buildVoiceCallAudioTagPrompt(mode, format, voiceDirectorPrompt)}
 """.trimIndent()
 
 internal fun ChatRequestMode.defaultVoiceCallRuntimeState(): VoiceCallRuntimeState =
