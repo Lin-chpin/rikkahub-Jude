@@ -39,6 +39,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.adaptive.currentWindowDpSize
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import me.rerere.rikkahub.ui.theme.LocalLiquidGlass
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -315,6 +316,7 @@ private fun ChatPageContent(
     }.collectAsStateWithLifecycle(false)
     val anonymousQuestionUnread = anonymousQuestionBoxEnabled && rawAnonymousQuestionUnread
     val hazeState = rememberHazeState()
+    val glassBackdropState = rememberHazeState()
 
     TTSAutoPlay(
         vm = vm,
@@ -334,13 +336,13 @@ private fun ChatPageContent(
     }
 
     Surface(
-        color = MaterialTheme.colorScheme.background,
+        color = if (LocalLiquidGlass.current.enabled) Color.Transparent else MaterialTheme.colorScheme.background,
         modifier = Modifier.fillMaxSize()
     ) {
         AssistantBackground(
             setting = setting,
             assistant = assistant,
-            modifier = Modifier.hazeSource(hazeState),
+            modifier = Modifier.hazeSource(hazeState).hazeSource(glassBackdropState),
         )
         Scaffold(
             topBar = {
@@ -401,7 +403,7 @@ private fun ChatPageContent(
                     settings = setting,
                     conversation = conversation,
                     mcpManager = vm.mcpManager,
-                    hazeState = hazeState,
+                    hazeState = if (LocalLiquidGlass.current.enabled) glassBackdropState else hazeState,
                     onCancelClick = {
                         vm.stopGeneration()
                     },
@@ -510,6 +512,7 @@ private fun ChatPageContent(
                 externalEditorVisible = summaryEditorVisible,
                 settings = setting,
                 hazeState = hazeState,
+                glassHazeState = glassBackdropState,
                 errors = errors,
                 onDismissError = onDismissError,
                 onClearAllErrors = onClearAllErrors,

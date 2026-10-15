@@ -1208,4 +1208,14 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="setting_page_preferences_general_desc">交互行为、滚动、输入设置</string>
   <string name="setting_page_preferences_ui">界面偏好设置</string>
   <string name="setting_page_preferences_ui_desc">消息显示、字体、代码块</string>
+  <string name="liquid_glass_dialog">对话框</string>
+  <string name="liquid_glass_opacity_title">玻璃底色不透明度</string>
+  <string name="liquid_glass_title">液态玻璃</string>
+  <string name="liquid_glass_settings_desc">透明度、背景模糊</string>
+  <string name="liquid_glass_workspace_group">输入框与展开工作区</string>
+  <string name="liquid_glass_other_group">气泡与其他组件</string>
+  <string name="liquid_glass_blur_title">磨砂强度</string>
+  <string name="liquid_glass_blur_unsupported">背景模糊需要 Android 12 或以上版本。</string>
+  <string name="liquid_glass_preview_assistant">看看背景的磨砂效果</string>
+  <string name="liquid_glass_preview_user">试着调节两个滑块</string>
 </resources>

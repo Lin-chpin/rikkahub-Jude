@@ -82,6 +82,11 @@ class SettingsStore(
         // UI设置
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
         val THEME_ID = stringPreferencesKey("theme_id")
+        val LIQUID_GLASS_OPACITY = intPreferencesKey("liquid_glass_opacity")
+        val LIQUID_GLASS_ENABLED = booleanPreferencesKey("liquid_glass_enabled")
+        val LIQUID_GLASS_BLUR = intPreferencesKey("liquid_glass_blur")
+        val LIQUID_GLASS_WORKSPACE_OPACITY = intPreferencesKey("liquid_glass_workspace_opacity")
+        val LIQUID_GLASS_WORKSPACE_BLUR = intPreferencesKey("liquid_glass_workspace_blur")
         val CUSTOM_THEMES = stringPreferencesKey("custom_themes")
         val DISPLAY_SETTING = stringPreferencesKey("display_setting")
         val DEVELOPER_MODE = booleanPreferencesKey("developer_mode")
@@ -212,7 +217,12 @@ class SettingsStore(
                 providers = JsonInstant.decodeFromString(preferences[PROVIDERS] ?: "[]"),
                 assistants = JsonInstant.decodeFromString(preferences[ASSISTANTS] ?: "[]"),
                 dynamicColor = preferences[DYNAMIC_COLOR] != false,
-                themeId = preferences[THEME_ID] ?: PresetThemes[0].id,
+                themeId = (preferences[THEME_ID] ?: PresetThemes[0].id).let { if (it == "liquid-glass") "ocean" else it },
+                liquidGlassEnabled = preferences[LIQUID_GLASS_ENABLED] ?: (preferences[THEME_ID] == "liquid-glass"),
+                liquidGlassOpacity = (preferences[LIQUID_GLASS_OPACITY] ?: 20).coerceIn(0, 100),
+                liquidGlassBlur = (preferences[LIQUID_GLASS_BLUR] ?: 24).coerceIn(0, 60),
+                liquidGlassWorkspaceOpacity = (preferences[LIQUID_GLASS_WORKSPACE_OPACITY] ?: preferences[LIQUID_GLASS_OPACITY] ?: 20).coerceIn(0, 100),
+                liquidGlassWorkspaceBlur = (preferences[LIQUID_GLASS_WORKSPACE_BLUR] ?: preferences[LIQUID_GLASS_BLUR] ?: 24).coerceIn(0, 60),
                 customThemes = preferences[CUSTOM_THEMES]?.let {
                     JsonInstant.decodeFromString(it)
                 } ?: emptyList(),
@@ -458,6 +468,11 @@ private suspend fun persistSettings(dataStore: DataStore<Preferences>, settings:
     dataStore.edit { preferences ->
         preferences[SettingsStore.DYNAMIC_COLOR] = settings.dynamicColor
         preferences[SettingsStore.THEME_ID] = settings.themeId
+        preferences[SettingsStore.LIQUID_GLASS_ENABLED] = settings.liquidGlassEnabled
+        preferences[SettingsStore.LIQUID_GLASS_OPACITY] = settings.liquidGlassOpacity.coerceIn(0, 100)
+        preferences[SettingsStore.LIQUID_GLASS_BLUR] = settings.liquidGlassBlur.coerceIn(0, 60)
+        preferences[SettingsStore.LIQUID_GLASS_WORKSPACE_OPACITY] = settings.liquidGlassWorkspaceOpacity.coerceIn(0, 100)
+        preferences[SettingsStore.LIQUID_GLASS_WORKSPACE_BLUR] = settings.liquidGlassWorkspaceBlur.coerceIn(0, 60)
         preferences[SettingsStore.CUSTOM_THEMES] = JsonInstant.encodeToString(settings.customThemes)
         preferences[SettingsStore.DEVELOPER_MODE] = settings.developerMode
         preferences[SettingsStore.DISPLAY_SETTING] = JsonInstant.encodeToString(settings.displaySetting)
@@ -528,6 +543,11 @@ data class Settings(
     val init: Boolean = false,
     val dynamicColor: Boolean = true,
     val themeId: String = PresetThemes[0].id,
+    val liquidGlassEnabled: Boolean = false,
+    val liquidGlassOpacity: Int = 20,
+    val liquidGlassBlur: Int = 24,
+    val liquidGlassWorkspaceOpacity: Int = liquidGlassOpacity,
+    val liquidGlassWorkspaceBlur: Int = liquidGlassBlur,
     val customThemes: List<CustomTheme> = emptyList(),
     val developerMode: Boolean = false,
     val displaySetting: DisplaySetting = DisplaySetting(),

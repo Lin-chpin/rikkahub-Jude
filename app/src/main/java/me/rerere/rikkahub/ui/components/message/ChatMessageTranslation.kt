@@ -27,6 +27,8 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
+import me.rerere.rikkahub.ui.theme.LocalLiquidGlass
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -320,7 +322,9 @@ fun CollapsibleTranslationText(
                     .fillMaxWidth()
                     .then(if (showHeader) Modifier.padding(top = 8.dp) else Modifier),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                    containerColor = if (LocalLiquidGlass.current.enabled) Color.Transparent
+                        else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                 ),
                 shape = MaterialTheme.shapes.medium
             ) {
@@ -364,6 +368,7 @@ fun CollapsibleTranslationText(
                     // Show normal translation content
                     MarkdownBlock(
                         content = content,
+                        style = LocalTextStyle.current.copy(color = MaterialTheme.colorScheme.onSurface),
                         onClickCitation = onClickCitation,
                         modifier = Modifier
                             .padding(12.dp)

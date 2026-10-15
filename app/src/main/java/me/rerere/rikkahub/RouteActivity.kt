@@ -111,6 +111,7 @@ import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesNotificationPage
 import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesGeneralPage
 import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesUIPage
 import me.rerere.rikkahub.ui.pages.setting.SettingThemePage
+import me.rerere.rikkahub.ui.pages.setting.SettingLiquidGlassPage
 import me.rerere.rikkahub.ui.pages.setting.SettingDonatePage
 import me.rerere.rikkahub.ui.pages.setting.SettingFilesPage
 import me.rerere.rikkahub.ui.pages.setting.SettingMcpPage
@@ -414,6 +415,10 @@ class RouteActivity : ComponentActivity() {
                                 SettingThemePage()
                             }
 
+                            entry<Screen.SettingLiquidGlass> {
+                                SettingLiquidGlassPage()
+                            }
+
                             entry<Screen.SettingPreferences> {
                                 SettingPreferencesPage()
                             }
@@ -669,6 +674,9 @@ sealed interface Screen : NavKey {
 
     @Serializable
     data object SettingTheme : Screen
+
+    @Serializable
+    data object SettingLiquidGlass : Screen
 
     @Serializable
     data object SettingPreferences : Screen

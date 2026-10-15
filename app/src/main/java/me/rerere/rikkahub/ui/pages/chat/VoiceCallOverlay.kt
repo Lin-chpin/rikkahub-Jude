@@ -33,6 +33,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -41,6 +42,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -68,6 +70,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.dokar.sonner.ToastType
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import java.util.UUID
@@ -108,6 +112,9 @@ import me.rerere.rikkahub.ui.components.ui.permission.rememberPermissionState
 import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.context.LocalTTSState
 import me.rerere.rikkahub.ui.context.LocalToaster
+import me.rerere.rikkahub.ui.theme.LocalLiquidGlass
+import me.rerere.rikkahub.ui.theme.LocalLiquidGlassHaze
+import me.rerere.rikkahub.ui.theme.liquidGlassChrome
 import me.rerere.tts.provider.TTSProviderSetting
 import me.rerere.tts.provider.isElevenLabsV4Turbo
 import org.koin.compose.koinInject
@@ -591,6 +598,9 @@ fun VoiceCallOverlay(
         currentAssistantTextLength = currentAssistantText.length,
     )
 
+    val liquidGlass = LocalLiquidGlass.current.enabled
+    val callHazeState = rememberHazeState()
+
     Dialog(
         onDismissRequest = {
             // Closing the IME can be reported as a dialog dismiss on some ROMs.
@@ -607,9 +617,10 @@ fun VoiceCallOverlay(
             color = MaterialTheme.colorScheme.background,
             modifier = Modifier.fillMaxSize()
         ) {
+            CompositionLocalProvider(LocalLiquidGlassHaze provides callHazeState) {
             AssistantBackground(
                 setting = settings,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().hazeSource(callHazeState),
                 assistant = callAssistant,
                 useVoiceCallBackground = true,
             )
@@ -806,18 +817,31 @@ fun VoiceCallOverlay(
                     }
 
                     if (!isHistory) {
+                    val callActionShape = ButtonDefaults.shape
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        FilledTonalButton(onClick = ::hangUp) {
+                        FilledTonalButton(
+                            onClick = ::hangUp,
+                            modifier = if (liquidGlass) Modifier.liquidGlassChrome(callActionShape, callHazeState) else Modifier,
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = if (liquidGlass) Color.Transparent else MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onSurface,
+                            ),
+                        ) {
                             Text("挂断")
                         }
                         // TextButton(onClick = { showVoiceCallFlowDialog = true }) {
                         //     Text("排查流程")
                         // }
                         Button(
+                            modifier = if (liquidGlass) Modifier.liquidGlassChrome(callActionShape, callHazeState) else Modifier,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (liquidGlass) Color.Transparent else MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onSurface,
+                            ),
                             enabled = !asrPermission.allRequiredPermissionsGranted ||
                                 !keyboardCaptureActive ||
                                 (hasChatModel && ttsAvailable),
@@ -857,6 +881,7 @@ fun VoiceCallOverlay(
                         }
                      }
                    }
+            }
                 }
             }
         }
@@ -991,6 +1016,7 @@ private fun VoiceCallMessageBubble(
 ) {
     val tts = LocalTTSState.current
     val isUser = role == MessageRole.USER
+    val liquidGlass = LocalLiquidGlass.current.enabled
     val selectedTtsProvider = LocalSettings.current.getSelectedTTSProvider()
     val showVoiceCallAudioTagAnnotations =
         LocalSettings.current.voiceCallAudioTagMode
@@ -1014,15 +1040,19 @@ private fun VoiceCallMessageBubble(
                 modifier = Modifier.widthIn(max = 520.dp),
                 horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
             ) {
+                val bubbleShape = RoundedCornerShape(
+                    topStart = 18.dp,
+                    topEnd = 18.dp,
+                    bottomStart = if (isUser || onTranslate != null) 18.dp else 6.dp,
+                    bottomEnd = 18.dp,
+                )
                 Surface(
-                    modifier = Modifier.widthIn(max = 520.dp),
-                    shape = RoundedCornerShape(
-                        topStart = 18.dp,
-                        topEnd = 18.dp,
-                        bottomStart = if (isUser || onTranslate != null) 18.dp else 6.dp,
-                        bottomEnd = 18.dp,
+                    modifier = Modifier.widthIn(max = 520.dp).then(
+                        if (liquidGlass) Modifier.liquidGlassChrome(bubbleShape) else Modifier
                     ),
-                    color = if (isUser) {
+                    shape = bubbleShape,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    color = if (liquidGlass) Color.Transparent else if (isUser) {
                         MaterialTheme.colorScheme.primaryContainer
                     } else {
                         MaterialTheme.colorScheme.surfaceContainerHigh
@@ -1093,11 +1123,7 @@ private fun VoiceCallMessageBubble(
                                 text = item.text,
                                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                                 style = MaterialTheme.typography.bodyLarge,
-                                color = if (isUser) {
-                                    MaterialTheme.colorScheme.onPrimaryContainer
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface
-                                },
+                                color = MaterialTheme.colorScheme.onSurface,
                             )
                         }
                     }
@@ -1114,11 +1140,7 @@ private fun VoiceCallMessageBubble(
                             onClearTranslation = onClearTranslation,
                             showLabel = true,
                             defaultLanguage = Locale.SIMPLIFIED_CHINESE,
-                            tint = if (isUser) {
-                                MaterialTheme.colorScheme.onPrimaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
+                            tint = MaterialTheme.colorScheme.onSurface,
                         )
                     }
                     }

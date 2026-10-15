@@ -54,6 +54,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -66,6 +67,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.runtime.DisposableEffect
@@ -96,6 +98,8 @@ import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.service.ChatError
 import me.rerere.rikkahub.ui.components.message.ChatMessage
+import me.rerere.rikkahub.ui.theme.LocalLiquidGlass
+import me.rerere.rikkahub.ui.theme.LocalLiquidGlassHaze
 import me.rerere.rikkahub.ui.components.ui.ErrorCardsDisplay
 import me.rerere.rikkahub.ui.components.ui.ListSelectableItem
 import me.rerere.rikkahub.ui.components.ui.RabbitLoadingIndicator
@@ -122,6 +126,7 @@ fun ChatList(
     externalEditorVisible: Boolean = false,
     settings: Settings,
     hazeState: HazeState,
+    glassHazeState: HazeState = hazeState,
     errors: List<ChatError> = emptyList(),
     onDismissError: (Uuid) -> Unit = {},
     onClearAllErrors: () -> Unit = {},
@@ -171,6 +176,7 @@ fun ChatList(
                 externalEditorVisible = externalEditorVisible,
                 settings = settings,
                 hazeState = hazeState,
+                glassHazeState = glassHazeState,
                 errors = errors,
                 onDismissError = onDismissError,
                 onClearAllErrors = onClearAllErrors,
@@ -207,6 +213,7 @@ private fun ChatListNormal(
     externalEditorVisible: Boolean,
     settings: Settings,
     hazeState: HazeState,
+    glassHazeState: HazeState,
     errors: List<ChatError>,
     onDismissError: (Uuid) -> Unit,
     onClearAllErrors: () -> Unit,
@@ -229,6 +236,7 @@ private fun ChatListNormal(
     onConversationSystemPromptChange: ((String?) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
+    val liquidGlass = LocalLiquidGlass.current.enabled
     val loadingState by rememberUpdatedState(loading)
     var isRecentScroll by remember { mutableStateOf(false) }
     val conversationUpdated by rememberUpdatedState(conversation)
@@ -239,7 +247,7 @@ private fun ChatListNormal(
         val listener: (Boolean) -> Boolean = { isVolumeUp ->
             if (settings.displaySetting.enableVolumeKeyScroll) {
                 val bottomPaddingPx = with(density) {
-                    (32.dp + innerPadding.calculateBottomPadding()).toPx()
+                    (32.dp + if (liquidGlass) 0.dp else innerPadding.calculateBottomPadding()).toPx()
                 }
                 val scrollAmount = (state.layoutInfo.viewportSize.height - bottomPaddingPx) *
                     settings.displaySetting.volumeKeyScrollRatio
@@ -255,7 +263,7 @@ private fun ChatListNormal(
 
     fun List<LazyListItemInfo>.isAtBottom(): Boolean {
         val lastItem = lastOrNull() ?: return false
-        val inputBarHeight = with(density) { innerPadding.calculateBottomPadding().toPx() }
+        val inputBarHeight = with(density) { if (liquidGlass) 0f else innerPadding.calculateBottomPadding().toPx() }
         val lastPos = lastItem.offset + lastItem.size
         val inputPos = (state.layoutInfo.viewportEndOffset - inputBarHeight.roundToInt())
         // println("lastPos = $lastPos, inputPos = $inputPos  | ${lastPos <= inputPos - 8}")
@@ -333,11 +341,16 @@ private fun ChatListNormal(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(top = innerPadding.calculateTopPadding()),
+                    // Keep messages out of the translucent composer/workspace backdrop.
+                    .padding(
+                        top = innerPadding.calculateTopPadding(),
+                        bottom = if (liquidGlass) innerPadding.calculateBottomPadding() else 0.dp,
+                    )
+                    .then(if (liquidGlass) Modifier.clipToBounds() else Modifier),
             ) {
                 LazyColumn(
                     state = state,
-                    contentPadding = PaddingValues(16.dp) + PaddingValues(bottom = 32.dp + innerPadding.calculateBottomPadding()),
+                    contentPadding = PaddingValues(16.dp) + PaddingValues(bottom = 32.dp + if (liquidGlass) 0.dp else innerPadding.calculateBottomPadding()),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier
@@ -362,6 +375,7 @@ private fun ChatListNormal(
                         selectedKeys = selectedItems,
                         enabled = selecting,
                     ) {
+                        CompositionLocalProvider(LocalLiquidGlassHaze provides glassHazeState) {
                         ChatMessage(
                             node = node,
                             model = node.currentMessage.modelId?.let(modelById::get),
@@ -402,6 +416,7 @@ private fun ChatListNormal(
                             onOpenVoiceCallRecord = onOpenVoiceCallRecord,
                             lastMessage = node.id == lastMessageNodeId,
                         )
+                        }
                     }
                 }
             }

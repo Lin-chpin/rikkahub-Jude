@@ -29,6 +29,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -41,6 +42,8 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.voice.flexibleVoiceCallAudioTags
 import me.rerere.rikkahub.data.voice.withoutFlexibleVoiceCallAudioTags
 import me.rerere.rikkahub.ui.context.LocalTTSState
+import me.rerere.rikkahub.ui.theme.LocalLiquidGlass
+import me.rerere.rikkahub.ui.theme.liquidGlassChrome
 import me.rerere.rikkahub.ui.pages.chat.estimateVoiceCallDurationSeconds
 import me.rerere.tts.model.AudioFormat
 import me.rerere.tts.model.CachedAudioSource
@@ -54,6 +57,7 @@ internal fun ChatVoiceMessageBubble(
     onClearTranslation: (() -> Unit)?,
 ) {
     val tts = LocalTTSState.current
+    val liquidGlass = LocalLiquidGlass.current.enabled
     val playbackState by tts.playbackState.collectAsStateWithLifecycle()
     val playbackSessionId by tts.playbackSessionId.collectAsStateWithLifecycle()
     var textExpanded by remember { mutableStateOf(false) }
@@ -82,9 +86,12 @@ internal fun ChatVoiceMessageBubble(
         else -> 0f
     }
 
+    val bubbleShape = RoundedCornerShape(18.dp)
     Surface(
-        shape = RoundedCornerShape(18.dp),
-        color = assistantMessageBubbleColor(),
+        modifier = if (liquidGlass) Modifier.liquidGlassChrome(bubbleShape) else Modifier,
+        shape = bubbleShape,
+        color = if (liquidGlass) Color.Transparent else assistantMessageBubbleColor(),
+        contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
         Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
             Row(
@@ -175,7 +182,9 @@ internal fun ChatVoiceMessageBubble(
             ) {
                 Surface(
                     shape = RoundedCornerShape(14.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    // The outer voice bubble owns the material; the transcript must not add an inner panel.
+                    color = if (liquidGlass) Color.Transparent else MaterialTheme.colorScheme.surfaceContainerLow,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {

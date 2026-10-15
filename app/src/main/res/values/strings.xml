@@ -1244,5 +1244,15 @@
   <string name="web_search_enabled">Web search enabled</string>
   <string name="setting_theme_page_delete_theme_title">Delete Theme</string>
   <string name="setting_theme_page_delete_theme_message">Are you sure you want to delete this theme?</string>
+  <string name="liquid_glass_dialog">Dialog</string>
+  <string name="liquid_glass_opacity_title">Glass tint opacity</string>
+  <string name="liquid_glass_title">Liquid Glass</string>
+  <string name="liquid_glass_settings_desc">Opacity, background blur</string>
+  <string name="liquid_glass_workspace_group">Composer and workspace</string>
+  <string name="liquid_glass_other_group">Bubbles and other components</string>
+  <string name="liquid_glass_blur_title">Frost strength</string>
+  <string name="liquid_glass_blur_unsupported">Background blur requires Android 12 or later.</string>
+  <string name="liquid_glass_preview_assistant">See the frosted background</string>
+  <string name="liquid_glass_preview_user">Adjust both sliders</string>
 </resources>
 

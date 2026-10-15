@@ -54,6 +54,7 @@ fun RikkahubTheme(
     }
     val amoledDarkMode by rememberAmoledDarkMode()
 
+
     val colorScheme = when {
         settings.dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
@@ -97,7 +98,17 @@ fun RikkahubTheme(
         MaterialExpressiveTheme(
             colorScheme = colorSchemeConverted,
             typography = Typography,
-            content = content,
+            content = {
+                LiquidGlassScene(
+                    enabled = settings.liquidGlassEnabled,
+                    blurEnabled = Build.VERSION.SDK_INT >= 31,
+                    blurRadius = settings.liquidGlassBlur.toFloat(),
+                    opacity = settings.liquidGlassOpacity / 100f,
+                    workspaceOpacity = settings.liquidGlassWorkspaceOpacity / 100f,
+                    workspaceBlurRadius = settings.liquidGlassWorkspaceBlur.toFloat(),
+                    content = content,
+                )
+            },
             motionScheme = MotionScheme.expressive()
         )
     }

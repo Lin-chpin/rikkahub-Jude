@@ -45,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -103,6 +104,8 @@ import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.context.LocalTTSState
 import me.rerere.rikkahub.ui.hooks.rememberChatTtsPlayback
 import me.rerere.rikkahub.ui.theme.LocalChatFontFamily
+import me.rerere.rikkahub.ui.theme.LocalLiquidGlass
+import me.rerere.rikkahub.ui.theme.liquidGlassChrome
 import me.rerere.rikkahub.ui.theme.rememberChatFontFamily
 import me.rerere.rikkahub.ui.theme.extendColors
 import me.rerere.rikkahub.utils.toChatTtsText
@@ -149,10 +152,13 @@ fun ChatMessage(
     val voiceCallRecord = message.voiceCallRecord()
     if (voiceCallRecord != null) {
         if (voiceCallRecord.cardAnchor) {
+            val liquidGlass = LocalLiquidGlass.current.enabled
+            val shape = RoundedCornerShape(14.dp)
             Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                modifier = modifier.combinedClickable(
+                shape = shape,
+                color = if (liquidGlass) Color.Transparent else MaterialTheme.colorScheme.surfaceContainerHigh,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                modifier = modifier.then(if (liquidGlass) Modifier.liquidGlassChrome(shape) else Modifier).combinedClickable(
                     onClick = { onOpenVoiceCallRecord?.invoke(voiceCallRecord.callId) },
                     onLongClick = onDelete,
                 ),
@@ -164,7 +170,7 @@ fun ChatMessage(
                 ) {
                     Icon(HugeIcons.Voice, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text("通话记录", style = MaterialTheme.typography.labelLarge)
-                    Text(formatVoiceCallDuration(voiceCallRecord.durationSeconds), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(formatVoiceCallDuration(voiceCallRecord.durationSeconds), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
                 }
             }
         }
@@ -385,6 +391,7 @@ internal fun MessagePartsBlock(
     // 消息输出HapticFeedback
     val hapticFeedback = LocalHapticFeedback.current
     val settings = LocalSettings.current
+    val liquidGlass = LocalLiquidGlass.current.enabled
     val partsState by rememberUpdatedState(parts)
 
     val handleClickCitation: (String) -> Unit = remember {
@@ -474,11 +481,15 @@ internal fun MessagePartsBlock(
                                     onClick = onUserMessageClick,
                                 )
                             } else {
+                                val bubbleShape = RoundedCornerShape(16.dp)
                                 val userTextContent = @Composable {
                                     Surface(
-                                        modifier = Modifier.animateContentSize(),
-                                        shape = RoundedCornerShape(16.dp),
-                                        color = MaterialTheme.colorScheme.primaryContainer,
+                                        modifier = Modifier.animateContentSize().then(
+                                            if (liquidGlass) Modifier.liquidGlassChrome(bubbleShape) else Modifier
+                                        ),
+                                        shape = bubbleShape,
+                                        color = if (liquidGlass) Color.Transparent else MaterialTheme.colorScheme.primaryContainer,
+                                        contentColor = MaterialTheme.colorScheme.onSurface,
                                         onClick = { onUserMessageClick?.invoke() },
                                     ) {
                                         Column(modifier = Modifier.padding(8.dp)) {
@@ -516,10 +527,14 @@ internal fun MessagePartsBlock(
                                     onTtsSpeak = onTtsSpeak,
                                 )
                             } else if (settings.displaySetting.showAssistantBubble) {
+                                val bubbleShape = RoundedCornerShape(16.dp)
                                 Surface(
-                                    modifier = Modifier.animateContentSize(),
-                                    shape = RoundedCornerShape(16.dp),
-                                    color = assistantMessageBubbleColor(),
+                                    modifier = Modifier.animateContentSize().then(
+                                        if (liquidGlass) Modifier.liquidGlassChrome(bubbleShape) else Modifier
+                                    ),
+                                    shape = bubbleShape,
+                                    color = if (liquidGlass) Color.Transparent else assistantMessageBubbleColor(),
+                                    contentColor = MaterialTheme.colorScheme.onSurface,
                                 ) {
                                     Column(modifier = Modifier.padding(8.dp)) {
                                         AssistantTextContent(
@@ -776,10 +791,14 @@ private fun UserTextParagraphs(
                 }
 
                 is AssistantTextSegment.Paragraph -> {
+                    val bubbleShape = RoundedCornerShape(16.dp)
                     Surface(
-                        modifier = Modifier.animateContentSize(),
-                        shape = RoundedCornerShape(16.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer,
+                        modifier = Modifier.animateContentSize().then(
+                            if (LocalLiquidGlass.current.enabled) Modifier.liquidGlassChrome(bubbleShape) else Modifier
+                        ),
+                        shape = bubbleShape,
+                        color = if (LocalLiquidGlass.current.enabled) Color.Transparent else MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
                         onClick = { onClick?.invoke() },
                     ) {
                         val paragraphContent: @Composable () -> Unit = {
@@ -986,9 +1005,10 @@ private fun AssistantTextParagraphs(
                     if (paragraphBubbleMode) {
                         Surface(
                             modifier = Modifier
-                                .animateContentSize(),
+                                .animateContentSize()
+                                .then(if (LocalLiquidGlass.current.enabled) Modifier.liquidGlassChrome(RoundedCornerShape(8.dp)) else Modifier),
                             shape = RoundedCornerShape(8.dp),
-                            color = paragraphBubbleColor,
+                            color = if (LocalLiquidGlass.current.enabled) Color.Transparent else paragraphBubbleColor,
                             contentColor = MaterialTheme.colorScheme.onSurface,
                         ) {
                             paragraphContent(

@@ -13,6 +13,7 @@ import coil3.compose.AsyncImage
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.ui.theme.LocalLiquidGlass
 
 @Composable
 fun AssistantBackground(
@@ -32,32 +33,39 @@ fun AssistantBackground(
     } else {
         targetAssistant.backgroundOpacity
     }
-    if (background != null) {
+    val glassBackdrop = LocalLiquidGlass.current.enabled && !useVoiceCallBackground
+    if (background != null || glassBackdrop) {
         val backgroundColor = MaterialTheme.colorScheme.background
         val previewOpacity = backgroundOpacity.coerceIn(0f, 1f)
-        Box(modifier = modifier) {
-            AsyncImage(
-                model = background,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .alpha(previewOpacity)
-            )
+        Box(
+            modifier = if (glassBackdrop) {
+                modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+            } else modifier,
+        ) {
+            if (background != null) {
+                AsyncImage(
+                    model = background,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .alpha(previewOpacity)
+                )
 
-            // 全屏渐变遮罩
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(
-                                backgroundColor.copy(alpha = 0.2f),
-                                backgroundColor.copy(alpha = 0.5f)
+                // 全屏渐变遮罩
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(
+                                    backgroundColor.copy(alpha = 0.2f),
+                                    backgroundColor.copy(alpha = 0.5f)
+                                )
                             )
                         )
-                    )
-            )
+                )
+            }
         }
     }
 }

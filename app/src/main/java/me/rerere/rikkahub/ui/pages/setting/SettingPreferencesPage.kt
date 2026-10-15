@@ -20,6 +20,8 @@ import me.rerere.hugeicons.stroke.Notification01
 import me.rerere.hugeicons.stroke.PaintBoard
 import me.rerere.hugeicons.stroke.Settings03
 import me.rerere.hugeicons.stroke.Sun01
+import me.rerere.hugeicons.stroke.Sparkles
+import androidx.compose.ui.text.style.TextOverflow
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.ui.components.nav.BackButton
@@ -63,6 +65,14 @@ fun SettingPreferencesPage() {
                         leadingContent = { Icon(HugeIcons.Sun01, null) },
                         headlineContent = { Text(stringResource(R.string.setting_page_preferences_theme)) },
                         supportingContent = { Text(stringResource(R.string.setting_page_preferences_theme_desc)) },
+                    )
+                    item(
+                        onClick = { navController.navigate(Screen.SettingLiquidGlass) },
+                        leadingContent = { Icon(HugeIcons.Sparkles, null) },
+                        headlineContent = { Text(stringResource(R.string.liquid_glass_title)) },
+                        supportingContent = {
+                            Text(stringResource(R.string.liquid_glass_settings_desc), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        },
                     )
                     item(
                         onClick = { navController.navigate(Screen.SettingPreferencesNotification) },
