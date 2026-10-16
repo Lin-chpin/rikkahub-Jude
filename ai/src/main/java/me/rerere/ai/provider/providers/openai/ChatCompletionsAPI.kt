@@ -160,6 +160,18 @@ class ChatCompletionsAPI(
         // println(client.newCall(request).await().body?.string())
 
         val completedNormally = AtomicBoolean(false)
+        val toolCalls = ChatCompletionToolCalls()
+        fun finishToolCalls() {
+            val tools = toolCalls.finish()
+            if (tools.isNotEmpty()) {
+                trySend(MessageChunk("", "", listOf(UIMessageChoice(
+                    index = 0,
+                    delta = UIMessage(role = MessageRole.ASSISTANT, parts = tools),
+                    message = null,
+                    finishReason = null,
+                )))).getOrThrow()
+            }
+        }
         timing.mark("request_ready")
         val listener = object : EventSourceListener() {
             override fun onEvent(
@@ -170,6 +182,7 @@ class ChatCompletionsAPI(
             ) {
                 val normalizedData = data.trim()
                 if (normalizedData == "[DONE]") {
+                    finishToolCalls()
                     timing.mark("sse_done", characters = receivedCharacters)
                     Log.i(TAG, "stream completed: [DONE]")
                     completedNormally.set(true)
@@ -202,7 +215,11 @@ class ChatCompletionsAPI(
                                     val finishReason =
                                         choice["finish_reason"]?.jsonPrimitive?.contentOrNull
                                             ?: "unknown"
-                                    val parsedMessage = parseMessage(message).withEmptyResponseReason(finishReason)
+                                    (message["tool_calls"] as? JsonArray)?.let { calls ->
+                                        toolCalls.accept(calls, snapshot = choice["delta"] == null)
+                                    }
+                                    val parsedMessage = parseMessage(JsonObject(message - "tool_calls"))
+                                        .withEmptyResponseReason(finishReason)
                                     add(
                                         UIMessageChoice(
                                             index = 0,
@@ -229,6 +246,9 @@ class ChatCompletionsAPI(
                         timing.firstText("sse_text_received", messageChunk.id, textCharacters)
                         if (trySend(messageChunk).isFailure) {
                             timing.firstText("sse_text_delivery_failed", messageChunk.id, textCharacters)
+                        }
+                        if (choiceList.any { it.finishReason in listOf("tool_calls", "stop", "length", "content_filter") }) {
+                            finishToolCalls()
                         }
                     }
             }
@@ -601,14 +621,7 @@ class ChatCompletionsAPI(
             if (tools.isNotEmpty()) {
                 put("tool_calls", buildJsonArray {
                     tools.forEach { tool ->
-                        add(buildJsonObject {
-                            put("id", tool.toolCallId)
-                            put("type", "function")
-                            put("function", buildJsonObject {
-                                put("name", tool.toolName)
-                                put("arguments", tool.input)
-                            })
-                        })
+                        add(tool.toChatToolCall())
                     }
                 })
             }
@@ -699,7 +712,8 @@ class ChatCompletionsAPI(
                             toolCallId = toolCallId ?: "",
                             toolName = toolName ?: "",
                             input = arguments ?: "",
-                            output = emptyList()
+                            output = emptyList(),
+                            metadata = toolCalls.jsonObject.chatToolMetadata(),
                         )
                     )
                 }

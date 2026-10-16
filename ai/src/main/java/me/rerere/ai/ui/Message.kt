@@ -14,6 +14,7 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.provider.Model
 import me.rerere.ai.util.json
+import me.rerere.ai.util.mergeMetadata
 import kotlin.math.roundToInt
 import kotlin.time.Clock
 import kotlin.time.Instant
@@ -43,13 +44,16 @@ data class UIMessage(
                 when (deltaPart) {
                     is UIMessagePart.Text -> {
                         // Skip empty text deltas
-                        if (deltaPart.text.isEmpty()) {
+                        if (deltaPart.text.isEmpty() && deltaPart.metadata == null) {
                             acc
                         } else {
                             val lastPart = acc.lastOrNull()
-                            if (lastPart is UIMessagePart.Text) {
+                            if (lastPart is UIMessagePart.Text && lastPart.metadata?.get("thoughtSignature") == null) {
                                 // Append to the last Text part
-                                acc.dropLast(1) + lastPart.copy(text = lastPart.text + deltaPart.text)
+                                acc.dropLast(1) + lastPart.copy(
+                                    text = lastPart.text + deltaPart.text,
+                                    metadata = mergeMetadata(lastPart.metadata, deltaPart.metadata),
+                                )
                             } else {
                                 // Create new Text part
                                 acc + deltaPart
@@ -131,6 +135,7 @@ data class UIMessage(
                                     }
                                     val lastPart = parts.lastOrNull()
                                     val sameReasoning = lastPart is UIMessagePart.Reasoning &&
+                                        lastPart.metadata?.get("thoughtSignature") == null &&
                                         (deltaId == null || lastPart.metadata?.get("reasoning_id")
                                             ?.jsonPrimitive?.contentOrNull.let { it == null || it == deltaId }) &&
                                         (deltaChannel == null || lastPart.metadata?.get("reasoning_channel")
@@ -268,12 +273,6 @@ data class UIMessage(
             parts = listOf(UIMessagePart.Text(prompt))
         )
     }
-}
-
-private fun mergeMetadata(previous: JsonObject?, next: JsonObject?): JsonObject? {
-    if (previous == null) return next
-    if (next == null) return previous
-    return JsonObject(previous + next)
 }
 
 /**
@@ -498,7 +497,7 @@ sealed class UIMessagePart {
                 toolName = toolName + other.toolName,
                 arguments = arguments + other.arguments,
                 approvalState = approvalState,
-                metadata = if (other.metadata != null) other.metadata else metadata,
+                metadata = mergeMetadata(metadata, other.metadata),
             )
         }
     }
@@ -545,7 +544,7 @@ sealed class UIMessagePart {
                 input = input + other.input,
                 output = output + other.output,
                 approvalState = approvalState,
-                metadata = if (other.metadata != null) other.metadata else metadata,
+                metadata = mergeMetadata(metadata, other.metadata),
             )
         }
     }

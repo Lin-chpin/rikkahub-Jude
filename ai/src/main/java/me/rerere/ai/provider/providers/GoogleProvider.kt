@@ -343,7 +343,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
-    private fun buildCompletionRequestBody(
+    internal fun buildCompletionRequestBody(
         messages: List<UIMessage>,
         params: TextGenerationParams
     ): JsonObject = buildJsonObject {
@@ -547,6 +547,8 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
     }
 
     private fun parseMessagePart(jsonObject: JsonObject): UIMessagePart {
+        val signatureMetadata = jsonObject["thoughtSignature"]?.takeUnless { it is kotlinx.serialization.json.JsonNull }
+            ?.let { signature -> buildJsonObject { put("thoughtSignature", signature) } }
         return when {
             jsonObject.containsKey("text") -> {
                 val thought = jsonObject["thought"]?.jsonPrimitive?.booleanOrNull ?: false
@@ -554,18 +556,21 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 if (thought) UIMessagePart.Reasoning(
                     reasoning = text,
                     createdAt = Clock.System.now(),
-                    finishedAt = null
-                ) else UIMessagePart.Text(text)
+                    finishedAt = null,
+                    metadata = signatureMetadata,
+                ) else UIMessagePart.Text(text, metadata = signatureMetadata)
             }
 
             jsonObject.containsKey("functionCall") -> {
                 UIMessagePart.Tool(
-                    toolCallId = Uuid.random().toString(),
+                    toolCallId = jsonObject["functionCall"]!!.jsonObject["id"]?.jsonPrimitive?.contentOrNull
+                        ?: Uuid.random().toString(),
                     toolName = jsonObject["functionCall"]!!.jsonObject["name"]!!.jsonPrimitive.content,
                     input = json.encodeToString(jsonObject["functionCall"]!!.jsonObject["args"]),
                     output = emptyList(),
                     metadata = buildJsonObject {
-                        put("thoughtSignature", jsonObject["thoughtSignature"]?.jsonPrimitive?.contentOrNull)
+                        signatureMetadata?.forEach { (key, value) -> put(key, value) }
+                        jsonObject["functionCall"]!!.jsonObject["id"]?.let { put("google_function_call_id", it) }
                     }
                 )
             }
@@ -666,6 +671,15 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
     private fun UIMessagePart.toGooglePart(): JsonObject? = when (this) {
         is UIMessagePart.Text -> buildJsonObject {
             put("text", text)
+            metadata?.get("thoughtSignature")?.let { put("thoughtSignature", it) }
+        }
+
+        is UIMessagePart.Reasoning -> metadata?.get("thoughtSignature")?.let { signature ->
+            buildJsonObject {
+                put("text", reasoning)
+                put("thought", true)
+                put("thoughtSignature", signature)
+            }
         }
 
         is UIMessagePart.Image -> {
@@ -711,6 +725,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         put("functionCall", buildJsonObject {
             put("name", toolName)
             put("args", inputAsJson())
+            metadata?.get("google_function_call_id")?.let { put("id", it) }
         })
         metadata?.get("thoughtSignature")?.let {
             put("thoughtSignature", it)
@@ -720,6 +735,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
     private fun UIMessagePart.Tool.toFunctionResponsePart() = buildJsonObject {
         put("functionResponse", buildJsonObject {
             put("name", toolName)
+            metadata?.get("google_function_call_id")?.let { put("id", it) }
             put("response", buildJsonObject {
                 put(
                     "result",

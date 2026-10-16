@@ -169,6 +169,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             Log.i(TAG, "streamText: $it")
         }
 
+        val streamBlocks = ClaudeStreamBlocks()
         val listener = object : EventSourceListener() {
             override fun onEvent(
                 eventSource: EventSource,
@@ -182,16 +183,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 }
 
                 val dataJson = json.parseToJsonElement(data).jsonObject
-                val deltaMessage = parseMessage(buildJsonArray {
-                    val contentBlockObj = dataJson["content_block"]?.jsonObject
-                    val deltaObj = dataJson["delta"]?.jsonObject
-                    if (contentBlockObj != null) {
-                        add(contentBlockObj)
-                    }
-                    if (deltaObj != null) {
-                        add(deltaObj)
-                    }
-                })
+                val deltaMessage = parseMessage(streamBlocks.accept(dataJson))
                 val tokenUsage = parseTokenUsage(dataJson)
                 val messageChunk = MessageChunk(
                     id = id ?: "",
@@ -480,9 +472,15 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         }
 
         is UIMessagePart.Reasoning -> buildJsonObject {
-            put("type", "thinking")
-            put("thinking", reasoning)
-            metadata?.forEach { (key, value) -> put(key, value) }
+            val redacted = metadata?.get("claude_redacted_thinking")
+            if (redacted != null) {
+                put("type", "redacted_thinking")
+                put("data", redacted)
+            } else {
+                put("type", "thinking")
+                put("thinking", reasoning)
+                metadata?.get("signature")?.let { put("signature", it) }
+            }
         }
 
         else -> null
@@ -527,9 +525,10 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                             createdAt = Clock.System.now(),
                             finishedAt = null
                         )
-                        if (signature != null) {
+                        if (signature != null || block["reasoning_id"] != null) {
                             reasoning.metadata = buildJsonObject {
-                                put("signature", signature)
+                                if (signature != null) put("signature", signature)
+                                block["reasoning_id"]?.let { put("reasoning_id", it) }
                             }
                         }
                         parts.add(reasoning)
@@ -538,7 +537,15 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
 
                 "redacted_thinking" -> {
                     val data = block["data"]?.jsonPrimitiveOrNull?.contentOrNull
-                    println(data)
+                    if (data != null) parts.add(UIMessagePart.Reasoning(
+                        reasoning = "",
+                        createdAt = Clock.System.now(),
+                        finishedAt = null,
+                        metadata = buildJsonObject {
+                            put("claude_redacted_thinking", data)
+                            block["reasoning_id"]?.let { put("reasoning_id", it) }
+                        },
+                    ))
                 }
 
                 "tool_use" -> {
@@ -559,7 +566,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     val input = block["partial_json"]?.jsonPrimitive?.contentOrNull
                     parts.add(
                         UIMessagePart.Tool(
-                            toolCallId = "",
+                            toolCallId = block["id"]?.jsonPrimitiveOrNull?.contentOrNull.orEmpty(),
                             toolName = "",
                             input = input ?: "",
                             output = emptyList()

@@ -143,6 +143,7 @@ class ResponseAPI(
         val request = authenticator.authenticate(requestBuilder, providerSetting).build()
 
         val completedNormally = AtomicBoolean(false)
+        val toolCalls = ResponseToolCallEvents()
         val listener = object : EventSourceListener() {
             override fun onEvent(
                 eventSource: EventSource,
@@ -150,18 +151,22 @@ class ResponseAPI(
                 type: String?,
                 data: String
             ) {
+                if (completedNormally.get()) return
                 if (data == "[DONE]") {
+                    toolCalls.finish()?.let { trySend(it).getOrThrow() }
                     completedNormally.set(true)
                     close()
                     return
                 }
                 Log.d(TAG, "onEvent: $id/$type (${data.length} chars)")
                 val json = json.parseToJsonElement(data).jsonObject
+                toolCalls.accept(json)
                 val chunk = parseResponseDelta(json)
                 if (chunk != null) {
                     trySend(chunk)
                 }
-                if (type == "response.completed") {
+                if (json["type"]?.jsonPrimitive?.contentOrNull == "response.completed") {
+                    toolCalls.finish()?.let { trySend(it).getOrThrow() }
                     completedNormally.set(true)
                     close()
                 }
@@ -413,12 +418,7 @@ class ResponseAPI(
                             lastReasoning?.let { addReasoningItem(it, useReasoningText = true) }
                             toolEmittedSinceReasoning = false
                         }
-                        add(buildJsonObject {
-                            put("type", "function_call")
-                            put("call_id", tool.toolCallId)
-                            put("name", tool.toolName)
-                            put("arguments", tool.input)
-                        })
+                        add(tool.toResponseFunctionCall())
                         add(buildJsonObject {
                             put("type", "function_call_output")
                             put("call_id", tool.toolCallId)
@@ -541,31 +541,7 @@ class ResponseAPI(
                 val item = jsonObject["item"]?.jsonObject ?: error("chunk item not found")
                 val type = item["type"]?.jsonPrimitive?.content ?: error("chunk type not found")
                 val id = item["id"]?.jsonPrimitive?.content ?: error("chunk id not found")
-                if (type == "function_call") {
-                    return MessageChunk(
-                        id = id,
-                        model = "",
-                        choices = listOf(
-                            UIMessageChoice(
-                                index = 0,
-                                message = null,
-                                delta = UIMessage(
-                                    role = MessageRole.ASSISTANT,
-                                    parts = listOf(
-                                        UIMessagePart.Tool(
-                                            toolCallId = id,
-                                            toolName = item["name"]?.jsonPrimitive?.content ?: "",
-                                            input = item["arguments"]?.jsonPrimitive?.content
-                                                ?: "",
-                                            output = emptyList()
-                                        )
-                                    )
-                                ),
-                                finishReason = null
-                            )
-                        )
-                    )
-                } else if (type == "reasoning") {
+                if (type == "reasoning") {
                     val encryptedContent = item["encrypted_content"]?.jsonPrimitive?.content
                     return MessageChunk(
                         id = id,
@@ -677,35 +653,6 @@ class ResponseAPI(
                 }
             }
 
-            "response.function_call_arguments.done" -> {
-                val toolCallId =
-                    jsonObject["item_id"]?.jsonPrimitive?.content ?: error("item_id not found")
-                val arguments =
-                    jsonObject["arguments"]?.jsonPrimitive?.content ?: error("arguments not found")
-                return MessageChunk(
-                    id = toolCallId,
-                    model = "",
-                    choices = listOf(
-                        UIMessageChoice(
-                            index = 0,
-                            delta = UIMessage(
-                                role = MessageRole.ASSISTANT,
-                                parts = listOf(
-                                    UIMessagePart.Tool(
-                                        toolCallId = toolCallId,
-                                        toolName = "",
-                                        input = arguments,
-                                        output = emptyList()
-                                    )
-                                )
-                            ),
-                            message = null,
-                            finishReason = null
-                        )
-                    ),
-                )
-            }
-
             "response.completed" -> {
                 val response = jsonObject["response"]?.jsonObject
                 response?.get("prompt_cache_diagnostics")?.let {
@@ -772,7 +719,8 @@ class ResponseAPI(
                             toolCallId = callId,
                             toolName = name,
                             input = arguments,
-                            output = emptyList()
+                            output = emptyList(),
+                            metadata = output.responseToolCallMetadata(),
                         )
                     )
                 }
