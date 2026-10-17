@@ -104,6 +104,7 @@
         android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
         android:value="background AI chat generation and tool execution" />
     </service>
+    <receiver android:name=".service.VoiceCallInviteTimeoutReceiver" android:exported="false" />
 
     <service
       android:name=".service.UsageReminderService"

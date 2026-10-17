@@ -111,7 +111,7 @@ object OcrTransformer : InputMessageTransformer, KoinComponent {
         return runCatching {
             // Check cache first
             cache.get(part.url)?.let { cachedResult ->
-                Log.i(TAG, "performOcr: Using cached result for ${part.url}")
+                Log.i(TAG, "performOcr: Using cached image OCR result")
                 return cachedResult
             }
 
@@ -131,7 +131,7 @@ object OcrTransformer : InputMessageTransformer, KoinComponent {
                 ),
             )
             val content = result.choices[0].message?.toText() ?: "[ERROR, OCR failed]"
-            Log.i(TAG, "performOcr: $content")
+            Log.i(TAG, "performOcr: OCR completed chars=${content.length}")
             val ocrResult = """
                 <image_file_ocr>
                    $content
@@ -142,8 +142,9 @@ object OcrTransformer : InputMessageTransformer, KoinComponent {
             // Cache the result
             cache.put(part.url, ocrResult)
             return ocrResult
-        }.getOrElse {
-            "[ERROR, OCR failed: $it]"
+        }.getOrElse { error ->
+            Log.w(TAG, "performOcr: OCR failed error=${error::class.simpleName}")
+            "[ERROR, OCR failed]"
         }
     }
 

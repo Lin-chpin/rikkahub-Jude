@@ -55,6 +55,14 @@ class UsageStatsReader(private val context: Context) {
         appContext.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
+    suspend fun loadInstalledAppLabels(): Map<String, String> = withContext(Dispatchers.IO) {
+        appContext.packageManager.loadInstalledApps()
+    }
+
+    suspend fun loadAppIcon(packageName: String) = withContext(Dispatchers.IO) {
+        appContext.packageManager.loadIconOrNull(packageName)
+    }
+
     suspend fun loadUsage(period: UsageStatsPeriod): List<AppUsageSummary> = withContext(Dispatchers.IO) {
         val (startMillis, endMillis) = period.toWindowMillis()
         val usageStatsManager = appContext.getSystemService<UsageStatsManager>() ?: return@withContext emptyList()

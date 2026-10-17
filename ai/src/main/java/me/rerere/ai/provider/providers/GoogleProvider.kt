@@ -60,6 +60,8 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import me.rerere.common.http.suppressContentLogs
+import me.rerere.common.http.privateRequestFailure
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.sse.EventSource
@@ -173,6 +175,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             request = Request.Builder()
                 .url(url)
                 .headers(params.customHeaders.toHeaders())
+                .suppressContentLogs(params.suppressContentLogs)
                 .post(
                     json.encodeToString(requestBody).toRequestBody("application/json".toMediaType())
                 )
@@ -182,6 +185,11 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
+            if (params.suppressContentLogs) {
+                val failure = privateRequestFailure(null, response.code, response)
+                response.close()
+                throw failure
+            }
             throw Exception("Failed to get response: ${response.code} ${response.body?.string()}")
         }
 
@@ -196,7 +204,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             model = params.model.modelId,
             choices = candidates.map { candidate ->
                 UIMessageChoice(
-                    message = parseMessage(candidate.jsonObject),
+                    message = parseMessage(candidate.jsonObject, params.suppressContentLogs),
                     index = 0,
                     finishReason = null,
                     delta = null
@@ -229,6 +237,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             request = Request.Builder()
                 .url(url)
                 .headers(params.customHeaders.toHeaders())
+                .suppressContentLogs(params.suppressContentLogs)
                 .post(
                     json.encodeToString(requestBody).toRequestBody("application/json".toMediaType())
                 )
@@ -236,7 +245,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 .build()
         )
 
-        Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
+        if (!params.suppressContentLogs) Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
 
         val listener = object : EventSourceListener() {
             override fun onEvent(
@@ -245,7 +254,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 type: String?,
                 data: String
             ) {
-                Log.i(TAG, "onEvent: $data")
+                if (!params.suppressContentLogs) Log.i(TAG, "onEvent: $data")
 
                 try {
                     val jsonData = json.parseToJsonElement(data).jsonObject
@@ -274,7 +283,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                                     groundingMetadata?.let { groundingMetadata ->
                                         put("groundingMetadata", groundingMetadata)
                                     }
-                                })
+                                }, params.suppressContentLogs)
                             }
 
                             UIMessageChoice(
@@ -289,8 +298,8 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
                     trySend(messageChunk)
                 } catch (e: Exception) {
-                    e.printStackTrace()
-                    println("[onEvent] 解析错误: $data")
+                    if (!params.suppressContentLogs) e.printStackTrace()
+                    if (!params.suppressContentLogs) println("[onEvent] 解析错误: $data")
                 }
             }
 
@@ -299,6 +308,12 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 t: Throwable?,
                 response: Response?
             ) {
+                if (params.suppressContentLogs) {
+                    val failure = privateRequestFailure(t, response?.code, response)
+                    response?.close()
+                    close(failure)
+                    return
+                }
                 var exception = t
 
                 t?.printStackTrace()
@@ -329,7 +344,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             }
 
             override fun onClosed(eventSource: EventSource) {
-                println("[onClosed] 连接已关闭")
+                if (!params.suppressContentLogs) println("[onClosed] 连接已关闭")
                 close()
             }
         }
@@ -338,7 +353,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 .newEventSource(request, listener)
 
         awaitClose {
-            println("[awaitClose] 关闭eventSource")
+            if (!params.suppressContentLogs) println("[awaitClose] 关闭eventSource")
             eventSource.cancel()
         }
     }
@@ -373,7 +388,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     add(JsonPrimitive("IMAGE"))
                 })
             }
-            if (params.model.abilities.contains(ModelAbility.REASONING)) {
+            if (ModelAbility.REASONING in params.model.abilities + ModelRegistry.MODEL_ABILITIES.getData(params.model.modelId)) {
                 put("thinkingConfig", buildJsonObject {
                     put("includeThoughts", true)
 
@@ -385,7 +400,8 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
                         ReasoningLevel.OFF -> {
                             if (ModelRegistry.GEMINI_3_SERIES.match(modelId = params.model.modelId)) {
-                                put("thinkingLevel", "minimal")
+                                // Gemini 3.8 Flash rejects minimal; low is its lowest supported level.
+                                put("thinkingLevel", if (ModelRegistry.GEMINI_3_8_FLASH.match(params.model.modelId)) "low" else "minimal")
                             } else if (!isGeminiPro) {
                                 put("thinkingBudget", 0)
                                 put("includeThoughts", false)
@@ -510,7 +526,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
-    private fun parseMessage(message: JsonObject): UIMessage {
+    private fun parseMessage(message: JsonObject, suppressContentLogs: Boolean = false): UIMessage {
         val role = googleRoleToCommonRole(
             message["role"]?.jsonPrimitive?.contentOrNull ?: "model"
         )
@@ -520,8 +536,8 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         } ?: emptyList()
 
         val groundingMetadata = message["groundingMetadata"]?.jsonObject
-        Log.i(TAG, "parseMessage: $groundingMetadata")
-        val annotations = parseSearchGroundingMetadata(groundingMetadata)
+        if (!suppressContentLogs) Log.i(TAG, "parseMessage: $groundingMetadata")
+        val annotations = parseSearchGroundingMetadata(groundingMetadata, suppressContentLogs)
 
         return UIMessage(
             role = role,
@@ -530,7 +546,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         )
     }
 
-    private fun parseSearchGroundingMetadata(jsonObject: JsonObject?): List<UIMessageAnnotation> {
+    private fun parseSearchGroundingMetadata(jsonObject: JsonObject?, suppressContentLogs: Boolean = false): List<UIMessageAnnotation> {
         if (jsonObject == null) return emptyList()
         val groundingChunks = jsonObject["groundingChunks"]?.jsonArray ?: emptyList()
         val chunks = groundingChunks.mapNotNull { chunk ->
@@ -542,7 +558,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 url = uri
             )
         }
-        Log.i(TAG, "parseSearchGroundingMetadata: $chunks")
+        if (!suppressContentLogs) Log.i(TAG, "parseSearchGroundingMetadata: $chunks")
         return chunks
     }
 

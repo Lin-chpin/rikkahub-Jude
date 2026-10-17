@@ -7,12 +7,15 @@ import me.rerere.ai.ui.VoiceCallAudioSegment
 import me.rerere.rikkahub.data.voice.voiceCallDisplayTextOrPlainText
 import me.rerere.rikkahub.data.voice.withoutVoiceCallRealtimeEmotionMarker
 
+internal const val VOICE_CALL_REPLY_TRANSLATION_KEY = "voice-call-reply"
+
 internal sealed interface VoiceCallDisplayItem {
     data class Text(val text: String) : VoiceCallDisplayItem
     data class Voice(
         val text: String,
         val durationSeconds: Int,
         val audioSegment: VoiceCallAudioSegment? = null,
+        val isWholeReplyAudio: Boolean = false,
     ) : VoiceCallDisplayItem
 
     data object Loading : VoiceCallDisplayItem
@@ -30,12 +33,29 @@ internal fun VoiceCallDisplayItem.translationKey(index: Int): String? {
     return "voice-call-bubble:$index"
 }
 
+internal fun UIMessage.voiceCallTranslationForDisplay(
+    index: Int,
+    itemCount: Int,
+    loadingText: String,
+): String? {
+    val fullReplyTranslation = voiceCallTranslations[VOICE_CALL_REPLY_TRANSLATION_KEY]
+        ?: return voiceCallTranslations["voice-call-bubble:$index"]
+            ?: translation.takeIf { itemCount == 1 }
+    if (fullReplyTranslation == loadingText) return fullReplyTranslation.takeIf { index == 0 }
+
+    val translatedSegments = fullReplyTranslation.voiceCallDisplaySegments().map { it.text }
+    if (translatedSegments.isEmpty() || itemCount <= 0) return null
+    fun boundary(position: Int) =
+        (position * translatedSegments.size + itemCount - 1) / itemCount
+    val start = boundary(index)
+    val end = boundary(index + 1)
+    return translatedSegments.subList(start, end).joinToString("\n").takeIf { it.isNotBlank() }
+}
+
 internal fun UIMessage.voiceCallDisplayItems(
     audioSegmentsOverride: List<VoiceCallAudioSegment> = emptyList(),
     currentAssistantId: String?,
-    voiceReplyPending: Boolean,
-    visibleTextLength: Int,
-    visibleTextOverride: Int?,
+    textGenerationPending: Boolean,
     showAudioTags: Boolean = false,
 ): List<VoiceCallDisplayItem> {
     val audioSegments = audioSegmentsOverride.ifEmpty {
@@ -47,19 +67,12 @@ internal fun UIMessage.voiceCallDisplayItems(
         else -> toText()
     }
     val isCurrentAssistant = role == MessageRole.ASSISTANT && id.toString() == currentAssistantId
-    if (isCurrentAssistant && (voiceReplyPending || visibleTextOverride != null)) {
-        val visibleLength = if (voiceReplyPending) {
-            visibleTextLength
-        } else {
-            visibleTextOverride ?: fullText.length
-        }
-        val visibleText = fullText.take(visibleLength)
-        val items = visibleText
+    if (isCurrentAssistant && textGenerationPending) {
+        // Generated text owns bubble visibility; missing alignment or stalled audio must not hide sentences.
+        val items = fullText
             .splitVoiceCallDisplayItems(asVoice = true, audioSegments = audioSegments)
             .toMutableList()
-        if (voiceReplyPending && (visibleTextLength <= 0 || visibleTextLength < fullText.length)) {
-            items += VoiceCallDisplayItem.Loading
-        }
+        items += VoiceCallDisplayItem.Loading
         return items
     }
 
@@ -79,16 +92,20 @@ private fun String.splitVoiceCallDisplayItems(
     audioSegments: List<VoiceCallAudioSegment> = emptyList(),
 ): List<VoiceCallDisplayItem> {
     val displaySegments = voiceCallDisplaySegments()
+    val hasWholeReplyAudio = audioSegments.size == 1 && displaySegments.size > 1 &&
+        audioSegments.single().startPositionMs == null
     val usedAudioSegmentIndexes = mutableSetOf<Int>()
 
     // Call-only tag metadata is removed after hang-up, but cached audio keeps
     // the exact TTS text. Match without the tag before positional fallback.
+    // A timestamp-free legacy recording stays attached once to the first
+    // sentence bubble; it must never collapse the reply into one bubble.
     return displaySegments.mapIndexed { displayIndex, segment ->
-        // v3 is synthesized as one whole-reply file. Keep that cached file
-        // attached to every visible bubble so each bubble retains a replay
-        // button instead of losing the button after sentence splitting.
-        val audioSegmentIndex = if (audioSegments.size == 1) {
-            0
+        val audioSegmentIndex = if (hasWholeReplyAudio) {
+            // Keep live bubbles stable when capture finishes; attach whole-reply replay only once.
+            0.takeIf { displayIndex == 0 }
+        } else if (audioSegments.size == 1) {
+            0.takeIf { audioSegments.single().text.matchesVoiceCallDisplayText(segment.text) }
         } else {
             audioSegments.indices.firstOrNull { audioIndex ->
                 audioIndex !in usedAudioSegmentIndexes &&
@@ -104,7 +121,7 @@ private fun String.splitVoiceCallDisplayItems(
             }
             audioSegments[index]
         }
-        segment.text.toVoiceCallDisplayItem(asVoice, audioSegment)
+        segment.text.toVoiceCallDisplayItem(asVoice, audioSegment, hasWholeReplyAudio && audioSegment != null)
     }
 }
 
@@ -120,12 +137,18 @@ private fun String.matchesVoiceCallDisplayText(displayText: String): Boolean {
 private fun String.toVoiceCallDisplayItem(
     asVoice: Boolean,
     audioSegment: VoiceCallAudioSegment? = null,
+    isWholeReplyAudio: Boolean = false,
 ): VoiceCallDisplayItem {
     return if (asVoice) {
         VoiceCallDisplayItem.Voice(
             text = this,
-            durationSeconds = estimateVoiceCallDurationSeconds(this),
+            durationSeconds = audioSegment?.let { audio ->
+                val start = audio.startPositionMs
+                val end = audio.endPositionMs
+                if (start != null && end != null && end > start) ((end - start + 999) / 1_000).toInt() else null
+            } ?: estimateVoiceCallDurationSeconds(if (isWholeReplyAudio) audioSegment?.text ?: this else this),
             audioSegment = audioSegment,
+            isWholeReplyAudio = isWholeReplyAudio,
         )
     } else {
         VoiceCallDisplayItem.Text(this)

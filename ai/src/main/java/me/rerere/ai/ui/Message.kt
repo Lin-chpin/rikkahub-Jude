@@ -911,6 +911,8 @@ data class VoiceCallAudioSegment(
     val audioUri: String,
     val format: String,
     val sampleRate: Int? = null,
+    val startPositionMs: Long? = null,
+    val endPositionMs: Long? = null,
 )
 
 @Serializable

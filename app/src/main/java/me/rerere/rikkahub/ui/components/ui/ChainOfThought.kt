@@ -46,6 +46,8 @@ import me.rerere.hugeicons.stroke.ArrowRight01
 import me.rerere.hugeicons.stroke.ArrowUp01
 import me.rerere.hugeicons.stroke.Search01
 import me.rerere.hugeicons.stroke.Sparkles
+import me.rerere.rikkahub.ui.theme.LocalLiquidGlass
+import me.rerere.rikkahub.ui.theme.liquidGlassChrome
 import me.rerere.rikkahub.R
 
 private val LocalCardColor = staticCompositionLocalOf { Color.White }
@@ -76,16 +78,18 @@ fun <T> ChainOfThought(
     collapsedAdaptiveWidth: Boolean = false,
     content: @Composable ChainOfThoughtScope.(T) -> Unit
 ) {
+    val glass = LocalLiquidGlass.current.enabled
+    val surfaceColors = if (glass) cardColors.copy(containerColor = Color.Transparent) else cardColors
     var expanded by remember { mutableStateOf(false) }
     val canCollapse = steps.size > collapsedVisibleCount
     val shouldFillCollapseControlWidth = expanded || !collapsedAdaptiveWidth
 
     CompositionLocalProvider(
-        LocalCardColor provides cardColors.containerColor
+        LocalCardColor provides surfaceColors.containerColor
     ) {
         Card(
-            modifier = modifier,
-            colors = cardColors,
+            modifier = if (glass) modifier.liquidGlassChrome(RoundedCornerShape(16.dp)) else modifier,
+            colors = surfaceColors,
             shape = RoundedCornerShape(16.dp),
         ) {
             Column(

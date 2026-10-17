@@ -31,7 +31,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import me.rerere.rikkahub.ui.theme.LiquidGlassModalBottomSheet as ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
@@ -138,34 +138,34 @@ fun SettingThemePage(vm: SettingVM = koinViewModel()) {
                 }
             }
 
-            if (!settings.dynamicColor) {
-                item("presetThemes") {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 8.dp),
+            item("presetThemes") {
+                Column(
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.setting_theme_page_preset_themes),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 8.dp)
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(MaterialTheme.colorScheme.surfaceBright)
                     ) {
-                        Text(
-                            text = stringResource(R.string.setting_theme_page_preset_themes),
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 8.dp)
+                        PresetThemeButtonGroup(
+                            themeId = if (settings.dynamicColor) "" else settings.themeId,
+                            modifier = Modifier.fillMaxWidth(),
+                            onChangeTheme = {
+                                vm.updateSettings(settings.copy(themeId = it, dynamicColor = false))
+                            }
                         )
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(20.dp))
-                                .background(MaterialTheme.colorScheme.surfaceBright)
-                        ) {
-                            PresetThemeButtonGroup(
-                                themeId = settings.themeId,
-                                modifier = Modifier.fillMaxWidth(),
-                                onChangeTheme = {
-                                    vm.updateSettings(settings.copy(themeId = it))
-                                }
-                            )
-                        }
                     }
                 }
+            }
 
+            if (!settings.dynamicColor) {
                 item("customThemesHeader") {
                     Row(
                         modifier = Modifier

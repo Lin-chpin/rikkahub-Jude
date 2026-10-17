@@ -45,7 +45,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import me.rerere.rikkahub.ui.theme.LiquidGlassModalBottomSheet as ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.RadioButton
@@ -85,6 +85,7 @@ import me.rerere.rikkahub.ui.pages.setting.components.ASRProviderConfigure
 import me.rerere.rikkahub.ui.pages.setting.components.TTSProviderConfigure
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.plus
+import me.rerere.rikkahub.utils.toChatTtsText
 import me.rerere.tts.controller.TtsController
 import me.rerere.tts.provider.TTSManager
 import me.rerere.tts.provider.TTSProviderSetting
@@ -200,7 +201,12 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
         previewingProviderId = normalizedProvider.id.toString()
         Log.i(TAG, "Testing TTS provider: ${describeTtsProvider(normalizedProvider)}")
         previewController.setProvider(normalizedProvider)
-        previewController.speak(testText)
+        previewController.speak(
+            testText.toChatTtsText(
+                ttsOnlyReadQuoted = settings.displaySetting.ttsOnlyReadQuoted,
+                ttsEnglishOnly = settings.displaySetting.ttsEnglishOnly,
+            )
+        )
     }
 
     DisposableEffect(previewController) {

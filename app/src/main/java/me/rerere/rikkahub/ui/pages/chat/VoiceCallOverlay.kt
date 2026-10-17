@@ -3,7 +3,9 @@ package me.rerere.rikkahub.ui.pages.chat
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.util.Log
 import android.view.inputmethod.InputMethodManager
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,6 +35,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -41,6 +44,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -49,6 +53,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,6 +65,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -68,6 +74,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.dokar.sonner.ToastType
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.rememberHazeState
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import java.util.UUID
@@ -79,8 +88,10 @@ import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Voice
 import me.rerere.hugeicons.stroke.VolumeHigh
 import me.rerere.rikkahub.RouteActivity
+import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.getAssistantById
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
+import me.rerere.rikkahub.data.datastore.getSelectedASRProvider
 import me.rerere.rikkahub.data.datastore.getSelectedTTSProvider
 import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.model.Conversation
@@ -108,8 +119,14 @@ import me.rerere.rikkahub.ui.components.ui.permission.rememberPermissionState
 import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.context.LocalTTSState
 import me.rerere.rikkahub.ui.context.LocalToaster
+import me.rerere.rikkahub.ui.components.message.ChatMessageBubbleShape
+import me.rerere.rikkahub.ui.components.message.MessageBubbleSurface
+import me.rerere.rikkahub.ui.theme.LocalLiquidGlass
+import me.rerere.rikkahub.ui.theme.LocalLiquidGlassHaze
+import me.rerere.rikkahub.ui.theme.liquidGlassChrome
 import me.rerere.tts.provider.TTSProviderSetting
-import me.rerere.tts.provider.isElevenLabsV4Turbo
+import me.rerere.tts.provider.isElevenLabsV4
+import me.rerere.tts.provider.isElevenLabsV4Family
 import org.koin.compose.koinInject
 
 @Composable
@@ -128,7 +145,7 @@ fun VoiceCallOverlay(
     hasChatModel: Boolean,
     vm: ChatVM,
     onDismiss: () -> Unit,
-    onVoiceCallClosed: (failureMessage: String?, completion: VoiceCallCompletion?) -> Unit = { _, _ -> },
+    onVoiceCallClosed: suspend (failureMessage: String?, completion: VoiceCallCompletion?) -> Unit = { _, _ -> },
     onMessageSubmitted: () -> Unit,
 ) {
     if (!visible) return
@@ -162,10 +179,12 @@ fun VoiceCallOverlay(
         voiceCallAudioTagFormat != null
     val showRealtimeVoiceCallTags = voiceCallAudioTagMode == VoiceCallAudioTagMode.REALTIME_MODEL &&
         voiceCallAudioTagFormat != null
-    val useRealtimeSocketTts = selectedTtsProvider?.isElevenLabsV4Turbo() == true
-    // ElevenLabs v3/v4 regular use whole-reply HTTP; Turbo streams one reply over TTD WebSocket.
+    val fullDuplex = !isHistory && selectedTtsProvider is TTSProviderSetting.ElevenLabs &&
+        selectedTtsProvider.isElevenLabsV4Family() && selectedTtsProvider.fullDuplex
+    val useRealtimeSocketTts = selectedTtsProvider?.isElevenLabsV4Family() == true
+    // v3 keeps one tagged HTTP request; both v4 models stream one reply over TTD WebSocket.
     val useWholeReplyTts = !useRealtimeSocketTts && selectedTtsProvider is TTSProviderSetting.ElevenLabs &&
-        voiceCallAudioTagFormat != null
+        !selectedTtsProvider.isElevenLabsV4() && voiceCallAudioTagFormat != null
     val asrPermission = rememberPermissionState(PermissionRecordAudio)
     PermissionManager(permissionState = asrPermission)
 
@@ -177,16 +196,28 @@ fun VoiceCallOverlay(
     var submittedKeyboardInputSession by remember { mutableStateOf(0) }
     var keyboardInput by remember { mutableStateOf("") }
     var submittedKeyboardInput by remember { mutableStateOf("") }
-    var voiceCallResultReported by remember(initialVoiceCallToolCallId) { mutableStateOf(false) }
+    val reportedCallState = remember(initialVoiceCallToolCallId) { mutableStateOf(false) }
+    var voiceCallResultReported by reportedCallState
+    val callScope = rememberCoroutineScope()
+    val stopDuplexInput = remember { arrayOf<() -> Unit>({}) }
     var showVoiceCallFlowDialog by remember { mutableStateOf(false) }
     val voiceCallFlowSteps = remember { mutableStateListOf<String>() }
     val callStartedAt = remember { System.currentTimeMillis() }
     val callId = remember { UUID.randomUUID().toString() }
     var hasSubmittedUserMessage by remember(callId) { mutableStateOf(false) }
-    val callStartMessageIds = remember { conversation.currentMessages.map { it.id.toString() }.toSet() }
+    val callStartBaseline = remember(initialAssistantMessageId) {
+        val messages = conversation.currentMessages
+        val messageCount = initialAssistantMessageId
+            ?.let { id -> messages.indexOfFirst { it.id.toString() == id } }
+            ?.takeIf { it >= 0 }
+            ?.plus(1)
+            ?: messages.size
+        messages.take(messageCount).mapTo(mutableSetOf()) { it.id.toString() } to messageCount
+    }
+    val callStartMessageIds = callStartBaseline.first
     var callElapsedMillis by remember { mutableStateOf(0L) }
-    val callStartMessageCount = remember { conversation.currentMessages.size }
-    var voiceRequestStartMessageCount by remember { mutableStateOf(conversation.currentMessages.size) }
+    val callStartMessageCount = callStartBaseline.second
+    var voiceRequestStartMessageCount by remember { mutableStateOf(callStartMessageCount) }
 
     DisposableEffect(callId, isHistory) {
         if (!isHistory) {
@@ -198,23 +229,26 @@ fun VoiceCallOverlay(
             }
         }
     }
+    DisposableEffect(tts, callId, isHistory, useRealtimeSocketTts) {
+        val prepareConnection = !isHistory && useRealtimeSocketTts
+        if (prepareConnection) tts.setRealtimeDialoguePreconnectionEnabled(true)
+        onDispose {
+            if (prepareConnection) tts.setRealtimeDialoguePreconnectionEnabled(false)
+        }
+    }
     val clipboardManager = remember(context) {
         context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
     }
 
     fun recordVoiceCallFlow(step: String) {
         val elapsedMillis = (System.currentTimeMillis() - callStartedAt).coerceAtLeast(0L)
+        Log.i("VoiceCallFlow", "[+${elapsedMillis}ms] $step")
         voiceCallFlowSteps += "[+" + elapsedMillis + "ms] " + step
         if (voiceCallFlowSteps.size > 300) {
             voiceCallFlowSteps.removeAt(0)
         }
     }
 
-    val initialAssistantMessage = initialAssistantMessageId?.let { messageId ->
-        conversation.currentMessages.firstOrNull {
-            it.role == MessageRole.ASSISTANT && it.id.toString() == messageId
-        }
-    }
     val standaloneHistoryRecord = if (isHistory) {
         conversation.messageNodes.asSequence()
             .flatMap { it.messages.asSequence() }
@@ -238,8 +272,8 @@ fun VoiceCallOverlay(
             }
         }
     } else {
-        conversation.currentMessages.filterIndexed { index, message ->
-            (index >= callStartMessageCount || message.id.toString() == initialAssistantMessageId) &&
+        conversation.currentMessages.filter { message ->
+            message.id.toString() !in callStartMessageIds &&
                 (message.role == MessageRole.USER || message.role == MessageRole.ASSISTANT)
         }
     }
@@ -248,16 +282,12 @@ fun VoiceCallOverlay(
         ?: visibleMessages.firstNotNullOfOrNull { it.voiceCallRecord()?.durationSeconds }
         ?: 0) * 1000L
     val messageListState = rememberLazyListState()
-    // The incoming-call tool message predates the call's first generated reply.
-    // Prefer each reply created after the current voice input; keep the tool
-    // message only as a fallback while the first reply is still starting.
+    // The incoming-call assistant/tool message is the baseline; only show the
+    // new assistant reply produced after the call was accepted.
     val latestGeneratedAssistantMessage = conversation.currentMessages
         .drop(voiceRequestStartMessageCount)
         .lastOrNull { it.role == MessageRole.ASSISTANT }
     val currentAssistantMessage = latestGeneratedAssistantMessage
-        ?: initialAssistantMessage?.takeIf {
-            loadingJob != null || it.toText().isNotBlank()
-        }
     val currentAssistantId = currentAssistantMessage?.id?.toString()
     val currentAssistantRawText = currentAssistantMessage?.toText().orEmpty()
     val currentAssistantText = if (showRealtimeVoiceCallTags) {
@@ -285,6 +315,14 @@ fun VoiceCallOverlay(
             "通话页打开 history=" + isHistory + ", ttsAvailable=" + ttsAvailable +
                 ", initialAssistant=" + (initialAssistantMessageId != null)
         )
+        recordVoiceCallFlow(
+            "TTS路径 provider=" + (selectedTtsProvider?.javaClass?.simpleName ?: "none") +
+                ", mode=" + when {
+                    useRealtimeSocketTts -> "realtime_dialogue"
+                    useWholeReplyTts -> "whole_reply_http"
+                    else -> "sentence_queue"
+                } + ", tagMode=" + voiceCallAudioTagMode
+        )
         if (isHistory) {
             val savedSegments = historyAudioSegmentsByMessageId.values.flatten().ifEmpty {
                 visibleMessages.flatMap { it.voiceCallRecord()?.audioSegments.orEmpty() }
@@ -295,8 +333,7 @@ fun VoiceCallOverlay(
             )
             savedSegments.forEachIndexed { index, segment ->
                 recordVoiceCallFlow(
-                    "历史音频[" + index + "] uri=" + segment.audioUri +
-                        ", format=" + segment.format + ", bytes=unknown"
+                    "历史音频[" + index + "] format=" + segment.format + ", bytes=unknown"
                 )
             }
         }
@@ -309,7 +346,9 @@ fun VoiceCallOverlay(
     LaunchedEffect(playbackState.status, playbackState.currentChunkIndex, playbackState.totalChunks) {
         recordVoiceCallFlow(
             "TTS播放状态 status=" + playbackState.status +
-                ", chunk=" + playbackState.currentChunkIndex + "/" + playbackState.totalChunks
+                ", chunk=" + playbackState.currentChunkIndex + "/" + playbackState.totalChunks +
+                ", session=" + tts.playbackSessionId.value +
+                ", hasError=" + (playbackState.errorMessage != null)
         )
     }
 
@@ -329,8 +368,13 @@ fun VoiceCallOverlay(
     }
 
     fun hangUp(failureMessage: String? = null) {
+        if (voiceCallResultReported) return
+        voiceCallResultReported = true
+        stopDuplexInput[0]()
+        val closingGeneration = vm.cancelGeneration()
+        vm.stopGeneration()
         recordVoiceCallFlow(
-            "挂断开始 failure=" + (failureMessage ?: "none") +
+            "挂断开始 failurePresent=" + (failureMessage != null) +
                 ", audioSegments=" + speechPlayback.audioSegmentCount()
         )
         keyboardCaptureActive = false
@@ -338,30 +382,30 @@ fun VoiceCallOverlay(
         submittedKeyboardInput = ""
         submittedKeyboardInputSession = keyboardInputSession
         keyboardController?.hide()
+        tts.setRealtimeDialoguePreconnectionEnabled(false)
         tts.stop()
         speechPlayback.stopReply()
-        if (!voiceCallResultReported) {
-            voiceCallResultReported = true
-            val callMessages = conversation.currentMessages.filter { message ->
-                val isInitialAssistantReply = message.id.toString() == initialAssistantMessageId &&
-                    message.role == MessageRole.ASSISTANT &&
-                    message.voiceCallDisplayTextOrPlainText().isNotBlank()
-                (message.id.toString() !in callStartMessageIds || isInitialAssistantReply) &&
+        callScope.launch {
+            closingGeneration?.join()
+            speechPlayback.awaitAudioSaves()
+            val callMessages = vm.conversation.value.currentMessages.filter { message ->
+                message.id.toString() !in callStartMessageIds &&
                     (message.role == MessageRole.USER || message.role == MessageRole.ASSISTANT)
             }
+            val callMessageIds = callMessages.mapTo(mutableSetOf()) { it.id.toString() }
             val completion = VoiceCallCompletion(
                 callId = callId,
                 durationSeconds = ((callElapsedMillis + 999L) / 1000L).toInt().coerceAtLeast(1),
-                messageIds = callMessages.map { it.id.toString() }.toSet(),
-                audioSegmentsByMessageId = speechPlayback.audioSegmentsSnapshot(),
+                messageIds = callMessageIds,
+                audioSegmentsByMessageId = speechPlayback.audioSegmentsSnapshot().filterKeys { it in callMessageIds },
             )
             recordVoiceCallFlow(
                 "通话记录完成 messages=" + completion.messageIds.size +
                     ", audioSegments=" + completion.audioSegmentsByMessageId.values.sumOf { it.size }
             )
             onVoiceCallClosed(failureMessage, completion)
+            onDismiss()
         }
-        onDismiss()
     }
 
     LaunchedEffect(visible, ttsProviderReady, ttsAvailable) {
@@ -391,14 +435,14 @@ fun VoiceCallOverlay(
     }
 
     fun interruptCurrentReplyForInput() {
+        if (voiceCallResultReported) return
         speechPlayback.interruptReply(currentAssistantId)
-        if (loadingJob != null) {
-            vm.stopGeneration()
-        }
+        vm.stopGeneration()
         tts.stop()
     }
 
     fun sendCapturedText(text: String): Boolean {
+        if (voiceCallResultReported) return false
         val contentText = text.trim()
         if (contentText.isBlank()) {
             toaster.show("没有识别到语音", type = ToastType.Warning)
@@ -408,7 +452,7 @@ fun VoiceCallOverlay(
             tts.stop()
         }
         voiceRequestStartMessageCount = conversation.currentMessages.size
-        speechPlayback.beginReply()
+        speechPlayback.beginReply(vm.voiceCallSpeech.value.generationJob)
         submittedKeyboardInput = contentText
         val includeConnectedEvent = !hasSubmittedUserMessage
         vm.handleMessageSend(
@@ -541,12 +585,42 @@ fun VoiceCallOverlay(
         }
     }
 
+    val duplexInput = rememberVoiceCallDuplexInput(
+        enabled = fullDuplex && !voiceCallResultReported,
+        permissionGranted = asrPermission.allRequiredPermissionsGranted,
+        providerId = settings.getSelectedASRProvider()?.id,
+        onInterrupt = {
+            if (!voiceCallResultReported) interruptCurrentReplyForInput()
+        },
+        onSubmit = { text -> sendCapturedText(text) },
+    )
+    stopDuplexInput[0] = duplexInput.stop
+    val duplexListening = fullDuplex && !duplexInput.fallback
+    LaunchedEffect(fullDuplex, asrPermission.allRequiredPermissionsGranted) {
+        if (fullDuplex && !asrPermission.allRequiredPermissionsGranted) asrPermission.requestPermissions()
+    }
+    LaunchedEffect(duplexInput.error) {
+        duplexInput.error?.let { toaster.show(it, type = ToastType.Warning) }
+    }
+    DisposableEffect(duplexInput, callId, isHistory) {
+        onDispose {
+            duplexInput.stop()
+            if (!isHistory) {
+                tts.setRealtimeDialoguePreconnectionEnabled(false)
+                tts.stop()
+                if (!reportedCallState.value) vm.stopGeneration()
+            }
+        }
+    }
+
     if (useRealtimeSocketTts) {
         BindVoiceCallRealtimeTtsPlayback(
             state = speechPlayback,
             awaitInitialAssistantReply = awaitInitialAssistantReply,
             speechInput = vm.voiceCallSpeech,
             loadingJob = loadingJob,
+            ttsOnlyReadQuoted = settings.displaySetting.ttsOnlyReadQuoted,
+            fullDuplex = fullDuplex,
             tts = tts,
             filesManager = filesManager,
             recordFlow = ::recordVoiceCallFlow,
@@ -558,6 +632,7 @@ fun VoiceCallOverlay(
             speechInput = vm.voiceCallSpeech,
             loadingJob = loadingJob,
             useWholeReplyTts = useWholeReplyTts,
+            ttsOnlyReadQuoted = settings.displaySetting.ttsOnlyReadQuoted,
             tts = tts,
             filesManager = filesManager,
             recordFlow = ::recordVoiceCallFlow,
@@ -590,6 +665,8 @@ fun VoiceCallOverlay(
         currentAssistantId = currentAssistantId,
         currentAssistantTextLength = currentAssistantText.length,
     )
+    val liquidGlass = LocalLiquidGlass.current.enabled
+    val callHazeState = rememberHazeState()
 
     Dialog(
         onDismissRequest = {
@@ -605,25 +682,29 @@ fun VoiceCallOverlay(
     ) {
         Surface(
             color = MaterialTheme.colorScheme.background,
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize(),
         ) {
-            AssistantBackground(
-                setting = settings,
-                modifier = Modifier.fillMaxSize(),
-                assistant = callAssistant,
-                useVoiceCallBackground = true,
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .safeDrawingPadding()
-                    .padding(
-                        start = dialogHorizontalPadding,
-                        top = dialogTopPadding,
-                        end = dialogHorizontalPadding,
-                        bottom = dialogBottomPadding,
+            CompositionLocalProvider(LocalLiquidGlassHaze provides callHazeState) {
+                // Capture the base color too: without a call wallpaper, the inner background emits nothing.
+                Box(Modifier.fillMaxSize().hazeSource(callHazeState).background(MaterialTheme.colorScheme.background)) {
+                    AssistantBackground(
+                        setting = settings,
+                        modifier = Modifier.fillMaxSize(),
+                        assistant = callAssistant,
+                        useVoiceCallBackground = true,
                     )
-            ) {
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .safeDrawingPadding()
+                        .padding(
+                            start = dialogHorizontalPadding,
+                            top = dialogTopPadding,
+                            end = dialogHorizontalPadding,
+                            bottom = dialogBottomPadding,
+                        )
+                ) {
                 key(keyboardInputFieldKey) {
                     BasicTextField(
                         value = keyboardInput,
@@ -708,9 +789,11 @@ fun VoiceCallOverlay(
 
                             Text(
                                 text = when {
+                                    voiceCallResultReported -> "通话已结束，正在保存记录…"
                                     !ttsProviderReady -> "正在连接语音模型..."
                                     !ttsAvailable -> "电话里的 AI 声音使用「文本转语音」里选中的语音模型。"
                                     !asrPermission.allRequiredPermissionsGranted -> "电话输入需要麦克风权限。"
+                                    duplexListening -> "正在持续聆听，直接说话即可打断 AI。"
                                     aiReplyActive -> "AI 正在回复..."
                                     else -> "点按语音输入，用输入法麦克风说话。"
                                 },
@@ -745,31 +828,39 @@ fun VoiceCallOverlay(
                                     speechPlayback.audioSegments(message.id.toString())
                                 },
                                 currentAssistantId = currentAssistantId,
-                                voiceReplyPending = speechPlayback.replyPending,
-                                visibleTextLength = speechPlayback.visibleTextLength,
-                                visibleTextOverride = speechPlayback.visibleTextOverride(message.id.toString()),
+                                textGenerationPending = !isHistory && loadingJob != null,
                                 showAudioTags = showVoiceCallTags,
                             )
+                            val fullReplyTranslationSource = message
+                                .voiceCallDisplayTextOrPlainText()
+                                .withoutVoiceCallRealtimeEmotionMarker()
+                                .voiceCallDisplaySegments()
+                                .joinToString("\n") { it.text }
+                                .sanitizeVoiceCallTextForTranslation()
                             displayItems.forEachIndexed { index, item ->
                                 val bubbleKey = item.translationKey(index)
                                 val isTranslationTarget =
                                     message.role == MessageRole.ASSISTANT && bubbleKey != null
+                                val translatingText = stringResource(R.string.translating)
+                                val translation = if (isTranslationTarget) {
+                                    message.voiceCallTranslationForDisplay(
+                                        index = index,
+                                        itemCount = displayItems.count { it.translationText != null },
+                                        loadingText = translatingText,
+                                    )
+                                } else {
+                                    null
+                                }
                                 VoiceCallMessageBubble(
                                     role = message.role,
                                     item = item,
-                                    translation = if (isTranslationTarget) {
-                                        message.voiceCallTranslations[bubbleKey]
-                                            ?: if (displayItems.size == 1) message.translation else null
-                                    } else {
-                                        null
-                                    },
+                                    translation = translation,
                                     onTranslate = if (isTranslationTarget) {
                                         { language ->
                                             vm.translateVoiceCallBubble(
                                                 message = message,
-                                                bubbleKey = bubbleKey!!,
-                                                sourceText = item.translationText!!
-                                                    .sanitizeVoiceCallTextForTranslation(),
+                                                bubbleKey = VOICE_CALL_REPLY_TRANSLATION_KEY,
+                                                sourceText = fullReplyTranslationSource,
                                                 targetLanguage = language,
                                             )
                                         }
@@ -780,7 +871,7 @@ fun VoiceCallOverlay(
                                         {
                                             vm.clearVoiceCallTranslation(
                                                 messageId = message.id,
-                                                bubbleKey = bubbleKey!!,
+                                                bubbleKey = VOICE_CALL_REPLY_TRANSLATION_KEY,
                                                 clearLegacyTranslation = displayItems.size == 1,
                                             )
                                         }
@@ -796,34 +887,53 @@ fun VoiceCallOverlay(
                         item(
                             key = "voice-call-pending-user-input",
                         ) {
-                            if (pendingBubbleText.isNotBlank()) {
+                            val capturedText = duplexInput.pendingText.ifBlank { pendingBubbleText }
+                            if (capturedText.isNotBlank()) {
                                 VoiceCallMessageBubble(
                                     role = MessageRole.USER,
-                                    item = VoiceCallDisplayItem.Text(pendingBubbleText),
+                                    item = VoiceCallDisplayItem.Text(capturedText),
                                 )
                             }
                         }
                     }
 
                     if (!isHistory) {
+                    val callActionShape = RoundedCornerShape(50)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        FilledTonalButton(onClick = ::hangUp) {
+                        FilledTonalButton(
+                            onClick = ::hangUp,
+                            shape = callActionShape,
+                            modifier = if (liquidGlass) Modifier.liquidGlassChrome(callActionShape) else Modifier,
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = if (liquidGlass) Color.Transparent else MaterialTheme.colorScheme.secondaryContainer,
+                            ),
+                        ) {
                             Text("挂断")
                         }
                         // TextButton(onClick = { showVoiceCallFlowDialog = true }) {
                         //     Text("排查流程")
                         // }
                         Button(
-                            enabled = !asrPermission.allRequiredPermissionsGranted ||
+                            shape = callActionShape,
+                            modifier = if (liquidGlass) Modifier.liquidGlassChrome(callActionShape) else Modifier,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (liquidGlass) Color.Transparent else MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            ),
+                            enabled = !voiceCallResultReported && (
+                                !asrPermission.allRequiredPermissionsGranted ||
                                 !keyboardCaptureActive ||
-                                (hasChatModel && ttsAvailable),
+                                (hasChatModel && ttsAvailable)),
+
                             onClick = {
                                 if (!asrPermission.allRequiredPermissionsGranted) {
                                     asrPermission.requestPermissions()
+                                } else if (duplexListening) {
+                                    interruptCurrentReplyForInput()
                                 } else if (keyboardCaptureActive) {
                                     if (pendingUserInputText.isNotBlank()) {
                                         finishKeyboardInput()
@@ -849,6 +959,7 @@ fun VoiceCallOverlay(
                             Text(
                                 when {
                                     !asrPermission.allRequiredPermissionsGranted -> "获取麦克风权限"
+                                    duplexListening -> "打断 AI"
                                     keyboardCaptureActive -> "语音输入"
                                     aiReplyActive -> "打断并说话"
                                     else -> "语音输入"
@@ -858,6 +969,7 @@ fun VoiceCallOverlay(
                      }
                    }
                 }
+            }
             }
         }
     }
@@ -991,6 +1103,7 @@ private fun VoiceCallMessageBubble(
 ) {
     val tts = LocalTTSState.current
     val isUser = role == MessageRole.USER
+    val liquidGlass = LocalLiquidGlass.current.enabled
     val selectedTtsProvider = LocalSettings.current.getSelectedTTSProvider()
     val showVoiceCallAudioTagAnnotations =
         LocalSettings.current.voiceCallAudioTagMode
@@ -1014,19 +1127,17 @@ private fun VoiceCallMessageBubble(
                 modifier = Modifier.widthIn(max = 520.dp),
                 horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
             ) {
-                Surface(
+                val bubbleShape = ChatMessageBubbleShape
+                MessageBubbleSurface(
                     modifier = Modifier.widthIn(max = 520.dp),
-                    shape = RoundedCornerShape(
-                        topStart = 18.dp,
-                        topEnd = 18.dp,
-                        bottomStart = if (isUser || onTranslate != null) 18.dp else 6.dp,
-                        bottomEnd = 18.dp,
-                    ),
-                    color = if (isUser) {
+                    shape = bubbleShape,
+                    containerColor = if (isUser) {
                         MaterialTheme.colorScheme.primaryContainer
                     } else {
                         MaterialTheme.colorScheme.surfaceContainerHigh
                     },
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    applyLiquidGlass = liquidGlass,
                 ) {
                     Column {
                     when (item) {
@@ -1055,7 +1166,7 @@ private fun VoiceCallMessageBubble(
                                         tint = MaterialTheme.colorScheme.primary,
                                     )
                                     Text(
-                                        text = "语音消息",
+                                        text = if (item.isWholeReplyAudio) "整段回放" else "语音消息",
                                         modifier = Modifier.weight(1f),
                                         style = MaterialTheme.typography.labelLarge,
                                         color = MaterialTheme.colorScheme.onSurface,
@@ -1068,8 +1179,19 @@ private fun VoiceCallMessageBubble(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                     item.audioSegment?.let { audio ->
-                                        IconButton(onClick = { tts.playCachedAudio(audio.audioUri, audio.format, audio.sampleRate) }, modifier = Modifier.size(28.dp)) {
-                                            Icon(HugeIcons.VolumeHigh, contentDescription = "播放通话 TTS", modifier = Modifier.size(16.dp))
+                                        IconButton(
+                                            onClick = {
+                                                tts.playCachedAudio(
+                                                    audio.audioUri,
+                                                    audio.format,
+                                                    audio.sampleRate,
+                                                    audio.startPositionMs,
+                                                    audio.endPositionMs,
+                                                )
+                                            },
+                                            modifier = Modifier.size(28.dp),
+                                        ) {
+                                            Icon(HugeIcons.VolumeHigh, contentDescription = if (item.isWholeReplyAudio) "播放整段通话回复" else "播放通话 TTS", modifier = Modifier.size(16.dp))
                                         }
                                     }
                                 }
@@ -1093,11 +1215,7 @@ private fun VoiceCallMessageBubble(
                                 text = item.text,
                                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                                 style = MaterialTheme.typography.bodyLarge,
-                                color = if (isUser) {
-                                    MaterialTheme.colorScheme.onPrimaryContainer
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface
-                                },
+                                color = MaterialTheme.colorScheme.onSurface,
                             )
                         }
                     }
@@ -1114,11 +1232,7 @@ private fun VoiceCallMessageBubble(
                             onClearTranslation = onClearTranslation,
                             showLabel = true,
                             defaultLanguage = Locale.SIMPLIFIED_CHINESE,
-                            tint = if (isUser) {
-                                MaterialTheme.colorScheme.onPrimaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
+                            tint = MaterialTheme.colorScheme.onSurface,
                         )
                     }
                     }

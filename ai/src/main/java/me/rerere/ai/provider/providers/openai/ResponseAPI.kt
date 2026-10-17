@@ -55,6 +55,8 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import me.rerere.common.http.suppressContentLogs
+import me.rerere.common.http.privateRequestFailure
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.sse.EventSource
@@ -105,6 +107,7 @@ class ResponseAPI(
         val requestBuilder = Request.Builder()
             .url("$responsesBaseUrl${providerSetting.responsesPath}")
             .headers(params.customHeaders.toHeaders())
+            .suppressContentLogs(params.suppressContentLogs)
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .addHeader("Content-Type", "application/json")
             .configureReferHeaders(responsesBaseUrl)
@@ -112,11 +115,19 @@ class ResponseAPI(
 
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
+            if (params.suppressContentLogs) {
+                val failure = privateRequestFailure(null, response.code, response)
+                response.close()
+                throw failure
+            }
             throw Exception("Failed to get response: ${response.code} ${response.body.string()}")
         }
 
         val bodyStr = response.body?.string() ?: ""
         val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
+        (bodyJson["usage"] as? JsonObject)?.let { usage ->
+            runCatching { params.onTokenUsage?.invoke(usage) }
+        }
         val output = parseResponseOutput(bodyJson)
 
         return output
@@ -137,6 +148,7 @@ class ResponseAPI(
         val requestBuilder = Request.Builder()
             .url("$responsesBaseUrl${providerSetting.responsesPath}")
             .headers(params.customHeaders.toHeaders())
+            .suppressContentLogs(params.suppressContentLogs)
             .acceptEventStream()
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .configureReferHeaders(responsesBaseUrl)
@@ -158,8 +170,11 @@ class ResponseAPI(
                     close()
                     return
                 }
-                Log.d(TAG, "onEvent: $id/$type (${data.length} chars)")
+                if (!params.suppressContentLogs) Log.d(TAG, "onEvent: $id/$type (${data.length} chars)")
                 val json = json.parseToJsonElement(data).jsonObject
+                ((json["response"] as? JsonObject)?.get("usage") as? JsonObject)?.let { usage ->
+                    runCatching { params.onTokenUsage?.invoke(usage) }
+                }
                 toolCalls.accept(json)
                 val chunk = parseResponseDelta(json)
                 if (chunk != null) {
@@ -175,6 +190,12 @@ class ResponseAPI(
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                 if (completedNormally.get()) {
                     close()
+                    return
+                }
+                if (params.suppressContentLogs) {
+                    val failure = privateRequestFailure(t, response?.code, response)
+                    response?.close()
+                    close(failure)
                     return
                 }
                 var exception = t
@@ -328,11 +349,11 @@ class ResponseAPI(
             }
         }.mergeCustomBody(params.customBody)
 
-        return if (providerSetting.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION) {
+        return (if (providerSetting.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION) {
             JsonObject(body + ("stream" to JsonPrimitive(true)))
         } else {
             body
-        }
+        }).also { request -> runCatching { params.onRequestPrepared?.invoke(request) } }
     }
 
     internal fun buildMessages(

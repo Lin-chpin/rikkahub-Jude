@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.ui.components.ui
 
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -39,6 +40,13 @@ fun FloatingWindow(
             setOffsetXY(20f, -20f)
             setEnableAnimation(true)
             setLayoutView(ComposeView(context).apply {
+                addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+                    val width = right - left
+                    val height = bottom - top
+                    if (width != oldRight - oldLeft || height != oldBottom - oldTop) {
+                        Log.i("FloatingWindow", "layout tag=$tag widthPx=$width heightPx=$height")
+                    }
+                }
                 setContent {
                     RikkahubTheme {
                         content()

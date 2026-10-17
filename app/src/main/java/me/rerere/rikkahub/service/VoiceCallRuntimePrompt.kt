@@ -1,8 +1,5 @@
 package me.rerere.rikkahub.service
 
-import me.rerere.ai.core.MessageRole
-import me.rerere.ai.ui.UIMessage
-import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.voice.VoiceCallAudioTagFormat
 import me.rerere.rikkahub.data.voice.VoiceCallAudioTagMode
 import me.rerere.rikkahub.data.ai.prompts.buildVoiceCallRealtimeAudioTagPrompt
@@ -51,8 +48,11 @@ internal fun ChatRequestMode.defaultVoiceCallRuntimeState(): VoiceCallRuntimeSta
         ChatRequestMode.Normal -> VoiceCallRuntimeState.INACTIVE
     }
 
-internal fun buildVoiceCallRuntimeContext(state: VoiceCallRuntimeState): VoiceCallRuntimeContext {
-    return when (state) {
+internal fun buildVoiceCallRuntimeContext(
+    state: VoiceCallRuntimeState,
+    includeConnectionEvent: Boolean = false,
+): VoiceCallRuntimeContext {
+    val context = when (state) {
         VoiceCallRuntimeState.ACTIVE -> VoiceCallRuntimeContext(
             systemPrompt = """
             [VOICE_CALL_RUNTIME_STATE]
@@ -90,61 +90,13 @@ internal fun buildVoiceCallRuntimeContext(state: VoiceCallRuntimeState): VoiceCa
             """.trimIndent(),
         )
     }
-}
-
-internal fun UIMessage.withVoiceCallRuntimeInstructionForRequest(
-    state: VoiceCallRuntimeState,
-    includeConnectionEvent: Boolean,
-): UIMessage {
-    if (role != MessageRole.USER || state == VoiceCallRuntimeState.INACTIVE) return this
-
-    val prefix = buildString {
-        appendLine("[VOICE_CALL_RUNTIME_TURN]")
-        appendLine("state=${state.name}")
-        when (state) {
-            VoiceCallRuntimeState.ACTIVE -> {
-                appendLine("Speak in the first person and output only words you would actually say to the user on the phone.")
-                appendLine("Do not include inner thoughts, private mental state, actions, expressions, environment details, narration, stage directions, or other non-spoken descriptions.")
-                appendLine("If audio tags are required by the active audio-tag mode, keep only the required protocol tags and do not turn them into narration.")
-            }
-
-            VoiceCallRuntimeState.ENDED -> {
-                appendLine("The call has ended. Continue in normal text-chat mode and do not use phone-call speech or first-person call instructions.")
-            }
-
-            VoiceCallRuntimeState.INACTIVE -> return@buildString
-        }
-        if (includeConnectionEvent) {
-            val eventDescription = when (state) {
-                VoiceCallRuntimeState.ACTIVE ->
-                    "The voice call is connected. The following is the user's first spoken message after connection, regardless of who initiated the call."
-
-                VoiceCallRuntimeState.ENDED ->
-                    "The voice call has ended. The following is the user's first normal text message after hangup; respond as a normal text conversation."
-
-                VoiceCallRuntimeState.INACTIVE -> return@buildString
-            }
-            appendLine()
-            appendLine("[VOICE_CALL_RUNTIME_EVENT]")
-            appendLine("$eventDescription")
-        }
-        appendLine()
-        appendLine("[USER_MESSAGE]")
+    if (!includeConnectionEvent || state == VoiceCallRuntimeState.INACTIVE) return context
+    val event = when (state) {
+        VoiceCallRuntimeState.ACTIVE ->
+            "The current user message is the user's first spoken message after connection, regardless of who initiated the call."
+        VoiceCallRuntimeState.ENDED ->
+            "The current user message is the user's first normal text message after hangup; respond as a normal text conversation."
+        VoiceCallRuntimeState.INACTIVE -> return context
     }
-    var decoratedTextPart = false
-    val decoratedParts = parts.map { part ->
-        if (part is UIMessagePart.Text && !decoratedTextPart) {
-            decoratedTextPart = true
-            part.copy(text = "$prefix${part.text}")
-        } else {
-            part
-        }
-    }
-    return copy(
-        parts = if (decoratedTextPart) {
-            decoratedParts
-        } else {
-            listOf(UIMessagePart.Text(prefix)) + decoratedParts
-        }
-    )
+    return context.copy(systemPrompt = context.systemPrompt + "\n\n[VOICE_CALL_RUNTIME_EVENT]\n" + event)
 }

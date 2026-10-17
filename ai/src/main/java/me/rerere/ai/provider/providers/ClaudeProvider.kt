@@ -50,6 +50,8 @@ import me.rerere.common.http.jsonPrimitiveOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import me.rerere.common.http.suppressContentLogs
+import me.rerere.common.http.privateRequestFailure
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.sse.EventSource
@@ -109,16 +111,22 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         val request = Request.Builder()
             .url("${providerSetting.baseUrl}/messages")
             .headers(params.customHeaders.toHeaders())
+            .suppressContentLogs(params.suppressContentLogs)
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .addHeader("x-api-key", keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString()))
             .addHeader("anthropic-version", ANTHROPIC_VERSION)
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        Log.i(TAG, "generateText: ${json.encodeToString(requestBody)}")
+        if (!params.suppressContentLogs) Log.i(TAG, "generateText: ${json.encodeToString(requestBody)}")
 
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
+            if (params.suppressContentLogs) {
+                val failure = privateRequestFailure(null, response.code, response)
+                response.close()
+                throw failure
+            }
             throw Exception("Failed to get response: ${response.code} ${response.body?.string()}")
         }
 
@@ -139,7 +147,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 UIMessageChoice(
                     index = 0,
                     delta = null,
-                    message = parseMessage(content),
+                    message = parseMessage(content, params.suppressContentLogs),
                     finishReason = stopReason
                 )
             ),
@@ -156,6 +164,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         val request = Request.Builder()
             .url("${providerSetting.baseUrl}/messages")
             .headers(params.customHeaders.toHeaders())
+            .suppressContentLogs(params.suppressContentLogs)
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .addHeader("x-api-key", keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString()))
             .addHeader("anthropic-version", ANTHROPIC_VERSION)
@@ -163,10 +172,10 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
+        if (!params.suppressContentLogs) Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
 
         requestBody["messages"]!!.jsonArray.forEach {
-            Log.i(TAG, "streamText: $it")
+            if (!params.suppressContentLogs) Log.i(TAG, "streamText: $it")
         }
 
         val streamBlocks = ClaudeStreamBlocks()
@@ -177,13 +186,13 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 type: String?,
                 data: String
             ) {
-                Log.d(TAG, "onEvent: type=$type, data=$data")
+                if (!params.suppressContentLogs) Log.d(TAG, "onEvent: type=$type, data=$data")
                 if (data == "[DONE]") {
                     return
                 }
 
                 val dataJson = json.parseToJsonElement(data).jsonObject
-                val deltaMessage = parseMessage(streamBlocks.accept(dataJson))
+                val deltaMessage = parseMessage(streamBlocks.accept(dataJson), params.suppressContentLogs)
                 val tokenUsage = parseTokenUsage(dataJson)
                 val messageChunk = MessageChunk(
                     id = id ?: "",
@@ -201,7 +210,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
 
                 when (type) {
                     "message_stop" -> {
-                        Log.d(TAG, "Stream ended")
+                        if (!params.suppressContentLogs) Log.d(TAG, "Stream ended")
                         close()
                     }
 
@@ -216,6 +225,12 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                if (params.suppressContentLogs) {
+                    val failure = privateRequestFailure(t, response?.code, response)
+                    response?.close()
+                    close(failure)
+                    return
+                }
                 var exception = t
 
                 t?.printStackTrace()
@@ -245,7 +260,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             .newEventSource(request, listener)
 
         awaitClose {
-            Log.d(TAG, "Closing eventSource")
+            if (!params.suppressContentLogs) Log.d(TAG, "Closing eventSource")
             eventSource.cancel()
         }
     }
@@ -501,7 +516,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
-    private fun parseMessage(content: JsonArray): UIMessage {
+    private fun parseMessage(content: JsonArray, suppressContentLogs: Boolean = false): UIMessage {
         val parts = mutableListOf<UIMessagePart>()
 
         content.forEach { contentBlock ->

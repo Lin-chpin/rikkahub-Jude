@@ -1,5 +1,7 @@
 package me.rerere.rikkahub.ui.pages.chat
 
+import android.os.SystemClock
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -11,6 +13,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.core.net.toUri
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
@@ -50,17 +53,36 @@ internal class VoiceCallSpeechPlaybackState(initialReplyPending: Boolean) {
     private val interruptedVisibleTextLengths = mutableStateMapOf<String, Int>()
     private val audioSegmentsByMessageId = mutableStateMapOf<String, List<VoiceCallAudioSegment>>()
 
-    fun beginReply() {
+    private val pendingAudioSaves = mutableSetOf<CompletableDeferred<Unit>>()
+
+    fun trackAudioSave(completion: CompletableDeferred<Unit>) {
+        pendingAudioSaves += completion
+        completion.invokeOnCompletion { pendingAudioSaves.remove(completion) }
+    }
+
+    suspend fun awaitAudioSaves() {
+        withTimeoutOrNull(16_000) {
+            pendingAudioSaves.toList().forEach { it.await() }
+        }
+    }
+
+    var excludedSpeechJob: Job? = null
+        private set
+
+    fun beginReply(previousSpeechJob: Job? = null) {
+        excludedSpeechJob = previousSpeechJob
         replyGeneration++
         replyPending = true
         resetProgress(null)
     }
 
     fun stopReply() {
+        replyGeneration++
         replyPending = false
     }
 
     fun interruptReply(messageId: String?) {
+        replyGeneration++
         messageId?.let { interruptedVisibleTextLengths[it] = visibleTextLength }
         replyPending = false
         resetProgress(null)
@@ -100,6 +122,7 @@ internal class VoiceCallSpeechPlaybackState(initialReplyPending: Boolean) {
         displayText: String,
         speechText: String,
         includeUnfinishedTail: Boolean,
+        ttsOnlyReadQuoted: Boolean,
     ) {
         val displaySegments = displayText.voiceCallDisplaySegments(includeUnfinishedTail)
         if (displaySegments.isEmpty()) return
@@ -107,7 +130,10 @@ internal class VoiceCallSpeechPlaybackState(initialReplyPending: Boolean) {
             displayText.takeIf { includeUnfinishedTail }.orEmpty()
         }
         val speechSegments = effectiveSpeechText
-            .sanitizeVoiceCallTextForSpeech()
+            .sanitizeVoiceCallTextForSpeech(
+                ttsOnlyReadQuoted = ttsOnlyReadQuoted,
+                allowUnquotedFallback = includeUnfinishedTail,
+            )
             .voiceCallDisplaySegments(includeUnfinishedTail)
         if (queuedTextLength == displayText.length &&
             queuedSpeechTextLength == effectiveSpeechText.length &&
@@ -174,6 +200,7 @@ internal fun BindVoiceCallSpeechPlayback(
     speechInput: StateFlow<VoiceCallSpeechInput>,
     loadingJob: Job?,
     useWholeReplyTts: Boolean,
+    ttsOnlyReadQuoted: Boolean,
     tts: CustomTtsState,
     filesManager: FilesManager,
     recordFlow: (String) -> Unit,
@@ -186,19 +213,52 @@ internal fun BindVoiceCallSpeechPlayback(
 
     LaunchedEffect(state.replyPending, state.replyGeneration, useWholeReplyTts) {
         if (!state.replyPending) return@LaunchedEffect
+        val sourceDeadline = SystemClock.elapsedRealtime() + 30_000
         var generationJob: Job? = null
+        var lastGenerationGate: String? = null
+        var loggedMessageId: String? = null
         val timing = GenerationTimingTrace("voice_call_speech_queue")
         while (state.replyPending) {
             val input = speechInput.value
             if (generationJob == null) {
-                if (input.generationJob == null || !input.generationJob.isActive || input.generationJob !== latestLoadingJob) {
+                val gate = when {
+                    input.generationJob == null -> "source_missing"
+                    input.generationJob.isCancelled || input.cancelled -> "source_cancelled"
+                    input.generationJob === state.excludedSpeechJob -> "previous_source"
+                    latestLoadingJob != null && input.generationJob !== latestLoadingJob -> "job_mismatch"
+                    else -> null
+                }
+                if (gate != null) {
+                    if (SystemClock.elapsedRealtime() >= sourceDeadline) {
+                        recordFlow("TTS等待生成源超时")
+                        state.completeReply()
+                        return@LaunchedEffect
+                    }
+                    if (lastGenerationGate != gate) {
+                        recordFlow(
+                            "TTS等待生成源 gate=$gate " +
+                                "loadingJobActive=${latestLoadingJob?.isActive == true} " +
+                                "inputFinished=${input.finished} cancelled=${input.cancelled}"
+                        )
+                        lastGenerationGate = gate
+                    }
                     delay(20)
                     continue
                 }
+                if (input.generationJob == null) continue
                 generationJob = input.generationJob
+                lastGenerationGate = null
+                recordFlow("TTS已绑定生成源 inputFinished=${input.finished}")
             }
-            if (input.generationJob !== generationJob || input.cancelled) break
+            if (input.generationJob !== generationJob || input.cancelled || generationJob?.isCancelled == true) {
+                recordFlow(
+                    "TTS生成源中断 sameJob=${input.generationJob === generationJob} " +
+                        "cancelled=${input.cancelled}"
+                )
+                break
+            }
             if (input.finished && input.displayText().isBlank()) {
+                recordFlow("TTS输入结束但无显示文本")
                 state.completeReply()
                 break
             }
@@ -207,8 +267,21 @@ internal fun BindVoiceCallSpeechPlayback(
                 val displayText = input.displayText()
                 val speechText = input.speechText()
                 state.synchronizeMessage(reply.id.toString())
-                state.queueReply(displayText, speechText, includeUnfinishedTail = input.finished)
+                state.queueReply(
+                    displayText = displayText,
+                    speechText = speechText,
+                    includeUnfinishedTail = input.finished,
+                    ttsOnlyReadQuoted = ttsOnlyReadQuoted,
+                )
                 timing.firstText("speech_queue_ready", reply.id.toString(), speechText.length)
+                if (loggedMessageId != reply.id.toString()) {
+                    loggedMessageId = reply.id.toString()
+                    recordFlow(
+                        "TTS收到助手消息 messageId=${reply.id} displayChars=${displayText.length} " +
+                            "speechChars=${speechText.length} inputFinished=${input.finished} " +
+                            "mode=${if (useWholeReplyTts) "whole_reply" else "sentence"}"
+                    )
+                }
                 if (input.finished) break
             }
             delay(20)
@@ -246,22 +319,46 @@ internal fun BindVoiceCallSpeechPlayback(
             }
 
             val ttsText = if (useWholeReplyTts) {
-                speechText.sanitizeVoiceCallTextForSpeech()
+                speechText.sanitizeVoiceCallTextForSpeech(
+                    ttsOnlyReadQuoted = ttsOnlyReadQuoted,
+                    allowUnquotedFallback = input.finished,
+                )
             } else {
                 segment.text.sanitizeVoiceCallTextForSpeech()
             }
             if (ttsText.isBlank()) {
+                if (input.finished) {
+                    recordFlow(
+                        "TTS句段为空，跳过 messageId=$messageId segmentIndex=$nextSpeechIndex " +
+                            "displayChars=${segment.text.length}"
+                    )
+                    state.revealThrough(segment.endLength)
+                    nextSpeechIndex++
+                    continue
+                }
                 delay(60)
                 continue
             }
 
             val flushCalled = speechQueue.flushForNextSegment()
+            val segmentIndex = nextSpeechIndex
+            Log.i(
+                "VoiceCallSpeechPlayback",
+                "tts_timing stage=segment_submitted messageId=$messageId " +
+                    "segmentIndex=$segmentIndex mode=${if (useWholeReplyTts) "whole_reply" else "sentence"} " +
+                    "chars=${ttsText.length} flush=$flushCalled",
+            )
             tts.speak(
                 text = ttsText,
                 flushCalled = flushCalled,
                 chunked = false,
                 emotion = null,
                 onAudioReady = { response ->
+                    Log.i(
+                        "VoiceCallSpeechPlayback",
+                        "tts_timing stage=segment_audio_ready messageId=$messageId " +
+                            "segmentIndex=$segmentIndex bytes=${response.audioData.size} format=${response.format}",
+                    )
                     recordFlow(
                         "收到TTS音频回调 messageId=" + messageId +
                             ", bytes=" + response.audioData.size +
@@ -287,13 +384,13 @@ internal fun BindVoiceCallSpeechPlayback(
                         )
                         recordFlow(
                             "音频文件保存成功 messageId=" + messageId +
-                                ", uri=" + audioUri +
+                                ", bytes=" + response.audioData.size +
                                 ", segmentCount=" + state.audioSegments(messageId).size
                         )
                     }.onFailure { error ->
                         recordFlow(
                             "音频文件保存失败 messageId=" + messageId +
-                                ", error=" + (error.message ?: error::class.simpleName)
+                                ", error=" + error::class.simpleName
                         )
                     }
                 }
@@ -304,8 +401,7 @@ internal fun BindVoiceCallSpeechPlayback(
                     ", mode=" + (if (useWholeReplyTts) "whole_reply" else "sentence") +
                         ", flush=" + flushCalled +
                         ", chunked=false" +
-                        ", emotion=none" +
-                        ", text=" + ttsText.take(80)
+                        ", emotion=none"
             )
 
             val startState = withTimeoutOrNull(20_000) {
@@ -321,6 +417,11 @@ internal fun BindVoiceCallSpeechPlayback(
 
             when (startState?.status) {
                 PlaybackStatus.Playing -> {
+                    Log.i(
+                        "VoiceCallSpeechPlayback",
+                        "tts_timing stage=segment_playback_state messageId=$messageId " +
+                            "segmentIndex=$segmentIndex status=playing",
+                    )
                     recordFlow("TTS开始播放 messageId=$messageId")
                     if (state.activeMessageId() != messageId) return@LaunchedEffect
                     if (useWholeReplyTts) {
@@ -340,6 +441,11 @@ internal fun BindVoiceCallSpeechPlayback(
                 PlaybackStatus.Idle,
                 PlaybackStatus.Error,
                 null -> {
+                    Log.i(
+                        "VoiceCallSpeechPlayback",
+                        "tts_timing stage=segment_playback_state messageId=$messageId " +
+                            "segmentIndex=$segmentIndex status=${startState?.status ?: "timeout"}",
+                    )
                     recordFlow("TTS未进入播放态 status=" + (startState?.status ?: "timeout"))
                     state.revealThrough(segment.endLength)
                 }
@@ -360,6 +466,11 @@ internal fun BindVoiceCallSpeechPlayback(
                 recordFlow(
                     "TTS播放等待结束 messageId=" + messageId +
                         ", status=" + tts.playbackState.value.status
+                )
+                Log.i(
+                    "VoiceCallSpeechPlayback",
+                    "tts_timing stage=segment_playback_finished messageId=$messageId " +
+                        "segmentIndex=$segmentIndex status=${tts.playbackState.value.status}",
                 )
                 if (state.activeMessageId() != messageId) return@LaunchedEffect
                 state.revealThrough(segment.endLength)

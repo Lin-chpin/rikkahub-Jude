@@ -59,6 +59,8 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import me.rerere.common.http.suppressContentLogs
+import me.rerere.common.http.privateRequestFailure
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.sse.EventSource
@@ -90,14 +92,20 @@ class ChatCompletionsAPI(
         val requestBuilder = Request.Builder()
             .url("${providerSetting.baseUrl}${providerSetting.chatCompletionsPath}")
             .headers(params.customHeaders.toHeaders())
+            .suppressContentLogs(params.suppressContentLogs)
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .configureReferHeaders(providerSetting.baseUrl)
         val request = authenticator.authenticate(requestBuilder, providerSetting).build()
 
-        Log.i(TAG, "generateText: ${json.encodeToString(requestBody)}")
+        if (!params.suppressContentLogs) Log.i(TAG, "generateText: ${json.encodeToString(requestBody)}")
 
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
+            if (params.suppressContentLogs) {
+                val failure = privateRequestFailure(null, response.code, response)
+                response.close()
+                throw failure
+            }
             throw Exception("Failed to get response: ${response.code} ${response.body?.string()}")
         }
 
@@ -114,7 +122,7 @@ class ChatCompletionsAPI(
             ?.jsonPrimitive
             ?.content
             ?: "unknown"
-        val usage = parseTokenUsage(bodyJson["usage"] as? JsonObject)
+        val usage = parseTokenUsage(bodyJson["usage"] as? JsonObject, params)
         val parsedMessage = parseMessage(message).withEmptyResponseReason(finishReason)
 
         MessageChunk(
@@ -149,12 +157,13 @@ class ChatCompletionsAPI(
         val requestBuilder = Request.Builder()
             .url("${providerSetting.baseUrl}${providerSetting.chatCompletionsPath}")
             .headers(params.customHeaders.toHeaders())
+            .suppressContentLogs(params.suppressContentLogs)
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .addHeader("Content-Type", "application/json")
             .configureReferHeaders(providerSetting.baseUrl)
         val request = authenticator.authenticate(requestBuilder, providerSetting).build()
 
-        Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
+        if (!params.suppressContentLogs) Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
 
         // just for debugging response body
         // println(client.newCall(request).await().body?.string())
@@ -184,14 +193,14 @@ class ChatCompletionsAPI(
                 if (normalizedData == "[DONE]") {
                     finishToolCalls()
                     timing.mark("sse_done", characters = receivedCharacters)
-                    Log.i(TAG, "stream completed: [DONE]")
+                    if (!params.suppressContentLogs) Log.i(TAG, "stream completed: [DONE]")
                     completedNormally.set(true)
                     close()
                     return
                 }
                 if (normalizedData.isBlank()) return
                 timing.markOnce("sse_first_event_received")
-                Log.d(TAG, "onEvent: $normalizedData")
+                if (!params.suppressContentLogs) Log.d(TAG, "onEvent: $normalizedData")
                 normalizedData
                     .split("\n")
                     .filter { it.isNotBlank() }
@@ -210,7 +219,7 @@ class ChatCompletionsAPI(
                                 val choice = choices[0].jsonObject
                                 val message = choice["delta"]?.jsonObject ?: choice["message"]?.jsonObject
                                 if (message == null) {
-                                    Log.w(TAG, "Ignoring chat completion choice without delta/message")
+                                    if (!params.suppressContentLogs) Log.w(TAG, "Ignoring chat completion choice without delta/message")
                                 } else {
                                     val finishReason =
                                         choice["finish_reason"]?.jsonPrimitive?.contentOrNull
@@ -231,7 +240,7 @@ class ChatCompletionsAPI(
                                 }
                             }
                         }
-                        val usage = parseTokenUsage(it["usage"] as? JsonObject)
+                        val usage = parseTokenUsage(it["usage"] as? JsonObject, params)
 
                         val messageChunk = MessageChunk(
                             id = id,
@@ -256,6 +265,12 @@ class ChatCompletionsAPI(
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                 if (completedNormally.get()) {
                     close()
+                    return
+                }
+                if (params.suppressContentLogs) {
+                    val failure = privateRequestFailure(t, response?.code, response)
+                    response?.close()
+                    close(failure)
                     return
                 }
                 var exception = t
@@ -284,7 +299,7 @@ class ChatCompletionsAPI(
                 if (completedNormally.get()) {
                     close()
                 } else {
-                    Log.w(TAG, "stream closed before [DONE]")
+                    if (!params.suppressContentLogs) Log.w(TAG, "stream closed before [DONE]")
                     close(IOException("SSE stream closed before [DONE]"))
                 }
             }
@@ -475,7 +490,9 @@ class ChatCompletionsAPI(
                     }
                 }
             }
-        }.mergeCustomBody(params.customBody)
+        }.mergeCustomBody(params.customBody).also { body ->
+            runCatching { params.onRequestPrepared?.invoke(body) }
+        }
     }
 
     private fun isModelAllowTemperature(model: Model): Boolean {
@@ -754,14 +771,17 @@ class ChatCompletionsAPI(
         }
     }
 
-    private fun parseTokenUsage(jsonObject: JsonObject?): TokenUsage? {
+    private fun parseTokenUsage(jsonObject: JsonObject?, params: TextGenerationParams): TokenUsage? {
         if (jsonObject == null) return null
+        runCatching { params.onTokenUsage?.invoke(jsonObject) }
+        val cached = jsonObject["prompt_tokens_details"]?.jsonObjectOrNull?.get("cached_tokens")?.jsonPrimitive?.intOrNull
+        Log.i("PromptCacheUsage", "promptTokens=${jsonObject["prompt_tokens"]?.jsonPrimitive?.intOrNull ?: 0} " +
+            "cachedTokens=${cached ?: "missing"} cacheFieldPresent=${cached != null}")
         return TokenUsage(
             promptTokens = jsonObject["prompt_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
             completionTokens = jsonObject["completion_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
             totalTokens = jsonObject["total_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
-            cachedTokens = jsonObject["prompt_tokens_details"]?.jsonObjectOrNull?.get("cached_tokens")?.jsonPrimitive?.intOrNull
-                ?: 0
+            cachedTokens = cached ?: 0
         )
     }
 

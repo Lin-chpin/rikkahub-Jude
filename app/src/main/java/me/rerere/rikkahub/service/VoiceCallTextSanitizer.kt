@@ -1,6 +1,12 @@
 package me.rerere.rikkahub.service
 
-internal fun String.sanitizeVoiceCallTextForSpeech(): String {
+import me.rerere.rikkahub.utils.extractTtsQuotedContentAsText
+import me.rerere.rikkahub.utils.hasUnclosedTtsQuote
+
+internal fun String.sanitizeVoiceCallTextForSpeech(
+    ttsOnlyReadQuoted: Boolean = false,
+    allowUnquotedFallback: Boolean = true,
+): String {
     if (isBlank()) return this
 
     var text = removeVoiceCallEmojiCodePoints()
@@ -28,7 +34,23 @@ internal fun String.sanitizeVoiceCallTextForSpeech(): String {
             .removeVoiceCallParenthesizedKaomoji()
     }
 
-    return text.trim()
+    val sanitized = text.trim()
+    if (!ttsOnlyReadQuoted) return sanitized
+    sanitized.extractTtsQuotedContentAsText()?.let { return it }
+    if (sanitized.hasUnclosedTtsQuote()) return ""
+    return sanitized.takeIf { allowUnquotedFallback }.orEmpty()
+}
+
+internal fun String.sanitizeRealtimeVoiceCallTextForSpeech(
+    ttsOnlyReadQuoted: Boolean,
+    fullDuplex: Boolean,
+    allowUnquotedFallback: Boolean,
+): String {
+    if (isBlank()) return ""
+    return sanitizeVoiceCallTextForSpeech(
+        ttsOnlyReadQuoted = ttsOnlyReadQuoted && !fullDuplex,
+        allowUnquotedFallback = allowUnquotedFallback,
+    ).takeIf { it.isNotBlank() }.orEmpty()
 }
 
 internal fun String.sanitizeVoiceCallTextForOutput(): String = sanitizeVoiceCallTextForSpeech()

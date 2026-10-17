@@ -20,13 +20,17 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearWavyProgressIndicator
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.ui.graphics.Color
+import me.rerere.rikkahub.ui.theme.liquidGlassChrome
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import me.rerere.rikkahub.ui.theme.LiquidGlassModalBottomSheet as ModalBottomSheet
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -165,6 +169,7 @@ fun McpPickerListItem(
     modifier: Modifier = Modifier,
     onUpdateAssistant: (Assistant) -> Unit
 ) {
+    val glass = LocalWorkspaceGlass.current
     var showMcpPicker by remember { mutableStateOf(false) }
     val status by mcpManager.syncingStatus.collectAsStateWithLifecycle()
     val loading = status.values.any { it == McpStatus.Connecting }
@@ -195,21 +200,26 @@ fun McpPickerListItem(
                 )
             }
         },
+        colors = if (glass) ListItemDefaults.colors(containerColor = Color.Transparent)
+            else ListItemDefaults.colors(),
         modifier = modifier
             .clip(MaterialTheme.shapes.large)
+            .then(if (glass) Modifier.liquidGlassChrome(MaterialTheme.shapes.large) else Modifier)
             .clickable {
                 showMcpPicker = true
             },
     )
 
     if (showMcpPicker) {
-        McpPickerSheet(
-            assistant = assistant,
-            servers = servers,
-            loading = loading,
-            onUpdateAssistant = onUpdateAssistant,
-            onDismiss = { showMcpPicker = false },
-        )
+        CompositionLocalProvider(LocalWorkspaceGlass provides false) {
+            McpPickerSheet(
+                assistant = assistant,
+                servers = servers,
+                loading = loading,
+                onUpdateAssistant = onUpdateAssistant,
+                onDismiss = { showMcpPicker = false },
+            )
+        }
     }
 }
 

@@ -39,6 +39,7 @@ import me.rerere.rikkahub.ui.components.ui.FormItem
 import me.rerere.rikkahub.ui.components.ui.OutlinedNumberInput
 import me.rerere.rikkahub.ui.components.ui.Switch
 import me.rerere.tts.provider.TTSProviderSetting
+import me.rerere.tts.provider.isElevenLabsV4Family
 import me.rerere.tts.provider.isSpeech26Model
 import java.util.Base64
 
@@ -506,6 +507,19 @@ private fun ElevenLabsTTSConfiguration(
                 }
             }
         }
+    }
+
+    if (setting.isElevenLabsV4Family()) {
+        FormItem(
+            label = { Text("全双工对话") },
+            description = { Text("通话使用 Eleven v4 Turbo，持续监听并支持说话打断。需配置语音识别服务。") },
+            tail = {
+                Switch(
+                    checked = setting.fullDuplex,
+                    onCheckedChange = { onValueChange(setting.copy(fullDuplex = it)) },
+                )
+            },
+        ) {}
     }
 
     FormItem(

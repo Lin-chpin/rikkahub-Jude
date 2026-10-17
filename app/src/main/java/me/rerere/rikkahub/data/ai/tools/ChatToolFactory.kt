@@ -26,12 +26,12 @@ class ChatToolFactory(
         buildToolAssistantId: Uuid?,
         enabledSkills: Set<String>,
         ttsVoiceDirectorGuidance: String? = null,
+        voiceCallActive: Boolean = false,
     ): List<Tool> = buildList {
         if (settings.enableWebSearch && BuiltInTools.Search !in model.tools) {
             addAll(createSearchTools(settings))
         }
-        addAll(
-            localTools.getTools(
+        val configuredLocalTools = localTools.getTools(
                 options = localToolOptions,
                 usageLockEnabled = usageLockEnabled,
                 voiceCallConfigured = voiceCallConfigured,
@@ -41,7 +41,19 @@ class ChatToolFactory(
                 buildToolAssistantId = buildToolAssistantId,
                 ttsVoiceDirectorGuidance = ttsVoiceDirectorGuidance,
             )
-        )
+        val allowedLocalNames = if (voiceCallActive) {
+            localTools.getTools(
+                options = localToolOptions.filterNot { it == LocalToolOption.Tts || it == LocalToolOption.VoiceCall },
+                usageLockEnabled = usageLockEnabled,
+            ).mapTo(mutableSetOf()) { it.name }
+        } else configuredLocalTools.mapTo(mutableSetOf()) { it.name }
+        // Keep definitions stable for prompt caching; unavailable tools fail before approval or execution.
+        addAll(configuredLocalTools.map { tool ->
+            if (tool.name !in allowedLocalNames) tool.copy(
+                needsApproval = false,
+                execute = { error("Tool unavailable during an active voice call") },
+            ) else tool
+        })
         if (enabledSkills.isNotEmpty()) {
             addAll(
                 createSkillTools(

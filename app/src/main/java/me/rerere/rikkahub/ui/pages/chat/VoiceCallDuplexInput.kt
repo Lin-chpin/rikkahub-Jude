@@ -1,0 +1,98 @@
+package me.rerere.rikkahub.ui.pages.chat
+
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
+import me.rerere.asr.ASRStatus
+import me.rerere.rikkahub.data.voice.VoiceCallUtteranceGate
+import me.rerere.rikkahub.ui.context.LocalASRState
+import me.rerere.rikkahub.ui.hooks.rememberCustomAsrState
+
+@Stable
+internal class VoiceCallDuplexInputState {
+    var pendingText by mutableStateOf("")
+    var fallback by mutableStateOf(false)
+    var error by mutableStateOf<String?>(null)
+    var stop: () -> Unit = {}
+}
+
+@Composable
+internal fun rememberVoiceCallDuplexInput(
+    enabled: Boolean,
+    permissionGranted: Boolean,
+    providerId: kotlin.uuid.Uuid?,
+    onInterrupt: () -> Unit,
+    onSubmit: (String) -> Unit,
+): VoiceCallDuplexInputState {
+    val asr = rememberCustomAsrState(fullDuplex = true)
+    val normalAsr = LocalASRState.current
+    val status by asr.state.collectAsState()
+    val state = remember { VoiceCallDuplexInputState() }
+    val interrupt by rememberUpdatedState(onInterrupt)
+    val submit by rememberUpdatedState(onSubmit)
+    var accepting by remember { mutableStateOf(false) }
+    var attempts by remember(providerId) { mutableStateOf(0) }
+
+    DisposableEffect(asr, enabled, permissionGranted, providerId) {
+        accepting = enabled && permissionGranted
+        state.fallback = false
+        state.error = null
+        state.pendingText = ""
+        if (accepting) normalAsr.stop()
+        state.stop = {
+            accepting = false
+            state.pendingText = ""
+            asr.stop()
+        }
+        onDispose {
+            accepting = false
+            asr.stop()
+        }
+    }
+
+    LaunchedEffect(enabled, permissionGranted, providerId, status.status, status.isAvailable) {
+        if (!enabled || !permissionGranted || !accepting || state.fallback) return@LaunchedEffect
+        if (!status.isAvailable) {
+            state.fallback = true
+            state.error = "请配置语音识别服务；当前使用输入法语音。"
+            return@LaunchedEffect
+        }
+        if (status.status == ASRStatus.Connecting) {
+            delay(10_000)
+            if (accepting && asr.state.value.status == ASRStatus.Connecting) asr.stop()
+            return@LaunchedEffect
+        }
+        if (status.status == ASRStatus.Listening) {
+            state.error = null
+            return@LaunchedEffect
+        }
+        if (status.status != ASRStatus.Idle && status.status != ASRStatus.Error) return@LaunchedEffect
+        if (attempts >= 3) {
+            state.fallback = true
+            state.error = "语音识别连接中断，已恢复输入法语音。"
+            asr.stop()
+            return@LaunchedEffect
+        }
+        delay(if (attempts == 0) 100 else 500L * attempts)
+        if (!accepting) return@LaunchedEffect
+        attempts++
+        val gate = VoiceCallUtteranceGate()
+        asr.startUtterances { utterance ->
+            if (!accepting || state.fallback) return@startUtterances
+            attempts = 0
+            val action = gate.accept(utterance) ?: return@startUtterances
+            state.pendingText = if (utterance.isFinal) "" else utterance.text
+            if (action.interrupt) interrupt()
+            action.submittedText?.let(submit)
+        }
+    }
+    return state
+}

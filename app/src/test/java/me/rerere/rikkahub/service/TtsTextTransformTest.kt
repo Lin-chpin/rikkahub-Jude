@@ -32,4 +32,15 @@ class TtsTextTransformTest {
             ),
         )
     }
+
+    @Test
+    fun quoteOnlyModeExcludesParenthesesOutsideTheQuote() {
+        assertEquals(
+            "我是",
+            "\"我是\"（你好）".toChatTtsText(
+                ttsOnlyReadQuoted = true,
+                ttsEnglishOnly = false,
+            ),
+        )
+    }
 }

@@ -43,6 +43,7 @@ import me.rerere.ai.ui.isEmptyUIMessage
 import me.rerere.ai.ui.limitContextBySteps
 import me.rerere.ai.util.GenerationTimingTrace
 import me.rerere.ai.util.textCharacterCount
+import me.rerere.common.android.Logging
 import me.rerere.rikkahub.data.ai.transformers.InputMessageTransformer
 import me.rerere.rikkahub.data.ai.transformers.MessageTransformer
 import me.rerere.rikkahub.data.ai.transformers.OutputMessageTransformer
@@ -85,6 +86,8 @@ class GenerationHandler(
     private val conversationRepo: ConversationRepository,
     private val aiLoggingManager: AILoggingManager,
 ) {
+    private val requestContextDiagnostics = RequestContextDiagnostics()
+
     fun generateText(
         settings: Settings,
         model: Model,
@@ -103,17 +106,21 @@ class GenerationHandler(
         conversationLorebookIds: Set<Uuid> = emptySet(),
         extraSystemPrompt: String? = null,
         runtimeStateSystemPrompt: String? = null,
-        transientLastContextMessage: UIMessage? = null,
+        disabledToolNames: Set<String> = emptySet(),
         maxTokensOverride: Int? = null,
         providerOverride: ProviderSetting? = null,
         conversationId: Uuid? = null,
         sessionIdOverride: String? = null,
+        requestSource: String = "Other",
+        startNewAssistantMessage: Boolean = false,
+        suppressContentLogs: Boolean = false,
     ): Flow<GenerationChunk> = flow {
         val provider = providerOverride ?: model.findProvider(settings.providers)
             ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
 
         var messages: List<UIMessage> = messages
+        var startNewAssistantMessagePending = startNewAssistantMessage
 
         for (stepIndex in 0 until maxSteps) {
             val timing = GenerationTimingTrace("generation:$conversationId:$stepIndex")
@@ -121,7 +128,7 @@ class GenerationHandler(
             Log.i(TAG, "streamText: start step #$stepIndex (${model.id})")
 
             val toolsInternal = buildList {
-                Log.i(TAG, "generateInternal: build tools($assistant)")
+                if (!suppressContentLogs) Log.i(TAG, "generateInternal: build tools($assistant)")
                 if (assistant.enableMemory) {
                     val memoryScope = MemoryScope.assistant(assistant.id)
                     buildMemoryTools(
@@ -137,7 +144,12 @@ class GenerationHandler(
                         }
                     ).let(this::addAll)
                 }
-                addAll(tools)
+                addAll(tools.map { tool ->
+                    if (tool.name in disabledToolNames) tool.copy(
+                        needsApproval = false,
+                        execute = { error("Tool unavailable in the current voice-call state") },
+                    ) else tool
+                })
             }
 
             // Check if we have tool calls ready to continue after user interaction.
@@ -149,6 +161,9 @@ class GenerationHandler(
 
             // Skip generation if we have approved/denied tool calls to handle
             if (pendingTools.isEmpty()) {
+                if (suppressContentLogs) Logging.log(
+                    "AIRequest", "source=$requestSource conversation=$conversationId step=${stepIndex + 1} event=start",
+                )
                 generateInternal(
                     assistant = assistant,
                     settings = settings,
@@ -192,11 +207,23 @@ class GenerationHandler(
                     conversationLorebookIds = conversationLorebookIds,
                     extraSystemPrompt = extraSystemPrompt,
                     runtimeStateSystemPrompt = runtimeStateSystemPrompt,
-                    transientLastContextMessage = transientLastContextMessage,
                     maxTokensOverride = maxTokensOverride,
                     conversationId = conversationId,
                     sessionIdOverride = sessionIdOverride,
+                    diagnosticTrace = if (provider is ProviderSetting.OpenAI && conversationId != null) {
+                        requestContextDiagnostics.begin(
+                            conversationId.toString(), requestSource,
+                            if (provider.useResponseApi) "Responses" else "ChatCompletions",
+                            "${provider.id}:${provider.baseUrl}:${provider.chatCompletionsPath}:${provider.responsesPath}:${provider.authType}",
+                        )
+                    } else null,
+                    startNewAssistantMessage = startNewAssistantMessagePending,
+                    suppressContentLogs = suppressContentLogs,
                     timing = timing,
+                )
+                startNewAssistantMessagePending = false
+                if (suppressContentLogs) Logging.log(
+                    "AIRequest", "source=$requestSource conversation=$conversationId step=${stepIndex + 1} event=complete",
                 )
                 timing.mark("generation_finish_transforms_started")
                 messages = messages.visualTransforms(
@@ -328,12 +355,13 @@ class GenerationHandler(
                             if (toolDef.name == CHAT_VOICE_REPLY_TOOL_NAME) {
                                 Log.i(TAG, "generateText: executing voice tool")
                             } else {
-                                Log.i(TAG, "generateText: executing tool ${toolDef.name} with args: $args")
+                                Log.i(TAG, if (suppressContentLogs) "generateText: executing tool ${toolDef.name}" else "generateText: executing tool ${toolDef.name} with args: $args")
                             }
                             val result = toolDef.execute(args)
                             executedTools += tool.copy(output = result)
                         }.onFailure {
-                            it.printStackTrace()
+                            if (it is CancellationException) throw it
+                            if (!suppressContentLogs) it.printStackTrace()
                             executedTools += tool.copy(
                                 output = listOf(
                                     UIMessagePart.Text(
@@ -342,8 +370,10 @@ class GenerationHandler(
                                                 put(
                                                     "error",
                                                     JsonPrimitive(buildString {
-                                                        append("[${it.javaClass.name}] ${it.message}")
-                                                        append("\n${it.stackTraceToString()}")
+                                                        append("[${it.javaClass.name}]")
+                                                        if (!suppressContentLogs) {
+                                                            append(" ${it.message}\n${it.stackTraceToString()}")
+                                                        }
                                                     })
                                                 )
                                             }
@@ -407,10 +437,12 @@ class GenerationHandler(
         conversationLorebookIds: Set<Uuid> = emptySet(),
         extraSystemPrompt: String? = null,
         runtimeStateSystemPrompt: String? = null,
-        transientLastContextMessage: UIMessage? = null,
         maxTokensOverride: Int? = null,
         conversationId: Uuid? = null,
         sessionIdOverride: String? = null,
+        diagnosticTrace: RequestContextDiagnostics.Trace? = null,
+        startNewAssistantMessage: Boolean = false,
+        suppressContentLogs: Boolean = false,
         timing: GenerationTimingTrace,
     ) {
         val contextMessages = if (assistant.contextMessageLimitEnabled) {
@@ -419,13 +451,26 @@ class GenerationHandler(
         } else {
             messages
         }
-        val internalMessages = buildList {
-            val effectiveSystemPrompt =
-                if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
-                    conversationSystemPrompt
-                } else {
-                    assistant.systemPrompt
+        val configuredSystemPrompt =
+            if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
+                conversationSystemPrompt
+            } else {
+                assistant.systemPrompt
+            }
+        val effectiveLorebookIds = if (assistant.allowConversationPromptInjection) {
+            conversationLorebookIds
+        } else {
+            assistant.lorebookIds
+        }
+        val systemPromptIsPresetSlot = settings.lorebooks.any { lorebook ->
+            lorebook.enabled && lorebook.id in effectiveLorebookIds &&
+                lorebook.entries.any {
+                    it.enabled && it.tavernPresetSlot == "charDescription" &&
+                        "{{assistant_system_prompt}}" in it.content
                 }
+        }
+        val effectiveSystemPrompt = if (systemPromptIsPresetSlot) "" else configuredSystemPrompt
+        val internalMessages = buildList {
             val dynamicSystemPrompt = buildString {
                 if (!extraSystemPrompt.isNullOrBlank()) {
                     if (effectiveSystemPrompt.isNotBlank()) {
@@ -458,11 +503,6 @@ class GenerationHandler(
                     appendLine()
                     append(tool.systemPrompt(model, contextMessages))
                 }
-                if (!runtimeStateSystemPrompt.isNullOrBlank()) {
-                    appendLine()
-                    appendLine()
-                    append(runtimeStateSystemPrompt)
-                }
             }
             val system = effectiveSystemPrompt + dynamicSystemPrompt
             if (system.isNotBlank()) {
@@ -480,14 +520,8 @@ class GenerationHandler(
                 }
                 add(UIMessage(role = MessageRole.SYSTEM, parts = parts))
             }
-            val requestContextMessages = if (
-                transientLastContextMessage != null && contextMessages.isNotEmpty()
-            ) {
-                // Replace only the provider-facing copy. Response accumulation still
-                // starts from `messages`, so runtime state never enters persistence or UI.
-                contextMessages.dropLast(1) + transientLastContextMessage
-            } else contextMessages
-            addAll(requestContextMessages)
+            // Response accumulation uses `messages`, keeping request-only state out of storage/UI.
+            addAll(contextMessages)
         }.transforms(
             transformers = transformers,
             context = context,
@@ -496,16 +530,23 @@ class GenerationHandler(
             settings = settings,
             conversationModeInjectionIds = conversationModeInjectionIds,
             conversationLorebookIds = conversationLorebookIds,
+            systemPrompt = configuredSystemPrompt,
             processingStatus = processingStatus,
-        )
+        ).withRuntimeContextInstruction(runtimeStateSystemPrompt)
 
-        var responseMessages: List<UIMessage> = messages
+        var responseMessages = beginAssistantResponse(messages, model.id, startNewAssistantMessage)
+        if (startNewAssistantMessage) {
+            timing.mark("assistant_response_started", responseMessages.last().id.toString(), 0)
+        }
         val params = TextGenerationParams(
             model = model,
             temperature = assistant.temperature,
             topP = assistant.topP,
             maxTokens = maxTokensOverride ?: assistant.maxTokens,
             tools = tools,
+            suppressContentLogs = suppressContentLogs,
+            onRequestPrepared = diagnosticTrace?.let { it::request },
+            onTokenUsage = diagnosticTrace?.let { it::usage },
             reasoningLevel = assistant.reasoningLevel,
             customHeaders = buildList {
                 addAll(assistant.customHeaders)
@@ -569,6 +610,8 @@ class GenerationHandler(
                         }
                         attemptMessages = attemptMessages.handleMessageChunk(chunk = it, model = model)
                         it.usage?.let { usage ->
+                            Log.i("PromptCacheUsage", "conversation=$conversationId model=${model.modelId} " +
+                                "promptTokens=${usage.promptTokens} cachedTokens=${usage.cachedTokens}")
                             attemptMessages = attemptMessages.mapIndexed { index, message ->
                                 if (index == attemptMessages.lastIndex) {
                                     message.copy(usage = message.usage.merge(usage))
@@ -598,7 +641,7 @@ class GenerationHandler(
                     }
                     retryCount++
                     val retryDelay = providerStreamRetryDelayMillis(retryCount - 1)
-                    Log.w(
+                    if (suppressContentLogs) Log.w(TAG, "Provider stream retry $retryCount error=${error::class.simpleName}") else Log.w(
                         TAG,
                         "Provider stream failed; retrying in ${retryDelay}ms " +
                             "($retryCount/$MAX_PROVIDER_STREAM_RETRIES)",

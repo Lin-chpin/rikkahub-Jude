@@ -1,6 +1,7 @@
 package me.rerere.rikkahub.ui.components.richtext
 
 import android.content.Intent
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -15,6 +16,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.InlineTextContent
@@ -28,6 +31,7 @@ import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -52,6 +56,7 @@ import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -89,6 +94,8 @@ import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
 import org.intellij.markdown.flavours.gfm.GFMTokenTypes
 import org.intellij.markdown.parser.MarkdownParser
 
+private const val HISTORY_SEARCH_TAG = "HistorySearch"
+
 private val flavour by lazy {
     GFMFlavourDescriptor(
         makeHttpsAutoLinks = true, useSafeLinks = true
@@ -109,6 +116,24 @@ private val VOICE_CALL_AUDIO_TAG_REGEX =
     Regex("""(?:\[[A-Za-z][A-Za-z0-9 ,.'!?-]{0,48}]|\([A-Za-z][A-Za-z0-9 ,.'!?-]{0,48}\))""")
 
 val LocalElevenLabsAudioTagAnnotations = staticCompositionLocalOf { false }
+
+internal class MarkdownSearchTarget(val query: String) {
+    private var hasRequestedBringIntoView = false
+    private val bringIntoViewReadyState = mutableStateOf(false)
+    val canBringIntoView: Boolean get() = bringIntoViewReadyState.value
+
+    fun allowBringIntoView() {
+        bringIntoViewReadyState.value = true
+    }
+
+    fun claimBringIntoView(): Boolean {
+        if (hasRequestedBringIntoView) return false
+        hasRequestedBringIntoView = true
+        return true
+    }
+}
+
+internal val LocalMarkdownSearchTarget = staticCompositionLocalOf<MarkdownSearchTarget?> { null }
 
 internal fun AnnotatedString.Builder.appendElevenLabsAudioTagAwareText(
     text: String,
@@ -141,7 +166,6 @@ internal fun AnnotatedString.Builder.appendVoiceCallAudioTagAwareText(
         withStyle(
             SpanStyle(
                 color = colorScheme.onPrimaryContainer,
-                background = colorScheme.primaryContainer.copy(alpha = 0.65f),
                 fontStyle = FontStyle.Italic,
             )
         ) {
@@ -255,7 +279,8 @@ fun MarkdownBlock(
     content: String,
     modifier: Modifier = Modifier,
     style: TextStyle = LocalTextStyle.current,
-    onClickCitation: (String) -> Unit = {}
+    onClickCitation: (String) -> Unit = {},
+    renderScriptedHtml: Boolean = false,
 ) {
     var (data, setData) = remember { mutableStateOf(parseMarkdown(content)) }
 
@@ -271,7 +296,17 @@ fun MarkdownBlock(
             .collect { setData(it) }
     }
 
-    if (data.hasHtml) {
+    val searchTarget = LocalMarkdownSearchTarget.current
+    LaunchedEffect(searchTarget, content, data.hasHtml) {
+        if (searchTarget != null) {
+            Log.d(
+                HISTORY_SEARCH_TAG,
+                "markdown block queryLength=${searchTarget.query.length} contentLength=${content.length} rawMatch=${content.contains(searchTarget.query, ignoreCase = true)} html=${data.hasHtml}",
+            )
+        }
+    }
+
+    if (data.hasHtml && !renderScriptedHtml) {
         MarkdownNew(
             content = content,
             modifier = modifier,
@@ -279,14 +314,16 @@ fun MarkdownBlock(
             onClickCitation = onClickCitation,
         )
     } else {
-        ProvideTextStyle(style) {
-            Column(
-                modifier = modifier.padding(horizontal = 4.dp)
-            ) {
-                data.astTree.children.fastForEach { child ->
-                    MarkdownNode(
-                        node = child, content = data.preprocessed, onClickCitation = onClickCitation
-                    )
+        CompositionLocalProvider(LocalScriptedHtmlPreviewEnabled provides renderScriptedHtml) {
+            ProvideTextStyle(style) {
+                Column(
+                    modifier = modifier.padding(horizontal = 4.dp)
+                ) {
+                    data.astTree.children.fastForEach { child ->
+                        MarkdownNode(
+                            node = child, content = data.preprocessed, onClickCitation = onClickCitation
+                        )
+                    }
                 }
             }
         }
@@ -300,6 +337,8 @@ private fun dumpAst(node: ASTNode, text: String, indent: String = "") {
         dumpAst(it, text, "$indent  ")
     }
 }
+
+private val LocalScriptedHtmlPreviewEnabled = staticCompositionLocalOf { false }
 
 object HeaderStyle {
     private const val LINE_HEIGHT_RATIO = 1.25f
@@ -625,14 +664,25 @@ private fun MarkdownNode(
                 node.findChildOfTypeRecursive(MarkdownTokenTypes.FENCE_LANG)?.getTextInNode(content) ?: "plaintext"
             val hasEnd = node.findChildOfTypeRecursive(MarkdownTokenTypes.CODE_FENCE_END) != null
 
-            HighlightCodeBlock(
-                code = code,
-                language = language,
-                modifier = Modifier
-                    .padding(bottom = 4.dp)
-                    .fillMaxWidth(),
-                completeCodeBlock = hasEnd
-            )
+            val renderScriptedHtml = LocalScriptedHtmlPreviewEnabled.current && hasEnd &&
+                (code.trimStart().startsWith("<!DOCTYPE html", ignoreCase = true) ||
+                    code.trimStart().startsWith("<html", ignoreCase = true)) &&
+                Regex("""<script\b""", RegexOption.IGNORE_CASE).containsMatchIn(code)
+            if (renderScriptedHtml) {
+                SillyTavernHtmlPreview(
+                    html = code,
+                    modifier = Modifier.padding(bottom = 4.dp).fillMaxWidth(),
+                )
+            } else {
+                HighlightCodeBlock(
+                    code = code,
+                    language = language,
+                    modifier = Modifier
+                        .padding(bottom = 4.dp)
+                        .fillMaxWidth(),
+                    completeCodeBlock = hasEnd
+                )
+            }
         }
 
         MarkdownTokenTypes.TEXT -> {
@@ -798,6 +848,11 @@ private fun Paragraph(
     }
 
     val colorScheme = MaterialTheme.colorScheme
+    val searchTarget = LocalMarkdownSearchTarget.current
+    val searchQuery = searchTarget?.query.orEmpty()
+    val firstMatchOffset = searchQuery.takeIf { it.isNotBlank() }
+        ?.let { content.indexOf(it, ignoreCase = true) } ?: -1
+    val isFirstMatchParagraph = firstMatchOffset >= node.startOffset && firstMatchOffset < node.endOffset
     val inlineContents = remember {
         mutableStateMapOf<String, InlineTextContent>()
     }
@@ -837,9 +892,62 @@ private fun Paragraph(
                 }
             }
         }
+        val matchIndex = if (searchQuery.isBlank()) -1 else annotatedString.text.indexOf(searchQuery, ignoreCase = true)
+        val highlightedText = remember(annotatedString, searchQuery, colorScheme.primary, colorScheme.onPrimary) {
+            if (matchIndex < 0) {
+                annotatedString
+            } else {
+                buildAnnotatedString {
+                    append(annotatedString)
+                    var index = matchIndex
+                    while (index >= 0) {
+                        addStyle(
+                            style = SpanStyle(
+                                background = colorScheme.primary,
+                                color = colorScheme.onPrimary,
+                                fontWeight = FontWeight.Bold,
+                                textDecoration = TextDecoration.Underline,
+                            ),
+                            start = index,
+                            end = index + searchQuery.length,
+                        )
+                        index = annotatedString.text.indexOf(searchQuery, index + searchQuery.length, ignoreCase = true)
+                    }
+                }
+            }
+        }
+        val bringIntoViewRequester = remember(searchTarget) { BringIntoViewRequester() }
+        val textLayoutResultState = remember(searchTarget) { mutableStateOf<TextLayoutResult?>(null) }
+        val canBringIntoView = searchTarget?.canBringIntoView == true
+
+        LaunchedEffect(searchTarget, canBringIntoView, matchIndex, textLayoutResultState.value) {
+            val layoutResult = textLayoutResultState.value
+            if (searchTarget != null && canBringIntoView && isFirstMatchParagraph && matchIndex >= 0) {
+                Log.d(
+                    HISTORY_SEARCH_TAG,
+                    "paragraph queryLength=${searchQuery.length} matchIndex=$matchIndex sourceOffset=$firstMatchOffset nodeRange=${node.startOffset}..${node.endOffset} first=$isFirstMatchParagraph layout=${layoutResult != null}",
+                )
+            }
+            if (searchTarget != null && canBringIntoView && isFirstMatchParagraph && matchIndex >= 0 && layoutResult != null &&
+                searchTarget.claimBringIntoView()
+            ) {
+                val bounds = layoutResult.getBoundingBox(matchIndex)
+                Log.d(HISTORY_SEARCH_TAG, "bring start matchIndex=$matchIndex bounds=$bounds")
+                bringIntoViewRequester.bringIntoView(bounds)
+                Log.d(HISTORY_SEARCH_TAG, "bring complete matchIndex=$matchIndex")
+            }
+        }
+
         Text(
-            text = annotatedString,
-            modifier = Modifier,
+            text = highlightedText,
+            modifier = if (searchTarget != null && matchIndex >= 0) {
+                Modifier.bringIntoViewRequester(bringIntoViewRequester)
+            } else {
+                Modifier
+            },
+            onTextLayout = { layoutResult ->
+                textLayoutResultState.value = layoutResult
+            },
             inlineContent = inlineContents,
             softWrap = true,
             overflow = TextOverflow.Visible,

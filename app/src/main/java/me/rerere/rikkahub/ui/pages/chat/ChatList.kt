@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.ui.pages.chat
 
+import android.util.Log
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Tick01
 import me.rerere.hugeicons.stroke.ArrowDown01
@@ -23,6 +24,9 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.BringIntoViewSpec
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -30,9 +34,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -54,6 +60,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -87,6 +94,7 @@ import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.R
@@ -96,6 +104,11 @@ import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.service.ChatError
 import me.rerere.rikkahub.ui.components.message.ChatMessage
+import androidx.compose.ui.draw.clipToBounds
+import me.rerere.rikkahub.ui.theme.LocalLiquidGlass
+import me.rerere.rikkahub.ui.theme.LocalLiquidGlassHaze
+import me.rerere.rikkahub.ui.components.richtext.LocalMarkdownSearchTarget
+import me.rerere.rikkahub.ui.components.richtext.MarkdownSearchTarget
 import me.rerere.rikkahub.ui.components.ui.ErrorCardsDisplay
 import me.rerere.rikkahub.ui.components.ui.ListSelectableItem
 import me.rerere.rikkahub.ui.components.ui.RabbitLoadingIndicator
@@ -107,8 +120,20 @@ import kotlin.math.roundToInt
 import kotlin.uuid.Uuid
 
 private const val TAG = "ChatList"
+private const val HISTORY_SEARCH_TAG = "HistorySearch"
 private const val LoadingIndicatorKey = "LoadingIndicator"
 private const val ScrollBottomKey = "ScrollBottomKey"
+
+@OptIn(ExperimentalFoundationApi::class)
+private object SearchTargetBringIntoViewSpec : BringIntoViewSpec {
+    override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float =
+        offset + size / 2f - containerSize / 2f
+}
+
+private data class ActiveMessageSearch(
+    val nodeId: Uuid,
+    val markdownTarget: MarkdownSearchTarget,
+)
 
 @Composable
 fun ChatList(
@@ -122,6 +147,7 @@ fun ChatList(
     externalEditorVisible: Boolean = false,
     settings: Settings,
     hazeState: HazeState,
+    glassHazeState: HazeState = hazeState,
     errors: List<ChatError> = emptyList(),
     onDismissError: (Uuid) -> Unit = {},
     onClearAllErrors: () -> Unit = {},
@@ -136,13 +162,23 @@ fun ChatList(
     onClearTranslation: (UIMessage) -> Unit = {},
     onTranslateChatVoiceSegment: ((UIMessage, Int, String, java.util.Locale) -> Unit)? = null,
     onClearChatVoiceSegmentTranslation: ((UIMessage, Int) -> Unit)? = null,
-    onJumpToMessage: (Int) -> Unit = {},
+    onExitPreview: () -> Unit = {},
     onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
     onOpenVoiceCallRecord: ((String) -> Unit)? = null,
     onToggleFavorite: ((MessageNode) -> Unit)? = null,
     onConversationSystemPromptChange: ((String?) -> Unit)? = null,
 ) {
+    var pendingJumpNodeId by remember(conversation.id) { mutableStateOf<Uuid?>(null) }
+    var activeMessageSearch by remember(conversation.id) { mutableStateOf<ActiveMessageSearch?>(null) }
+
+    LaunchedEffect(previewMode) {
+        if (previewMode) {
+            pendingJumpNodeId = null
+            activeMessageSearch = null
+        }
+    }
+
     AnimatedContent(
         targetState = previewMode,
         label = "ChatListMode",
@@ -157,7 +193,14 @@ fun ChatList(
                 showCompressedMessages = showCompressedMessages,
                 settings = settings,
                 hazeState = hazeState,
-                onJumpToMessage = onJumpToMessage,
+                onJumpToMessage = { nodeId, searchQuery ->
+                    Log.i(HISTORY_SEARCH_TAG, "select node=$nodeId queryLength=${searchQuery.length} showCompressed=$showCompressedMessages")
+                    pendingJumpNodeId = nodeId
+                    activeMessageSearch = searchQuery.takeIf { it.isNotBlank() }?.let {
+                        ActiveMessageSearch(nodeId, MarkdownSearchTarget(it))
+                    }
+                    onExitPreview()
+                },
                 animatedVisibilityScope = this@AnimatedContent,
             )
         } else {
@@ -168,9 +211,15 @@ fun ChatList(
                 loading = loading,
                 processingStatus = processingStatus,
                 showCompressedMessages = showCompressedMessages,
+                pendingJumpNodeId = pendingJumpNodeId,
+                activeMessageSearch = activeMessageSearch,
+                onJumpHandled = { nodeId ->
+                    if (pendingJumpNodeId == nodeId) pendingJumpNodeId = null
+                },
                 externalEditorVisible = externalEditorVisible,
                 settings = settings,
                 hazeState = hazeState,
+                glassHazeState = glassHazeState,
                 errors = errors,
                 onDismissError = onDismissError,
                 onClearAllErrors = onClearAllErrors,
@@ -197,6 +246,7 @@ fun ChatList(
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun ChatListNormal(
     innerPadding: PaddingValues,
     conversation: Conversation,
@@ -204,9 +254,13 @@ private fun ChatListNormal(
     loading: Boolean,
     processingStatus: String? = null,
     showCompressedMessages: Boolean,
+    pendingJumpNodeId: Uuid?,
+    activeMessageSearch: ActiveMessageSearch?,
+    onJumpHandled: (Uuid) -> Unit,
     externalEditorVisible: Boolean,
     settings: Settings,
     hazeState: HazeState,
+    glassHazeState: HazeState,
     errors: List<ChatError>,
     onDismissError: (Uuid) -> Unit,
     onClearAllErrors: () -> Unit,
@@ -229,17 +283,19 @@ private fun ChatListNormal(
     onConversationSystemPromptChange: ((String?) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
+    val liquidGlass = LocalLiquidGlass.current.enabled
     val loadingState by rememberUpdatedState(loading)
     var isRecentScroll by remember { mutableStateOf(false) }
     val conversationUpdated by rememberUpdatedState(conversation)
     val density = LocalDensity.current
+    val imeInsets = WindowInsets.ime
     val activity = LocalContext.current as? me.rerere.rikkahub.RouteActivity
 
     DisposableEffect(Unit) {
         val listener: (Boolean) -> Boolean = { isVolumeUp ->
             if (settings.displaySetting.enableVolumeKeyScroll) {
                 val bottomPaddingPx = with(density) {
-                    (32.dp + innerPadding.calculateBottomPadding()).toPx()
+                    (32.dp + if (liquidGlass) 0.dp else innerPadding.calculateBottomPadding()).toPx()
                 }
                 val scrollAmount = (state.layoutInfo.viewportSize.height - bottomPaddingPx) *
                     settings.displaySetting.volumeKeyScrollRatio
@@ -255,7 +311,7 @@ private fun ChatListNormal(
 
     fun List<LazyListItemInfo>.isAtBottom(): Boolean {
         val lastItem = lastOrNull() ?: return false
-        val inputBarHeight = with(density) { innerPadding.calculateBottomPadding().toPx() }
+        val inputBarHeight = with(density) { if (liquidGlass) 0f else innerPadding.calculateBottomPadding().toPx() }
         val lastPos = lastItem.offset + lastItem.size
         val inputPos = (state.layoutInfo.viewportEndOffset - inputBarHeight.roundToInt())
         // println("lastPos = $lastPos, inputPos = $inputPos  | ${lastPos <= inputPos - 8}")
@@ -271,7 +327,7 @@ private fun ChatListNormal(
     // 自动跟随键盘滚动
     ImeLazyListAutoScroller(
         lazyListState = state,
-        enabled = !systemPromptEditorVisible && !externalEditorVisible,
+        enabled = !systemPromptEditorVisible && !externalEditorVisible && pendingJumpNodeId == null,
     )
 
     // 对话大小警告对话框
@@ -298,6 +354,32 @@ private fun ChatListNormal(
         conversation.visibleMessageNodes
     }
     val lastMessageNodeId = displayedMessageNodes.lastOrNull()?.id
+
+    LaunchedEffect(pendingJumpNodeId, displayedMessageNodes) {
+        val nodeId = pendingJumpNodeId ?: return@LaunchedEffect
+        try {
+            val index = displayedMessageNodes.indexOfFirst { it.id == nodeId }
+            val searchTarget = activeMessageSearch?.takeIf { it.nodeId == nodeId }?.markdownTarget
+            Log.d(HISTORY_SEARCH_TAG, "jump start node=$nodeId index=$index count=${displayedMessageNodes.size} queryLength=${searchTarget?.query?.length ?: 0}")
+            if (index >= 0) {
+                snapshotFlow { imeInsets.getBottom(density) }.first { it == 0 }
+                try {
+                    state.animateScrollToItem(index)
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    Log.w(HISTORY_SEARCH_TAG, "message scroll cancelled node=$nodeId reason=${cancelled.message}")
+                    throw cancelled
+                }
+                Log.d(HISTORY_SEARCH_TAG, "message scroll complete node=$nodeId first=${state.firstVisibleItemIndex} offset=${state.firstVisibleItemScrollOffset}")
+                searchTarget?.allowBringIntoView()
+                Log.d(HISTORY_SEARCH_TAG, "text target enabled node=$nodeId enabled=${searchTarget?.canBringIntoView == true}")
+            } else {
+                Log.w(HISTORY_SEARCH_TAG, "jump target missing node=$nodeId showCompressed=$showCompressedMessages")
+            }
+        } finally {
+            Log.d(HISTORY_SEARCH_TAG, "jump finished node=$nodeId")
+            onJumpHandled(nodeId)
+        }
+    }
 
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -333,11 +415,22 @@ private fun ChatListNormal(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(top = innerPadding.calculateTopPadding()),
+                    // Reserve the composer area physically; transparent glass must never reveal messages.
+                    .padding(
+                        top = innerPadding.calculateTopPadding(),
+                        bottom = if (liquidGlass) innerPadding.calculateBottomPadding() else 0.dp,
+                    )
+                    .then(if (liquidGlass) Modifier.clipToBounds() else Modifier),
             ) {
+                val bringIntoViewSpec = if (activeMessageSearch != null) {
+                    SearchTargetBringIntoViewSpec
+                } else {
+                    LocalBringIntoViewSpec.current
+                }
+                CompositionLocalProvider(LocalBringIntoViewSpec provides bringIntoViewSpec) {
                 LazyColumn(
                     state = state,
-                    contentPadding = PaddingValues(16.dp) + PaddingValues(bottom = 32.dp + innerPadding.calculateBottomPadding()),
+                    contentPadding = PaddingValues(16.dp) + PaddingValues(bottom = 32.dp + if (liquidGlass) 0.dp else innerPadding.calculateBottomPadding()),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier
@@ -362,46 +455,53 @@ private fun ChatListNormal(
                         selectedKeys = selectedItems,
                         enabled = selecting,
                     ) {
-                        ChatMessage(
-                            node = node,
-                            model = node.currentMessage.modelId?.let(modelById::get),
-                            assistant = assistant,
-                            loading = loading && node.id == lastMessageNodeId,
-                            onRegenerate = {
-                                onRegenerate(node.currentMessage)
-                            },
-                            onEdit = {
-                                onEdit(node.currentMessage)
-                            },
-                            onFork = {
-                                onForkMessage(node.currentMessage)
-                            },
-                            onDelete = {
-                                onDelete(node.currentMessage)
-                            },
-                            onShare = {
-                                selecting = true  // 使用 CoroutineScope 延迟状态更新
-                                selectedItems.clear()
-                                selectedItems.addAll(displayedMessageNodes.map { it.id }
-                                    .subList(0, displayedMessageNodes.indexOf(node) + 1))
-                            },
-                            onUpdate = {
-                                onUpdateMessage(it)
-                            },
-                            onUpdateTtsMessage = onUpdateTtsMessage,
-                            isFavorite = node.isFavorite,
-                            onToggleFavorite = {
-                                onToggleFavorite?.invoke(node)
-                            },
-                            onTranslate = onTranslate,
-                            onClearTranslation = onClearTranslation,
-                            onTranslateChatVoiceSegment = onTranslateChatVoiceSegment,
-                            onClearChatVoiceSegmentTranslation = onClearChatVoiceSegmentTranslation,
-                            onToolApproval = onToolApproval,
-                            onToolAnswer = onToolAnswer,
-                            onOpenVoiceCallRecord = onOpenVoiceCallRecord,
-                            lastMessage = node.id == lastMessageNodeId,
-                        )
+                        CompositionLocalProvider(
+                            LocalMarkdownSearchTarget provides activeMessageSearch
+                                ?.takeIf { it.nodeId == node.id }
+                                ?.markdownTarget,
+                            LocalLiquidGlassHaze provides glassHazeState,
+                        ) {
+                            ChatMessage(
+                                node = node,
+                                model = node.currentMessage.modelId?.let(modelById::get),
+                                assistant = assistant,
+                                loading = loading && node.id == lastMessageNodeId,
+                                onRegenerate = {
+                                    onRegenerate(node.currentMessage)
+                                },
+                                onEdit = {
+                                    onEdit(node.currentMessage)
+                                },
+                                onFork = {
+                                    onForkMessage(node.currentMessage)
+                                },
+                                onDelete = {
+                                    onDelete(node.currentMessage)
+                                },
+                                onShare = {
+                                    selecting = true  // 使用 CoroutineScope 延迟状态更新
+                                    selectedItems.clear()
+                                    selectedItems.addAll(displayedMessageNodes.map { it.id }
+                                        .subList(0, displayedMessageNodes.indexOf(node) + 1))
+                                },
+                                onUpdate = {
+                                    onUpdateMessage(it)
+                                },
+                                onUpdateTtsMessage = onUpdateTtsMessage,
+                                isFavorite = node.isFavorite,
+                                onToggleFavorite = {
+                                    onToggleFavorite?.invoke(node)
+                                },
+                                onTranslate = onTranslate,
+                                onClearTranslation = onClearTranslation,
+                                onTranslateChatVoiceSegment = onTranslateChatVoiceSegment,
+                                onClearChatVoiceSegmentTranslation = onClearChatVoiceSegmentTranslation,
+                                onToolApproval = onToolApproval,
+                                onToolAnswer = onToolAnswer,
+                                onOpenVoiceCallRecord = onOpenVoiceCallRecord,
+                                lastMessage = node.id == lastMessageNodeId,
+                            )
+                        }
                     }
                 }
             }
@@ -448,6 +548,7 @@ private fun ChatListNormal(
                 )
             }
             }
+                }
         }
         }
 
@@ -682,8 +783,9 @@ private fun ChatListPreview(
     settings: Settings,
     hazeState: HazeState,
     animatedVisibilityScope: AnimatedVisibilityScope,
-    onJumpToMessage: (Int) -> Unit
+    onJumpToMessage: (Uuid, String) -> Unit
 ) {
+    val liquidGlass = LocalLiquidGlass.current.enabled
     var searchQuery by remember { mutableStateOf("") }
     val messageNodes = remember(
         conversation.messageNodes,
@@ -693,20 +795,21 @@ private fun ChatListPreview(
         if (showCompressedMessages) conversation.messageNodes else conversation.visibleMessageNodes
     }
 
-    // 过滤消息，同时保留当前显示列表的 index，保证隐藏/显示压缩消息后跳转一致。
+    // Keep search results tied to message identity; the normal list resolves its current index after switching back.
     val filteredMessages = remember(messageNodes, searchQuery) {
-        if (searchQuery.isBlank()) {
-            messageNodes.mapIndexed { index, node -> index to node }
-        } else {
-            messageNodes.mapIndexed { index, node -> index to node }
-                .filter { (_, node) -> node.currentMessage.toText().contains(searchQuery, ignoreCase = true) }
+        messageNodes.filter { node ->
+            searchQuery.isBlank() || node.currentMessage.toText().contains(searchQuery, ignoreCase = true)
         }
     }
 
     Column(
         modifier = Modifier
-            .padding(top = innerPadding.calculateTopPadding())
+            .padding(
+                top = innerPadding.calculateTopPadding(),
+                bottom = if (liquidGlass) innerPadding.calculateBottomPadding() else 0.dp,
+            )
             .fillMaxSize()
+            .then(if (liquidGlass) Modifier.clipToBounds() else Modifier)
             .hazeSource(state = hazeState),
     ) {
         // 搜索框
@@ -742,16 +845,16 @@ private fun ChatListPreview(
 
         // 消息预览
         LazyColumn(
-            contentPadding = PaddingValues(16.dp) + PaddingValues(bottom = 32.dp + innerPadding.calculateBottomPadding()),
+            contentPadding = PaddingValues(16.dp) + PaddingValues(bottom = 32.dp + if (liquidGlass) 0.dp else innerPadding.calculateBottomPadding()),
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
         ) {
-            itemsIndexed(
+            items(
                 items = filteredMessages,
-                key = { index, item -> item.second.id },
-            ) { _, (originalIndex, node) ->
+                key = { node -> node.id },
+            ) { node ->
                 val message = node.currentMessage
                 val isUser = message.role == me.rerere.ai.core.MessageRole.USER
                 Column(
@@ -769,7 +872,8 @@ private fun ChatListPreview(
                         Row(
                             modifier = Modifier
                                 .clickable {
-                                    onJumpToMessage(originalIndex)
+                                    Log.i(HISTORY_SEARCH_TAG, "preview row clicked node=${node.id} queryLength=${searchQuery.length} showCompressed=$showCompressedMessages")
+                                    onJumpToMessage(node.id, searchQuery)
                                 }
                                 .padding(horizontal = 8.dp, vertical = 6.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),

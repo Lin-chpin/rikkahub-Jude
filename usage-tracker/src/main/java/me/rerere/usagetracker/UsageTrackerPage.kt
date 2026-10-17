@@ -698,7 +698,7 @@ private fun ReminderRuleControls(
 }
 
 @Composable
-private fun AppIcon(
+fun AppIcon(
     icon: Drawable?,
     label: String,
 ) {

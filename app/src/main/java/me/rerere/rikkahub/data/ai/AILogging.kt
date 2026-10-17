@@ -23,6 +23,7 @@ class AILoggingManager {
     fun getLogs(): StateFlow<List<AILogging>> = logs
 
     fun addLog(log: AILogging) {
+        if (log is AILogging.Generation && log.params.suppressContentLogs) return
         logs.value = logs.value + log
         if (logs.value.size > MAX_LOGS) {
             logs.value = logs.value.drop(1)

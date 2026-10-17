@@ -68,6 +68,7 @@ import me.rerere.rikkahub.data.voice.VOICE_CALL_UNAVAILABLE_MESSAGE
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.ui.context.LocalTTSState
 import me.rerere.rikkahub.ui.context.LocalToaster
+import me.rerere.rikkahub.service.VoiceCallInviteDeadlines
 import kotlin.math.roundToInt
 
 internal data class IncomingVoiceCallRequest(
@@ -119,17 +120,27 @@ internal fun IncomingVoiceCallOverlay(
     onAccept: () -> Unit,
     onReject: (reason: String) -> Unit,
 ) {
+    val context = LocalContext.current
     val ttsState = LocalTTSState.current
     val ttsAvailable by ttsState.isAvailable.collectAsState()
     val ttsProviderReady by ttsState.isProviderReady.collectAsState()
     val toaster = LocalToaster.current
     var resolved by remember(request.toolCallId) { mutableStateOf(false) }
+    val deadlineAtMillis = remember(request.toolCallId) {
+        VoiceCallInviteDeadlines.forTool(context, request.toolCallId)?.expiresAtMillis
+            ?: (System.currentTimeMillis() + INCOMING_CALL_TIMEOUT_SECONDS * 1_000L)
+    }
     var secondsRemaining by remember(request.toolCallId) {
-        mutableIntStateOf(INCOMING_CALL_TIMEOUT_SECONDS)
+        mutableIntStateOf(((deadlineAtMillis - System.currentTimeMillis() + 999) / 1_000).toInt().coerceIn(0, INCOMING_CALL_TIMEOUT_SECONDS))
     }
 
     fun acceptOnce() {
         if (resolved) return
+        if (System.currentTimeMillis() >= deadlineAtMillis) {
+            resolved = true
+            onReject("The voice call was not answered within 30 seconds.")
+            return
+        }
         if (!ttsProviderReady) {
             toaster.show("语音模型正在初始化，请稍后再试", type = ToastType.Error)
             return
@@ -153,9 +164,9 @@ internal fun IncomingVoiceCallOverlay(
     VibrateForIncomingCall(request.toolCallId)
 
     LaunchedEffect(request.toolCallId) {
-        repeat(INCOMING_CALL_TIMEOUT_SECONDS) {
+        while (System.currentTimeMillis() < deadlineAtMillis && !resolved) {
+            secondsRemaining = ((deadlineAtMillis - System.currentTimeMillis() + 999) / 1_000).toInt().coerceIn(0, INCOMING_CALL_TIMEOUT_SECONDS)
             delay(1_000)
-            secondsRemaining--
         }
         rejectOnce("The voice call was not answered within 30 seconds.")
     }

@@ -2,6 +2,11 @@ package me.rerere.tts.provider.providers
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -156,54 +161,62 @@ class ElevenLabsTTSProvider : TTSProvider<TTSProviderSetting.ElevenLabs> {
             .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
-        httpClient.newCall(httpRequest).execute().use { response ->
-            if (!response.isSuccessful) {
-                val errorBody = response.body?.string().orEmpty()
-                Log.e(TAG, "generateSpeech: ${response.code} ${response.message}, body=$errorBody")
-                throw Exception("ElevenLabs TTS request failed: ${response.code} ${response.message}; body=$errorBody")
+        coroutineScope {
+            val call = httpClient.newCall(httpRequest)
+            val cancellation = launch(Dispatchers.IO, start = CoroutineStart.UNDISPATCHED) {
+                try { awaitCancellation() } finally { call.cancel() }
             }
-            Log.i(TAG, "tts_timing trace=$timingId stage=response_headers status=${response.code}")
+            try {
+                call.execute().use { response ->
+                    if (!response.isSuccessful) {
+                        val errorBody = response.body?.string().orEmpty()
+                        Log.e(TAG, "generateSpeech: ${response.code} ${response.message}, body=$errorBody")
+                        throw Exception("ElevenLabs TTS request failed: ${response.code} ${response.message}; body=$errorBody")
+                    }
+                    Log.i(TAG, "tts_timing trace=$timingId stage=response_headers status=${response.code}")
 
-            val responseBody = response.body ?: error("ElevenLabs TTS returned an empty response")
-            val metadata = mapOf(
-                "provider" to "elevenlabs",
-                "model" to modelId,
-                "voice_id" to voiceId,
-                "timing_id" to timingId,
-            )
-            if (streaming) {
-                responseBody.byteStream().use { input ->
-                    val buffer = ByteArray(16 * 1024)
-                    var firstChunkReceived = false
-                    while (currentCoroutineContext().isActive) {
-                        val bytesRead = input.read(buffer)
-                        if (bytesRead < 0) break
-                        if (bytesRead == 0) continue
-                        if (!firstChunkReceived) {
-                            firstChunkReceived = true
-                            Log.i(TAG, "tts_timing trace=$timingId stage=first_audio_bytes_received bytes=$bytesRead")
+                    val responseBody = response.body ?: error("ElevenLabs TTS returned an empty response")
+                    val metadata = mapOf(
+                        "provider" to "elevenlabs",
+                        "model" to modelId,
+                        "voice_id" to voiceId,
+                        "timing_id" to timingId,
+                    )
+                    if (streaming) {
+                        responseBody.byteStream().use { input ->
+                            val buffer = ByteArray(16 * 1024)
+                            var firstChunkReceived = false
+                            while (currentCoroutineContext().isActive) {
+                                val bytesRead = input.read(buffer)
+                                if (bytesRead < 0) break
+                                if (bytesRead == 0) continue
+                                if (!firstChunkReceived) {
+                                    firstChunkReceived = true
+                                    Log.i(TAG, "tts_timing trace=$timingId stage=first_audio_bytes_received bytes=$bytesRead")
+                                }
+                                emit(
+                                    AudioChunk(
+                                        data = buffer.copyOf(bytesRead),
+                                        format = AudioFormat.MP3,
+                                        metadata = metadata,
+                                    )
+                                )
+                            }
                         }
+                    } else {
+                        val audioBytes = responseBody.bytes()
+                        Log.i(TAG, "tts_timing trace=$timingId stage=first_audio_bytes_received bytes=${audioBytes.size}")
                         emit(
                             AudioChunk(
-                                data = buffer.copyOf(bytesRead),
+                                data = audioBytes,
                                 format = AudioFormat.MP3,
+                                isLast = true,
                                 metadata = metadata,
                             )
                         )
                     }
                 }
-            } else {
-                val audioBytes = responseBody.bytes()
-                Log.i(TAG, "tts_timing trace=$timingId stage=first_audio_bytes_received bytes=${audioBytes.size}")
-                emit(
-                    AudioChunk(
-                        data = audioBytes,
-                        format = AudioFormat.MP3,
-                        isLast = true,
-                        metadata = metadata,
-                    )
-                )
-            }
+            } finally { cancellation.cancel() }
         }
     }
 }

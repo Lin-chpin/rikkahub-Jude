@@ -15,11 +15,14 @@ import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.source.ClippingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -37,22 +40,51 @@ import java.io.ByteArrayOutputStream
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+@OptIn(UnstableApi::class)
 class AudioPlayer(context: Context) {
     private companion object {
         const val TAG = "AudioPlayer"
     }
 
-    private val player = ExoPlayer.Builder(context).build()
+    private val player = ExoPlayer.Builder(context)
+        .setLoadControl(
+            DefaultLoadControl.Builder()
+                .setBufferDurationsMs(
+                    DefaultLoadControl.DEFAULT_MIN_BUFFER_MS,
+                    DefaultLoadControl.DEFAULT_MAX_BUFFER_MS,
+                    250,
+                    1_000,
+                )
+                .setPrioritizeTimeOverSizeThresholds(true)
+                .build(),
+        )
+        .build()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private val _playbackState = MutableStateFlow(PlaybackState())
     val playbackState: StateFlow<PlaybackState> = _playbackState.asStateFlow()
 
     private var positionJob: Job? = null
+    private var playbackGeneration = 0L
 
+    fun setVoiceCommunication(enabled: Boolean) {
+        player.setAudioAttributes(
+            androidx.media3.common.AudioAttributes.Builder()
+                .setUsage(if (enabled) C.USAGE_VOICE_COMMUNICATION else C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
+                .build(),
+            false,
+        )
+    }
+
+    val positionMs: Long get() = player.currentPosition.coerceAtLeast(0L)
     fun pause() = player.pause()
     fun resume() = player.play()
-    fun stop() = player.stop()
+    fun stop() {
+        playbackGeneration++
+        stopPositionUpdates()
+        player.stop()
+    }
     fun clear() = player.clearMediaItems()
     fun release() = player.release()
     fun seekBy(ms: Long) = player.seekTo(player.currentPosition + ms)
@@ -62,22 +94,39 @@ class AudioPlayer(context: Context) {
     }
 
     @OptIn(UnstableApi::class)
-    suspend fun play(response: TTSResponse) {
+    suspend fun play(
+        response: TTSResponse,
+        startPositionMs: Long? = null,
+        endPositionMs: Long? = null,
+    ) {
         val bytes = if (response.format == AudioFormat.PCM) {
             pcmToWav(response.audioData, response.sampleRate ?: 24000)
         } else response.audioData
         Log.i(TAG, "Preparing audio: bytes=" + bytes.size + ", format=" + response.format + ", sampleRate=" + response.sampleRate)
 
         val dataSourceFactory = DataSource.Factory { ByteArrayDataSource(bytes) }
+        val clipStart = startPositionMs?.coerceAtLeast(0L) ?: 0L
         val mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory)
             .createMediaSource(MediaItem.fromUri(Uri.EMPTY))
-        playMediaSource(mediaSource, response.duration?.times(1000)?.toLong())
+        val clippedSource = if (startPositionMs != null || endPositionMs != null) {
+            require(endPositionMs == null || endPositionMs > clipStart) { "Invalid audio clip range" }
+            Log.i(TAG, "Cached audio clip: startMs=$clipStart endMs=$endPositionMs")
+            // setMediaSource bypasses ExoPlayer's factory, so clipping must wrap the source itself.
+            ClippingMediaSource.Builder(mediaSource)
+                .setStartPositionMs(clipStart)
+                .apply { endPositionMs?.let(::setEndPositionMs) }
+                // Streaming MP3 captures can lack a seek index; short in-memory call clips can decode the prefix.
+                .setAllowUnseekableMedia(true)
+                .build()
+        } else mediaSource
+        val durationMs = endPositionMs?.minus(clipStart) ?: response.duration?.times(1000)?.toLong()
+        playMediaSource(clippedSource, durationMs)
     }
 
     @OptIn(UnstableApi::class)
-    suspend fun play(stream: Flow<AudioChunk>) {
+    suspend fun play(stream: Flow<AudioChunk>) = coroutineScope {
         val streamTiming = StreamTiming()
-        val dataSourceFactory = DataSource.Factory { FlowDataSource(stream, streamTiming) }
+        val dataSourceFactory = DataSource.Factory { FlowDataSource(stream, streamTiming, this) }
         val mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory)
             .createMediaSource(MediaItem.fromUri(Uri.EMPTY))
         playMediaSource(mediaSource, null, streamTiming)
@@ -88,7 +137,8 @@ class AudioPlayer(context: Context) {
         durationMs: Long?,
         streamTiming: StreamTiming? = null,
     ) = suspendCancellableCoroutine<Unit> { cont ->
-        Log.i(TAG, "Preparing ExoPlayer media source: durationMs=" + durationMs)
+        val generation = ++playbackGeneration
+        Log.i(TAG, "Preparing ExoPlayer media source: durationMs=$durationMs startBufferMs=250")
         _playbackState.update {
             it.copy(
                 status = PlaybackStatus.Buffering,
@@ -99,9 +149,11 @@ class AudioPlayer(context: Context) {
 
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
+                if (generation != playbackGeneration) return
                 when (state) {
                     Player.STATE_BUFFERING -> {
                         _playbackState.update { it.copy(status = PlaybackStatus.Buffering) }
+                        streamTiming?.buffering(player.currentPosition)
                         stopPositionUpdates()
                     }
                     Player.STATE_READY -> {
@@ -116,6 +168,7 @@ class AudioPlayer(context: Context) {
                         }
                         Log.i(TAG, "Audio playback ready: isPlaying=" + isPlaying + ", volume=" + player.volume + ", durationMs=" + duration)
                         streamTiming?.playerReady()
+                        if (isPlaying) streamTiming?.playbackStarted()
                         if (isPlaying) startPositionUpdates() else stopPositionUpdates()
                     }
                     Player.STATE_ENDED -> {
@@ -128,6 +181,7 @@ class AudioPlayer(context: Context) {
                             )
                         }
                         Log.i(TAG, "Audio playback ended")
+                        streamTiming?.playbackEnded()
                         player.removeListener(this)
                         if (cont.isActive) cont.resume(Unit)
                     }
@@ -139,7 +193,9 @@ class AudioPlayer(context: Context) {
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                if (generation != playbackGeneration) return
                 Log.e(TAG, "Audio playback error: code=" + error.errorCode + ", message=" + error.message, error)
+                streamTiming?.playbackFailed(error.errorCode)
                 player.removeListener(this)
                 stopPositionUpdates()
                 _playbackState.update { it.copy(status = PlaybackStatus.Error, errorMessage = error.message) }
@@ -147,9 +203,18 @@ class AudioPlayer(context: Context) {
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                val status = if (isPlaying) PlaybackStatus.Playing else PlaybackStatus.Paused
-                _playbackState.update { it.copy(status = status) }
-                if (isPlaying) startPositionUpdates() else stopPositionUpdates()
+                if (generation != playbackGeneration) return
+                // isPlaying=false also follows buffering/end/stop; preserve those terminal and loading states.
+                if (isPlaying || player.playbackState == Player.STATE_READY) {
+                    val status = if (isPlaying) PlaybackStatus.Playing else PlaybackStatus.Paused
+                    _playbackState.update { it.copy(status = status) }
+                }
+                if (isPlaying) {
+                    streamTiming?.playbackStarted()
+                    startPositionUpdates()
+                } else {
+                    stopPositionUpdates()
+                }
             }
         }
         player.addListener(listener)
@@ -162,19 +227,23 @@ class AudioPlayer(context: Context) {
 
         cont.invokeOnCancellation {
             player.removeListener(listener)
-            player.stop()
-            stopPositionUpdates()
+            if (generation == playbackGeneration) {
+                player.stop()
+                stopPositionUpdates()
+            }
+            streamTiming?.playbackCancelled()
         }
     }
 
     private class FlowDataSource(
         private val audioFlow: Flow<AudioChunk>,
         private val streamTiming: StreamTiming,
+        private val producerScope: CoroutineScope,
     ) : DataSource {
         private var input: java.io.PipedInputStream? = null
         private var output: java.io.PipedOutputStream? = null
         private var producerJob: Job? = null
-        private var producerError: Throwable? = null
+        @Volatile private var producerError: Throwable? = null
 
         override fun addTransferListener(transferListener: TransferListener) = Unit
 
@@ -184,7 +253,7 @@ class AudioPlayer(context: Context) {
             val pipeOutput = java.io.PipedOutputStream(pipeInput)
             input = pipeInput
             output = pipeOutput
-            producerJob = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            producerJob = producerScope.launch(Dispatchers.IO) {
                 try {
                     audioFlow.collect { chunk ->
                         streamTiming.chunkReceived(chunk)
@@ -229,6 +298,10 @@ class AudioPlayer(context: Context) {
         private var firstChunkLogged = false
         private var firstReadLogged = false
         private var playerReadyLogged = false
+        private var playbackStartedLogged = false
+        private var playbackEndedLogged = false
+        private var playbackFailedLogged = false
+        private var playbackCancelledLogged = false
 
         @Synchronized
         fun opened() {
@@ -253,10 +326,48 @@ class AudioPlayer(context: Context) {
         }
 
         @Synchronized
+        fun buffering(positionMs: Long) {
+            Log.i(TAG, "tts_timing trace=$traceId stage=buffering positionMs=$positionMs " +
+                "elapsedSinceStreamOpenMs=${if (openedAtNanos == 0L) 0 else (System.nanoTime() - openedAtNanos) / 1_000_000}")
+        }
+
+        @Synchronized
         fun playerReady() {
             if (!playerReadyLogged && traceId != "unknown") {
                 playerReadyLogged = true
                 Log.i(TAG, "tts_timing trace=$traceId stage=player_ready elapsedSinceStreamOpenMs=${(System.nanoTime() - openedAtNanos) / 1_000_000}")
+            }
+        }
+
+        @Synchronized
+        fun playbackStarted() {
+            if (!playbackStartedLogged && traceId != "unknown") {
+                playbackStartedLogged = true
+                Log.i(TAG, "tts_timing trace=$traceId stage=playback_started elapsedSinceStreamOpenMs=${(System.nanoTime() - openedAtNanos) / 1_000_000}")
+            }
+        }
+
+        @Synchronized
+        fun playbackEnded() {
+            if (!playbackEndedLogged && traceId != "unknown") {
+                playbackEndedLogged = true
+                Log.i(TAG, "tts_timing trace=$traceId stage=playback_ended elapsedSinceStreamOpenMs=${(System.nanoTime() - openedAtNanos) / 1_000_000}")
+            }
+        }
+
+        @Synchronized
+        fun playbackFailed(errorCode: Int) {
+            if (!playbackFailedLogged && traceId != "unknown") {
+                playbackFailedLogged = true
+                Log.i(TAG, "tts_timing trace=$traceId stage=playback_failed elapsedSinceStreamOpenMs=${(System.nanoTime() - openedAtNanos) / 1_000_000} errorCode=$errorCode")
+            }
+        }
+
+        @Synchronized
+        fun playbackCancelled() {
+            if (!playbackCancelledLogged && traceId != "unknown") {
+                playbackCancelledLogged = true
+                Log.i(TAG, "tts_timing trace=$traceId stage=playback_cancelled elapsedSinceStreamOpenMs=${(System.nanoTime() - openedAtNanos) / 1_000_000}")
             }
         }
     }

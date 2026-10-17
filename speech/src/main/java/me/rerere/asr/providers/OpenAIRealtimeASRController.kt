@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import me.rerere.asr.ASRUtterance
 import me.rerere.asr.ASRController
 import me.rerere.asr.ASRProviderSetting
 import me.rerere.asr.ASRState
@@ -54,10 +55,14 @@ class OpenAIRealtimeASRController(
     private var recorderJob: Job? = null
     private var audioRecord: AudioRecord? = null
     private var onTranscriptChange: ((String) -> Unit)? = null
+    private var onUtterance: ((ASRUtterance) -> Unit)? = null
     private val completedTranscripts = Collections.synchronizedList(mutableListOf<String>())
     private val partialTranscripts = ConcurrentHashMap<String, String>()
 
-    override fun start(onTranscriptChange: (String) -> Unit) {
+    override fun start(
+        onTranscriptChange: (String) -> Unit,
+        onUtterance: ((ASRUtterance) -> Unit)?,
+    ) {
         if (state.value.isRecording) return
         if (ContextCompat.checkSelfPermission(
                 context,
@@ -68,7 +73,9 @@ class OpenAIRealtimeASRController(
             return
         }
 
+        webSocket?.cancel()
         this.onTranscriptChange = onTranscriptChange
+        this.onUtterance = onUtterance
         completedTranscripts.clear()
         partialTranscripts.clear()
         _state.update {
@@ -85,28 +92,40 @@ class OpenAIRealtimeASRController(
 
         webSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                webSocket.send(provider.sessionUpdateEvent().toString())
-                _state.update { it.copy(status = ASRStatus.Listening, errorMessage = null) }
-                startRecorder(provider, webSocket)
+                scope.launch {
+                    if (this@OpenAIRealtimeASRController.webSocket !== webSocket) return@launch
+                    webSocket.send(provider.sessionUpdateEvent().toString())
+                    _state.update { it.copy(status = ASRStatus.Listening, errorMessage = null) }
+                    startRecorder(provider, webSocket)
+                }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                handleServerEvent(text)
+                scope.launch {
+                    if (this@OpenAIRealtimeASRController.webSocket !== webSocket) return@launch
+                    handleServerEvent(text)
+                }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "Realtime ASR websocket failed", t)
-                releaseRecorder()
-                setError(t.message ?: "ASR websocket failed")
+                scope.launch {
+                    if (this@OpenAIRealtimeASRController.webSocket !== webSocket) return@launch
+                    Log.e(TAG, "Realtime ASR websocket failed", t)
+                    releaseRecorder()
+                    setError(t.message ?: "ASR websocket failed")
+                }
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                releaseRecorder()
-                _state.update {
-                    it.copy(
-                        status = ASRStatus.Idle,
-                        errorMessage = null
-                    )
+                scope.launch {
+                    if (this@OpenAIRealtimeASRController.webSocket !== webSocket) return@launch
+                    releaseRecorder()
+                    _state.update {
+                        it.copy(
+                            status = ASRStatus.Idle,
+                            errorMessage = null
+                        )
+                    }
                 }
             }
         })
@@ -132,7 +151,13 @@ class OpenAIRealtimeASRController(
     }
 
     override fun dispose() {
-        stop()
+        onUtterance = null
+        onTranscriptChange = null
+        val socket = webSocket
+        webSocket = null
+        recorderJob?.cancel()
+        releaseRecorder()
+        socket?.cancel()
         scope.cancel()
     }
 
@@ -160,6 +185,7 @@ class OpenAIRealtimeASRController(
                 bufferSize * 2
             )
             audioRecord = recorder
+            val echoCanceler = me.rerere.asr.enableAcousticEchoCancellation(recorder.audioSessionId)
 
             try {
                 recorder.startRecording()
@@ -183,10 +209,17 @@ class OpenAIRealtimeASRController(
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Audio recording failed", e)
-                setError(e.message ?: "Audio recording failed")
+                if (isActive) {
+                    Log.e(TAG, "Audio recording failed", e)
+                    setError(e.message ?: "Audio recording failed")
+                }
             } finally {
-                releaseRecorder()
+                echoCanceler?.release()
+                synchronized(this@OpenAIRealtimeASRController) {
+                    if (audioRecord === recorder) audioRecord = null
+                }
+                runCatching { recorder.stop() }
+                runCatching { recorder.release() }
             }
         }
     }
@@ -198,11 +231,17 @@ class OpenAIRealtimeASRController(
         }
 
         when (val type = event.optString("type")) {
+            "input_audio_buffer.speech_started", "input_audio_buffer.committed" -> {
+                val itemId = event.optString("item_id")
+                if (itemId.isNotEmpty()) onUtterance?.invoke(ASRUtterance(itemId, "", false))
+            }
+
             "conversation.item.input_audio_transcription.delta" -> {
                 val itemId = event.optString("item_id", "default")
                 val delta = event.optString("delta")
                 if (delta.isNotEmpty()) {
                     partialTranscripts[itemId] = (partialTranscripts[itemId] ?: "") + delta
+                    onUtterance?.invoke(ASRUtterance(itemId, partialTranscripts[itemId].orEmpty(), false))
                     publishTranscript()
                 }
             }
@@ -211,9 +250,10 @@ class OpenAIRealtimeASRController(
                 val itemId = event.optString("item_id", "default")
                 val transcript = event.optString("transcript").trim()
                 partialTranscripts.remove(itemId)
-                if (transcript.isNotEmpty()) {
+                if (transcript.isNotEmpty() && onUtterance == null) {
                     completedTranscripts.add(transcript)
                 }
+                onUtterance?.invoke(ASRUtterance(itemId, transcript, true))
                 publishTranscript()
             }
 
@@ -233,9 +273,7 @@ class OpenAIRealtimeASRController(
             .filter { it.isNotBlank() }
             .joinToString(" ")
         _state.update { it.copy(transcript = transcript, errorMessage = null) }
-        scope.launch {
-            onTranscriptChange?.invoke(transcript)
-        }
+        onTranscriptChange?.invoke(transcript)
     }
 
     private fun setError(message: String) {
@@ -247,7 +285,9 @@ class OpenAIRealtimeASRController(
         }
     }
 
+    @Synchronized
     private fun releaseRecorder() {
+        recorderJob?.cancel()
         recorderJob = null
         runCatching { audioRecord?.stop() }
         runCatching { audioRecord?.release() }

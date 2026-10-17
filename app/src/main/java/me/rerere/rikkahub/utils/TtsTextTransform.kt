@@ -16,8 +16,18 @@ private val ttsQuotePairs = listOf(
     QuotePair('〈', '〉'),
 )
 
+private data class TtsQuotedContent(
+    val segments: List<String>,
+    val hasUnclosedQuote: Boolean,
+)
+
 /** Extracts quoted segments while preserving their order in the source text. */
-fun String.extractTtsQuotedContent(): List<String> {
+fun String.extractTtsQuotedContent(): List<String> = extractTtsQuotedContentState().segments
+
+/** An unfinished quote is not equivalent to a reply with no quotes. */
+fun String.hasUnclosedTtsQuote(): Boolean = extractTtsQuotedContentState().hasUnclosedQuote
+
+private fun String.extractTtsQuotedContentState(): TtsQuotedContent {
     val result = mutableListOf<String>()
     var activePair: QuotePair? = null
     var contentStart = -1
@@ -38,7 +48,7 @@ fun String.extractTtsQuotedContent(): List<String> {
         }
     }
 
-    return result
+    return TtsQuotedContent(result, activePair != null)
 }
 
 fun String.extractTtsQuotedContentAsText(separator: String = "\n"): String? {

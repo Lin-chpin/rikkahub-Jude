@@ -17,13 +17,18 @@ import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import me.rerere.rikkahub.ui.theme.LiquidGlassModalBottomSheet as ModalBottomSheet
 import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
+import me.rerere.rikkahub.ui.theme.LocalLiquidGlass
+import me.rerere.rikkahub.ui.theme.liquidGlassChrome
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -65,6 +70,8 @@ import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.hooks.ChatInputState
 
+internal val LocalWorkspaceGlass = staticCompositionLocalOf { false }
+
 @Composable
 internal fun FilesPicker(
     conversation: Conversation,
@@ -91,6 +98,7 @@ internal fun FilesPicker(
     onPickAudio: () -> Unit,
     onPickFile: () -> Unit,
 ) {
+    val glass = LocalLiquidGlass.current.enabled
     val settings = LocalSettings.current
     val provider = settings.getCurrentChatModel()?.findProvider(providers = settings.providers)
     val autoCompressConfig = if (assistant.allowConversationSystemPrompt) {
@@ -99,105 +107,114 @@ internal fun FilesPicker(
         assistant.autoCompressConfig
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+    CompositionLocalProvider(LocalWorkspaceGlass provides glass) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            TakePicButton(onLaunchCamera = onTakePic)
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                TakePicButton(onLaunchCamera = onTakePic)
 
-            ImagePickButton(onClick = onPickImage)
+                ImagePickButton(onClick = onPickImage)
 
-            if (provider != null && provider is ProviderSetting.Google) {
-                VideoPickButton(onClick = onPickVideo)
+                if (provider != null && provider is ProviderSetting.Google) {
+                    VideoPickButton(onClick = onPickVideo)
 
-                AudioPickButton(onClick = onPickAudio)
+                    AudioPickButton(onClick = onPickAudio)
+                }
+
+                FilePickButton(onClick = onPickFile)
             }
 
-            FilePickButton(onClick = onPickFile)
-        }
+            HorizontalDivider(
+                modifier = Modifier.fillMaxWidth()
+            )
 
-        HorizontalDivider(
-            modifier = Modifier.fillMaxWidth()
-        )
+            if (settings.mcpServers.isNotEmpty()) {
+                McpPickerListItem(
+                    assistant = assistant,
+                    servers = settings.mcpServers,
+                    mcpManager = mcpManager,
+                    onUpdateAssistant = onUpdateAssistant,
+                )
+            }
 
-        if (settings.mcpServers.isNotEmpty()) {
-            McpPickerListItem(
-                assistant = assistant,
-                servers = settings.mcpServers,
-                mcpManager = mcpManager,
-                onUpdateAssistant = onUpdateAssistant,
+            // Extensions (Quick Messages + Prompt Injections + Skills)
+            val modeAndLorebookCount =
+                if (assistant.allowConversationPromptInjection) {
+                    conversation.modeInjectionIds.size + conversation.lorebookIds.size
+                } else {
+                    assistant.modeInjectionIds.size + assistant.lorebookIds.size
+                }
+            val activeCount =
+                assistant.quickMessageIds.size +
+                    modeAndLorebookCount +
+                    assistant.enabledSkills.size
+            ListItem(
+                leadingContent = {
+                    Icon(
+                        imageVector = HugeIcons.Package,
+                        contentDescription = stringResource(R.string.assistant_page_tab_extensions),
+                    )
+                },
+                headlineContent = {
+                    Text(stringResource(R.string.assistant_page_tab_extensions))
+                },
+                trailingContent = {
+                    if (activeCount > 0) {
+                        Text(
+                            text = activeCount.toString(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                },
+                colors = if (glass) ListItemDefaults.colors(containerColor = Color.Transparent)
+                    else ListItemDefaults.colors(),
+                modifier = Modifier
+                    .clip(MaterialTheme.shapes.large)
+                    .then(if (glass) Modifier.liquidGlassChrome(MaterialTheme.shapes.large) else Modifier)
+                    .clickable {
+                        onShowInjectionSheetChange(true)
+                    },
+            )
+
+            // Compress History Button
+            ListItem(
+                leadingContent = {
+                    Icon(
+                        imageVector = HugeIcons.Package01,
+                        contentDescription = stringResource(R.string.chat_page_compress_context),
+                    )
+                },
+                headlineContent = {
+                    Text(stringResource(R.string.chat_page_compress_context))
+                },
+                trailingContent = {
+                    if (conversation.visibleMessageNodes.isNotEmpty()) {
+                        Text(
+                            text = stringResource(R.string.chat_page_message_count, conversation.visibleMessageNodes.size),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                colors = if (glass) ListItemDefaults.colors(containerColor = Color.Transparent)
+                    else ListItemDefaults.colors(),
+                modifier = Modifier
+                    .clip(MaterialTheme.shapes.large)
+                    .then(if (glass) Modifier.liquidGlassChrome(MaterialTheme.shapes.large) else Modifier)
+                    .clickable {
+                        onShowCompressDialogChange(true)
+                    },
             )
         }
 
-        // Extensions (Quick Messages + Prompt Injections + Skills)
-        val modeAndLorebookCount =
-            if (assistant.allowConversationPromptInjection) {
-                conversation.modeInjectionIds.size + conversation.lorebookIds.size
-            } else {
-                assistant.modeInjectionIds.size + assistant.lorebookIds.size
-            }
-        val activeCount =
-            assistant.quickMessageIds.size +
-                modeAndLorebookCount +
-                assistant.enabledSkills.size
-        ListItem(
-            leadingContent = {
-                Icon(
-                    imageVector = HugeIcons.Package,
-                    contentDescription = stringResource(R.string.assistant_page_tab_extensions),
-                )
-            },
-            headlineContent = {
-                Text(stringResource(R.string.assistant_page_tab_extensions))
-            },
-            trailingContent = {
-                if (activeCount > 0) {
-                    Text(
-                        text = activeCount.toString(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-            },
-            modifier = Modifier
-                .clip(MaterialTheme.shapes.large)
-                .clickable {
-                    onShowInjectionSheetChange(true)
-                },
-        )
-
-        // Compress History Button
-        ListItem(
-            leadingContent = {
-                Icon(
-                    imageVector = HugeIcons.Package01,
-                    contentDescription = stringResource(R.string.chat_page_compress_context),
-                )
-            },
-            headlineContent = {
-                Text(stringResource(R.string.chat_page_compress_context))
-            },
-            trailingContent = {
-                if (conversation.visibleMessageNodes.isNotEmpty()) {
-                    Text(
-                        text = stringResource(R.string.chat_page_message_count, conversation.visibleMessageNodes.size),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            },
-            modifier = Modifier
-                .clip(MaterialTheme.shapes.large)
-                .clickable {
-                    onShowCompressDialogChange(true)
-                },
-        )
     }
 
     // Injection Bottom Sheet
@@ -367,6 +384,7 @@ private fun BigIconTextButton(
     text: @Composable () -> Unit,
     onClick: () -> Unit,
 ) {
+    val glass = LocalWorkspaceGlass.current
     val interactionSource = remember { MutableInteractionSource() }
     Column(
         modifier = modifier
@@ -381,7 +399,11 @@ private fun BigIconTextButton(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Surface(
-            tonalElevation = 2.dp, shape = RoundedCornerShape(8.dp)
+            modifier = if (glass) Modifier.liquidGlassChrome(RoundedCornerShape(8.dp)) else Modifier,
+            color = if (glass) Color.Transparent else MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            tonalElevation = if (glass) 0.dp else 2.dp,
+            shape = RoundedCornerShape(8.dp)
         ) {
             Box(
                 modifier = Modifier.padding(horizontal = 32.dp, vertical = 16.dp)

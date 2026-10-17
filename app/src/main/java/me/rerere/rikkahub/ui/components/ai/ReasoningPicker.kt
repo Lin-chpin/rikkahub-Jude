@@ -15,7 +15,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import me.rerere.rikkahub.ui.theme.LiquidGlassModalBottomSheet as ModalBottomSheet
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -31,6 +31,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -56,6 +58,7 @@ fun ReasoningButton(
     onUpdateReasoningLevel: (ReasoningLevel) -> Unit,
 ) {
     var showPicker by remember { mutableStateOf(false) }
+    val description = stringResource(R.string.reasoning_picker_title)
 
     if (showPicker) {
         ReasoningPicker(
@@ -68,7 +71,7 @@ fun ReasoningButton(
     ToggleSurface(
         checked = reasoningLevel.isEnabled,
         onClick = { showPicker = true },
-        modifier = modifier,
+        modifier = modifier.semantics { contentDescription = description },
     ) {
         Row(
             modifier = Modifier.padding(vertical = 8.dp, horizontal = 8.dp),

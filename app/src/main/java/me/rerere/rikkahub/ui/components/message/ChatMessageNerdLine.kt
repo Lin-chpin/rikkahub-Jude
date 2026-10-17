@@ -15,9 +15,12 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import kotlinx.datetime.toJavaLocalDateTime
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.core.MessageRole
+import me.rerere.rikkahub.R
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Clock02
 import me.rerere.hugeicons.stroke.Download04
@@ -36,8 +39,9 @@ fun ChatMessageNerdLine(
     message: UIMessage,
     modifier: Modifier = Modifier,
     color: Color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.5f),
+    showTokenUsage: Boolean = LocalSettings.current.displaySetting.showTokenUsage,
 ) {
-    val settings = LocalSettings.current.displaySetting
+    if (!showTokenUsage || message.role != MessageRole.ASSISTANT) return
 
     ProvideTextStyle(MaterialTheme.typography.labelSmall.copy(color = color)) {
         CompositionLocalProvider(LocalContentColor provides color) {
@@ -47,7 +51,7 @@ fun ChatMessageNerdLine(
                 modifier = modifier.padding(horizontal = 4.dp),
             ) {
                 val usage = message.usage
-                if (settings.showTokenUsage && usage != null) {
+                if (usage != null) {
                     // Input tokens
                     StatsItem(
                         icon = {
@@ -61,11 +65,7 @@ fun ChatMessageNerdLine(
                         content = {
                             Text(text = "${usage.promptTokens.formatNumber()} tokens")
                             // Cached tokens
-                            if (usage.cachedTokens > 0) {
-                                Text(
-                                    text = "(${message.usage?.cachedTokens?.formatNumber() ?: "0"} cached)"
-                                )
-                            }
+                            Text(text = "(${usage.cachedTokens.formatNumber()} cached)")
                         }
                     )
                     // Output tokens
@@ -81,14 +81,16 @@ fun ChatMessageNerdLine(
                             Text(text = "${usage.completionTokens.formatNumber()} tokens")
                         }
                     )
-                    // TPS
-                    if (message.finishedAt != null) {
-                        val duration = Duration.between(
-                            message.createdAt.toJavaLocalDateTime(),
-                            message.finishedAt!!.toJavaLocalDateTime()
-                        )
-                        val tps = usage.completionTokens.toFloat() / duration.toMillis() * 1000
-                        val seconds = (duration.toMillis() / 1000f).toFixed(1)
+                } else {
+                    Text(stringResource(R.string.message_token_usage_unavailable))
+                }
+                // Elapsed time remains useful when an API omits token usage.
+                val finishedAt = message.finishedAt
+                if (finishedAt != null) {
+                    val durationMillis = Duration.between(message.createdAt.toJavaLocalDateTime(), finishedAt.toJavaLocalDateTime()).toMillis().coerceAtLeast(0)
+                    val seconds = (durationMillis / 1000f).toFixed(1)
+                    if (usage != null && durationMillis > 0) {
+                        val tps = usage.completionTokens.toFloat() / durationMillis * 1000
                         StatsItem(
                             icon = {
                                 Icon(
@@ -101,20 +103,15 @@ fun ChatMessageNerdLine(
                                 Text(text = "${tps.toFixed(1)} tok/s")
                             }
                         )
-
-                        StatsItem(
-                            icon = {
-                                Icon(
-                                    imageVector = HugeIcons.Clock02,
-                                    contentDescription = "Duration",
-                                    modifier = Modifier.size(12.dp)
-                                )
-                            },
-                            content = {
-                                Text(text = "${seconds}s")
-                            }
-                        )
                     }
+                    StatsItem(
+                        icon = {
+                            Icon(imageVector = HugeIcons.Clock02, contentDescription = "Duration", modifier = Modifier.size(12.dp))
+                        },
+                        content = { Text(text = "${seconds}s") }
+                    )
+                } else {
+                    Text(stringResource(R.string.message_duration_unavailable))
                 }
             }
         }

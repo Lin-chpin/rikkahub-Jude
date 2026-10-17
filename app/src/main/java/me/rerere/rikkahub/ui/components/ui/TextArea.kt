@@ -18,6 +18,7 @@ import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.material3.BasicAlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -41,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import com.dokar.sonner.ToastType
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.rerere.hugeicons.HugeIcons
@@ -64,6 +66,7 @@ import me.rerere.rikkahub.ui.modifier.onClick
  * @param supportedFileTypes Array of MIME types to filter in file picker (default: text files)
  * @param enableFullscreen Whether to enable fullscreen editing mode
  * @param onImportError Callback when file import fails (optional)
+ * @param fileImporter Optional parser for formats that must not be read as raw text.
  */
 @Composable
 fun TextArea(
@@ -77,20 +80,23 @@ fun TextArea(
     readOnly: Boolean = false,
     supportedFileTypes: Array<String> = arrayOf("text/*", "application/json"),
     enableFullscreen: Boolean = true,
-    onImportError: ((String) -> Unit)? = null
+    onImportError: ((String) -> Unit)? = null,
+    fileImporter: (suspend (Uri) -> String)? = null,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
     var isFullScreen by remember { mutableStateOf(false) }
+    var importing by remember { mutableStateOf(false) }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let {
+            importing = true
             scope.launch {
                 try {
-                    val content = withContext(Dispatchers.IO) {
+                    val content = fileImporter?.invoke(uri) ?: withContext(Dispatchers.IO) {
                         context.contentResolver.openInputStream(uri)?.bufferedReader()
                             ?.use { reader -> reader.readText() }
                             ?: error("Failed to read file")
@@ -98,12 +104,15 @@ fun TextArea(
                     state.setTextAndPlaceCursorAtEnd(content)
                     toaster.show(context.getString(R.string.text_area_import_success), type = ToastType.Success)
                 } catch (e: Exception) {
+                    if (e is CancellationException) throw e
                     e.printStackTrace()
                     val errorMessage = e.message ?: context.getString(R.string.text_area_import_failed)
                     onImportError?.invoke(errorMessage) ?: toaster.show(
                         message = errorMessage,
                         type = ToastType.Error
                     )
+                } finally {
+                    importing = false
                 }
             }
         }
@@ -143,12 +152,12 @@ fun TextArea(
                         )
                     }
 
-                    Icon(
+                    if (importing) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp) else Icon(
                         imageVector = HugeIcons.FileImport,
                         contentDescription = stringResource(R.string.text_area_import_from_file),
                         modifier = Modifier
                             .onClick(onClick = {
-                                filePickerLauncher.launch(supportedFileTypes)
+                                if (enabled && !readOnly && !importing) filePickerLauncher.launch(supportedFileTypes)
                             })
                             .size(24.dp)
                     )

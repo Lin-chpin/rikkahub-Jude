@@ -45,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -73,6 +74,7 @@ import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.voice.voiceCallRecord
 import me.rerere.rikkahub.data.voice.chatVoiceReply
+import me.rerere.rikkahub.data.voice.withEditedChatVoiceReplySegments
 import me.rerere.rikkahub.data.voice.chatVoiceReplyDraft
 import me.rerere.rikkahub.data.voice.hasChatVoiceReplyTool
 import me.rerere.rikkahub.data.voice.hasChatVoiceReplyToolError
@@ -88,11 +90,13 @@ import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.AssistantAffectScope
 import me.rerere.rikkahub.data.model.MessageNode
+import me.rerere.rikkahub.data.model.hasScriptedLorebookHtml
 import me.rerere.rikkahub.data.model.memoryScope
 import me.rerere.rikkahub.data.model.replaceRegexes
 import me.rerere.rikkahub.data.voice.withoutVoiceCallAudioTagsForChatDisplay
 import me.rerere.rikkahub.ui.components.richtext.MarkdownBlock
 import me.rerere.rikkahub.ui.components.richtext.LocalElevenLabsAudioTagAnnotations
+import me.rerere.rikkahub.ui.components.richtext.LocalMarkdownSearchTarget
 import me.rerere.rikkahub.ui.components.richtext.ZoomableAsyncImage
 import me.rerere.rikkahub.ui.components.richtext.buildMarkdownPreviewHtml
 import me.rerere.rikkahub.ui.components.ui.ChainOfThought
@@ -103,6 +107,8 @@ import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.context.LocalTTSState
 import me.rerere.rikkahub.ui.hooks.rememberChatTtsPlayback
 import me.rerere.rikkahub.ui.theme.LocalChatFontFamily
+import me.rerere.rikkahub.ui.theme.LocalLiquidGlass
+import me.rerere.rikkahub.ui.theme.liquidGlassChrome
 import me.rerere.rikkahub.ui.theme.rememberChatFontFamily
 import me.rerere.rikkahub.ui.theme.extendColors
 import me.rerere.rikkahub.utils.toChatTtsText
@@ -149,10 +155,13 @@ fun ChatMessage(
     val voiceCallRecord = message.voiceCallRecord()
     if (voiceCallRecord != null) {
         if (voiceCallRecord.cardAnchor) {
+            val liquidGlass = LocalLiquidGlass.current.enabled
+            val shape = RoundedCornerShape(14.dp)
             Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                modifier = modifier.combinedClickable(
+                shape = shape,
+                color = if (liquidGlass) Color.Transparent else MaterialTheme.colorScheme.surfaceContainerHigh,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                modifier = modifier.then(if (liquidGlass) Modifier.liquidGlassChrome(shape) else Modifier).combinedClickable(
                     onClick = { onOpenVoiceCallRecord?.invoke(voiceCallRecord.callId) },
                     onLongClick = onDelete,
                 ),
@@ -164,7 +173,7 @@ fun ChatMessage(
                 ) {
                     Icon(HugeIcons.Voice, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text("通话记录", style = MaterialTheme.typography.labelLarge)
-                    Text(formatVoiceCallDuration(voiceCallRecord.durationSeconds), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(formatVoiceCallDuration(voiceCallRecord.durationSeconds), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
                 }
             }
         }
@@ -180,6 +189,7 @@ fun ChatMessage(
         fontFamily = chatFontFamily
     )
     var showActionsSheet by remember { mutableStateOf(false) }
+    var showVoiceReplyEditor by remember(message.id) { mutableStateOf(false) }
     var showSelectCopySheet by remember { mutableStateOf(false) }
     val navController = LocalNavController.current
     val context = LocalContext.current
@@ -325,8 +335,9 @@ fun ChatMessage(
     if (showActionsSheet) {
         ChatMessageActionsSheet(
             message = message,
-            onEdit = onEdit,
+            onEdit = { if (chatVoiceReply != null) showVoiceReplyEditor = true else onEdit() },
             onDelete = onDelete,
+            deleteLabel = if (chatVoiceReply != null) stringResource(R.string.chat_voice_reply_delete_entire_reply) else stringResource(R.string.delete),
             onShare = onShare,
             onFork = onFork,
             model = model,
@@ -352,6 +363,18 @@ fun ChatMessage(
             onDismissRequest = {
                 showActionsSheet = false
             }
+        )
+    }
+
+    if (showVoiceReplyEditor && chatVoiceReply != null) {
+        ChatVoiceReplyEditor(
+            reply = chatVoiceReply,
+            onSave = { segments ->
+                val edited = message.withEditedChatVoiceReplySegments(segments).copy(id = kotlin.uuid.Uuid.random())
+                onUpdate(node.copy(messages = node.messages + edited, selectIndex = node.messages.size))
+                showVoiceReplyEditor = false
+            },
+            onDismiss = { showVoiceReplyEditor = false },
         )
     }
 
@@ -385,6 +408,7 @@ internal fun MessagePartsBlock(
     // 消息输出HapticFeedback
     val hapticFeedback = LocalHapticFeedback.current
     val settings = LocalSettings.current
+    val liquidGlass = LocalLiquidGlass.current.enabled
     val partsState by rememberUpdatedState(parts)
 
     val handleClickCitation: (String) -> Unit = remember {
@@ -424,32 +448,34 @@ internal fun MessagePartsBlock(
             is MessagePartBlock.ThinkingBlock -> {
                 if (block.steps.isNotEmpty()) {
                     val isReasoningOnlyBlock = block.steps.fastAll { it is ThinkingStep.ReasoningStep }
-                    ChainOfThought(
-                        modifier = Modifier.animateContentSize(),
-                        steps = block.steps,
-                        collapsedAdaptiveWidth = isReasoningOnlyBlock,
-                    ) { step ->
-                        when (step) {
-                            is ThinkingStep.ReasoningStep -> {
-                                key(step.reasoning.createdAt) {
-                                    ChatMessageReasoningStep(
-                                        reasoning = step.reasoning,
-                                        model = model,
-                                        assistant = assistant,
-                                        collapsedAdaptiveWidth = isReasoningOnlyBlock,
-                                    )
+                    CompositionLocalProvider(LocalMarkdownSearchTarget provides null) {
+                        ChainOfThought(
+                            modifier = Modifier.animateContentSize(),
+                            steps = block.steps,
+                            collapsedAdaptiveWidth = isReasoningOnlyBlock,
+                        ) { step ->
+                            when (step) {
+                                is ThinkingStep.ReasoningStep -> {
+                                    key(step.reasoning.createdAt) {
+                                        ChatMessageReasoningStep(
+                                            reasoning = step.reasoning,
+                                            model = model,
+                                            assistant = assistant,
+                                            collapsedAdaptiveWidth = isReasoningOnlyBlock,
+                                        )
+                                    }
                                 }
-                            }
 
-                            is ThinkingStep.ToolStep -> {
-                                key(step.tool.toolCallId.ifBlank { step.hashCode().toString() }) {
-                                    ChatMessageToolStep(
-                                        tool = step.tool,
-                                        memoryScope = assistant?.memoryScope,
-                                        loading = loading && !step.tool.isExecuted,
-                                        onToolApproval = onToolApproval,
-                                        onToolAnswer = onToolAnswer,
-                                    )
+                                is ThinkingStep.ToolStep -> {
+                                    key(step.tool.toolCallId.ifBlank { step.hashCode().toString() }) {
+                                        ChatMessageToolStep(
+                                            tool = step.tool,
+                                            memoryScope = assistant?.memoryScope,
+                                            loading = loading && !step.tool.isExecuted,
+                                            onToolApproval = onToolApproval,
+                                            onToolAnswer = onToolAnswer,
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -475,10 +501,10 @@ internal fun MessagePartsBlock(
                                 )
                             } else {
                                 val userTextContent = @Composable {
-                                    Surface(
+                                    MessageBubbleSurface(
                                         modifier = Modifier.animateContentSize(),
-                                        shape = RoundedCornerShape(16.dp),
-                                        color = MaterialTheme.colorScheme.primaryContainer,
+                                        shape = ChatMessageBubbleShape,
+                                        containerColor = MaterialTheme.colorScheme.primaryContainer,
                                         onClick = { onUserMessageClick?.invoke() },
                                     ) {
                                         Column(modifier = Modifier.padding(8.dp)) {
@@ -502,7 +528,9 @@ internal fun MessagePartsBlock(
                                 assistant = assistant,
                                 scope = AssistantAffectScope.ASSISTANT,
                                 visual = true,
+                                lorebooks = settings.lorebooks,
                             )
+                            val renderScriptedHtml = assistant?.hasScriptedLorebookHtml(settings.lorebooks) == true
                             val momentsChatStyle = assistant?.momentsChatStyle == true
                             if (momentsChatStyle) {
                                 AssistantTextContent(
@@ -514,12 +542,13 @@ internal fun MessagePartsBlock(
                                     paragraphBubbleMode = true,
                                     modifier = Modifier.animateContentSize(),
                                     onTtsSpeak = onTtsSpeak,
+                                    renderScriptedHtml = renderScriptedHtml,
                                 )
                             } else if (settings.displaySetting.showAssistantBubble) {
-                                Surface(
+                                MessageBubbleSurface(
                                     modifier = Modifier.animateContentSize(),
-                                    shape = RoundedCornerShape(16.dp),
-                                    color = assistantMessageBubbleColor(),
+                                    shape = ChatMessageBubbleShape,
+                                    containerColor = assistantMessageBubbleColor(),
                                 ) {
                                     Column(modifier = Modifier.padding(8.dp)) {
                                         AssistantTextContent(
@@ -530,6 +559,7 @@ internal fun MessagePartsBlock(
                                             showParagraphTtsButtons = settings.displaySetting.showParagraphTtsButtons,
                                             paragraphBubbleMode = false,
                                             onTtsSpeak = onTtsSpeak,
+                                            renderScriptedHtml = renderScriptedHtml,
                                         )
                                     }
                                 }
@@ -544,6 +574,7 @@ internal fun MessagePartsBlock(
                                     modifier = Modifier
                                         .animateContentSize(),
                                     onTtsSpeak = onTtsSpeak,
+                                    renderScriptedHtml = renderScriptedHtml,
                                 )
                             }
                         }
@@ -758,6 +789,7 @@ private fun UserTextParagraphs(
     selectionEnabled: Boolean,
     onClick: (() -> Unit)?,
 ) {
+    val liquidGlass = LocalLiquidGlass.current.enabled
     val segments = remember(content) {
         content.splitAssistantTextSegments()
     }
@@ -776,10 +808,13 @@ private fun UserTextParagraphs(
                 }
 
                 is AssistantTextSegment.Paragraph -> {
+                    val shape = RoundedCornerShape(16.dp)
                     Surface(
-                        modifier = Modifier.animateContentSize(),
-                        shape = RoundedCornerShape(16.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer,
+                        modifier = Modifier.animateContentSize()
+                            .then(if (liquidGlass) Modifier.liquidGlassChrome(shape) else Modifier),
+                        shape = shape,
+                        color = if (liquidGlass) Color.Transparent else MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
                         onClick = { onClick?.invoke() },
                     ) {
                         val paragraphContent: @Composable () -> Unit = {
@@ -825,6 +860,7 @@ private fun AssistantMarkdownBlock(
     content: String,
     onClickCitation: (String) -> Unit,
     showElevenLabsAudioTagAnnotations: Boolean,
+    renderScriptedHtml: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     CompositionLocalProvider(
@@ -834,6 +870,7 @@ private fun AssistantMarkdownBlock(
             content = content,
             onClickCitation = onClickCitation,
             modifier = modifier,
+            renderScriptedHtml = renderScriptedHtml,
         )
     }
 }
@@ -848,6 +885,7 @@ internal fun AssistantTextContent(
     paragraphBubbleMode: Boolean,
     modifier: Modifier = Modifier,
     onTtsSpeak: ((String) -> Unit)? = null,
+    renderScriptedHtml: Boolean = false,
 ) {
     if (paragraphBubbleMode) {
         AssistantTextParagraphs(
@@ -859,6 +897,7 @@ internal fun AssistantTextContent(
             showParagraphTtsButtons = showParagraphTtsButtons,
             paragraphBubbleMode = true,
             onTtsSpeak = onTtsSpeak,
+            renderScriptedHtml = renderScriptedHtml,
         )
     } else if (showParagraphTtsButtons) {
         AssistantTextParagraphs(
@@ -870,6 +909,7 @@ internal fun AssistantTextContent(
             showParagraphTtsButtons = true,
             paragraphBubbleMode = false,
             onTtsSpeak = onTtsSpeak,
+            renderScriptedHtml = renderScriptedHtml,
         )
     } else if (selectionEnabled) {
         SelectionContainer(modifier = modifier) {
@@ -877,6 +917,7 @@ internal fun AssistantTextContent(
                 content = content,
                 onClickCitation = onClickCitation,
                 showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
+                renderScriptedHtml = renderScriptedHtml,
             )
         }
     } else {
@@ -885,6 +926,7 @@ internal fun AssistantTextContent(
             onClickCitation = onClickCitation,
             modifier = modifier,
             showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
+            renderScriptedHtml = renderScriptedHtml,
         )
     }
 }
@@ -899,11 +941,13 @@ private fun AssistantTextParagraphs(
     showParagraphTtsButtons: Boolean,
     paragraphBubbleMode: Boolean,
     onTtsSpeak: ((String) -> Unit)? = null,
+    renderScriptedHtml: Boolean = false,
 ) {
     val tts = LocalTTSState.current
     val isAvailable by tts.isAvailable.collectAsState()
     val displaySetting = LocalSettings.current.displaySetting
     val paragraphBubbleColor = assistantMessageBubbleColor()
+    val liquidGlass = LocalLiquidGlass.current.enabled
     val segments = remember(content) {
         content.splitAssistantTextSegments()
     }
@@ -953,6 +997,7 @@ private fun AssistantTextParagraphs(
                                             content = segment.text,
                                             onClickCitation = onClickCitation,
                                             showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
+                                            renderScriptedHtml = renderScriptedHtml,
                                         )
                                     }
                                 } else {
@@ -960,6 +1005,7 @@ private fun AssistantTextParagraphs(
                                         content = segment.text,
                                         onClickCitation = onClickCitation,
                                         showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
+                                        renderScriptedHtml = renderScriptedHtml,
                                     )
                                 }
                             }
@@ -984,11 +1030,12 @@ private fun AssistantTextParagraphs(
                         }
                     }
                     if (paragraphBubbleMode) {
+                        val shape = RoundedCornerShape(8.dp)
                         Surface(
-                            modifier = Modifier
-                                .animateContentSize(),
-                            shape = RoundedCornerShape(8.dp),
-                            color = paragraphBubbleColor,
+                            modifier = Modifier.animateContentSize()
+                                .then(if (liquidGlass) Modifier.liquidGlassChrome(shape) else Modifier),
+                            shape = shape,
+                            color = if (liquidGlass) Color.Transparent else paragraphBubbleColor,
                             contentColor = MaterialTheme.colorScheme.onSurface,
                         ) {
                             paragraphContent(
@@ -1009,6 +1056,7 @@ private fun AssistantTextParagraphs(
                             content = segment.text,
                             onClickCitation = onClickCitation,
                             showElevenLabsAudioTagAnnotations = showElevenLabsAudioTagAnnotations,
+                            renderScriptedHtml = renderScriptedHtml,
                         )
                     }
                     if (selectionEnabled) {

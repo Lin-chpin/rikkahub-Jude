@@ -7,6 +7,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -96,19 +97,18 @@ class ConversationSession(
     }
 
     fun setJob(job: Job?) {
-        _generationJob.value?.cancel()
-        _generationJob.value = job
+        _generationJob.getAndUpdate { job }?.cancel()
         job?.invokeOnCompletion {
             // A cancelled previous job can complete after a replacement job
             // has already been installed. Only the current job may clear the
             // session's generation state.
-            if (_generationJob.value === job) {
-                _generationJob.value = null
+            if (_generationJob.compareAndSet(job, null)) {
                 if (refCount.get() <= 0) {
                     scheduleIdleCheck()
                 }
             }
         }
+        job?.start()
     }
 
     fun getJob(): Job? = _generationJob.value

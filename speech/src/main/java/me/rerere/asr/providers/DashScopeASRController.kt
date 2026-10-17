@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import me.rerere.asr.ASRUtterance
 import me.rerere.asr.ASRController
 import me.rerere.asr.ASRProviderSetting
 import me.rerere.asr.ASRState
@@ -55,10 +56,14 @@ class DashScopeASRController(
     private var recorderJob: Job? = null
     private var audioRecord: AudioRecord? = null
     private var onTranscriptChange: ((String) -> Unit)? = null
+    private var onUtterance: ((ASRUtterance) -> Unit)? = null
     private val completedTranscripts = Collections.synchronizedList(mutableListOf<String>())
     private val partialTranscripts = ConcurrentHashMap<String, String>()
 
-    override fun start(onTranscriptChange: (String) -> Unit) {
+    override fun start(
+        onTranscriptChange: (String) -> Unit,
+        onUtterance: ((ASRUtterance) -> Unit)?,
+    ) {
         if (state.value.isRecording) return
         if (ContextCompat.checkSelfPermission(
                 context,
@@ -69,7 +74,9 @@ class DashScopeASRController(
             return
         }
 
+        webSocket?.cancel()
         this.onTranscriptChange = onTranscriptChange
+        this.onUtterance = onUtterance
         completedTranscripts.clear()
         partialTranscripts.clear()
         _state.update {
@@ -87,28 +94,40 @@ class DashScopeASRController(
 
         webSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                webSocket.send(provider.sessionUpdateEvent().toString())
-                _state.update { it.copy(status = ASRStatus.Listening, errorMessage = null) }
-                startRecorder(webSocket)
+                scope.launch {
+                    if (this@DashScopeASRController.webSocket !== webSocket) return@launch
+                    webSocket.send(provider.sessionUpdateEvent().toString())
+                    _state.update { it.copy(status = ASRStatus.Listening, errorMessage = null) }
+                    startRecorder(webSocket)
+                }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                handleServerEvent(text)
+                scope.launch {
+                    if (this@DashScopeASRController.webSocket !== webSocket) return@launch
+                    handleServerEvent(text)
+                }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "DashScope ASR websocket failed", t)
-                releaseRecorder()
-                setError(t.message ?: "ASR websocket failed")
+                scope.launch {
+                    if (this@DashScopeASRController.webSocket !== webSocket) return@launch
+                    Log.e(TAG, "DashScope ASR websocket failed", t)
+                    releaseRecorder()
+                    setError(t.message ?: "ASR websocket failed")
+                }
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                releaseRecorder()
-                _state.update {
-                    it.copy(
-                        status = ASRStatus.Idle,
-                        errorMessage = null
-                    )
+                scope.launch {
+                    if (this@DashScopeASRController.webSocket !== webSocket) return@launch
+                    releaseRecorder()
+                    _state.update {
+                        it.copy(
+                            status = ASRStatus.Idle,
+                            errorMessage = null
+                        )
+                    }
                 }
             }
         })
@@ -134,7 +153,13 @@ class DashScopeASRController(
     }
 
     override fun dispose() {
-        stop()
+        onUtterance = null
+        onTranscriptChange = null
+        val socket = webSocket
+        webSocket = null
+        recorderJob?.cancel()
+        releaseRecorder()
+        socket?.cancel()
         scope.cancel()
     }
 
@@ -159,6 +184,7 @@ class DashScopeASRController(
                 bufferSize * 2
             )
             audioRecord = recorder
+            val echoCanceler = me.rerere.asr.enableAcousticEchoCancellation(recorder.audioSessionId)
 
             try {
                 recorder.startRecording()
@@ -183,10 +209,17 @@ class DashScopeASRController(
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Audio recording failed", e)
-                setError(e.message ?: "Audio recording failed")
+                if (isActive) {
+                    Log.e(TAG, "Audio recording failed", e)
+                    setError(e.message ?: "Audio recording failed")
+                }
             } finally {
-                releaseRecorder()
+                echoCanceler?.release()
+                synchronized(this@DashScopeASRController) {
+                    if (audioRecord === recorder) audioRecord = null
+                }
+                runCatching { recorder.stop() }
+                runCatching { recorder.release() }
             }
         }
     }
@@ -198,11 +231,17 @@ class DashScopeASRController(
         }
 
         when (val type = event.optString("type")) {
+            "input_audio_buffer.speech_started", "input_audio_buffer.committed" -> {
+                val itemId = event.optString("item_id")
+                if (itemId.isNotEmpty()) onUtterance?.invoke(ASRUtterance(itemId, "", false))
+            }
+
             "conversation.item.input_audio_transcription.delta" -> {
                 val itemId = event.optString("item_id", "default")
                 val delta = event.optString("delta")
                 if (delta.isNotEmpty()) {
                     partialTranscripts[itemId] = (partialTranscripts[itemId] ?: "") + delta
+                    onUtterance?.invoke(ASRUtterance(itemId, partialTranscripts[itemId].orEmpty(), false))
                     publishTranscript()
                 }
             }
@@ -210,8 +249,10 @@ class DashScopeASRController(
             "conversation.item.input_audio_transcription.text" -> {
                 val itemId = event.optString("item_id", "default")
                 val text = event.optString("text")
-                if (text.isNotEmpty()) {
+                val preview = text + event.optString("stash")
+                if (preview.isNotEmpty()) {
                     partialTranscripts[itemId] = text
+                    onUtterance?.invoke(ASRUtterance(itemId, preview, false))
                     publishTranscript()
                 }
             }
@@ -220,9 +261,10 @@ class DashScopeASRController(
                 val itemId = event.optString("item_id", "default")
                 val transcript = event.optString("transcript").trim()
                 partialTranscripts.remove(itemId)
-                if (transcript.isNotEmpty()) {
+                if (transcript.isNotEmpty() && onUtterance == null) {
                     completedTranscripts.add(transcript)
                 }
+                onUtterance?.invoke(ASRUtterance(itemId, transcript, true))
                 publishTranscript()
             }
 
@@ -242,9 +284,7 @@ class DashScopeASRController(
             .filter { it.isNotBlank() }
             .joinToString(" ")
         _state.update { it.copy(transcript = transcript, errorMessage = null) }
-        scope.launch {
-            onTranscriptChange?.invoke(transcript)
-        }
+        onTranscriptChange?.invoke(transcript)
     }
 
     private fun setError(message: String) {
@@ -256,7 +296,9 @@ class DashScopeASRController(
         }
     }
 
+    @Synchronized
     private fun releaseRecorder() {
+        recorderJob?.cancel()
         recorderJob = null
         runCatching { audioRecord?.stop() }
         runCatching { audioRecord?.release() }

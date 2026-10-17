@@ -111,6 +111,7 @@ import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesNotificationPage
 import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesGeneralPage
 import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesUIPage
 import me.rerere.rikkahub.ui.pages.setting.SettingThemePage
+import me.rerere.rikkahub.ui.pages.setting.SettingLiquidGlassPage
 import me.rerere.rikkahub.ui.pages.setting.SettingDonatePage
 import me.rerere.rikkahub.ui.pages.setting.SettingFilesPage
 import me.rerere.rikkahub.ui.pages.setting.SettingMcpPage
@@ -128,6 +129,7 @@ import me.rerere.rikkahub.ui.pages.translator.TranslatorPage
 import me.rerere.rikkahub.ui.pages.webview.WebViewPage
 import me.rerere.rikkahub.ui.theme.LocalDarkMode
 import me.rerere.rikkahub.ui.theme.RikkahubTheme
+import androidx.compose.ui.graphics.Color
 import me.rerere.rikkahub.utils.CrashHandler
 import me.rerere.usagetracker.UsageTrackerPage
 import okhttp3.OkHttpClient
@@ -138,6 +140,7 @@ import kotlin.uuid.Uuid
 private const val TAG = "RouteActivity"
 
 const val EXTRA_OPEN_USAGE_TRACKER = "openUsageTracker"
+const val EXTRA_OPEN_MODEL_SETTINGS = "openModelSettings"
 
 class RouteActivity : ComponentActivity() {
     private val highlighter by inject<Highlighter>()
@@ -230,6 +233,10 @@ class RouteActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_OPEN_MODEL_SETTINGS, false)) {
+            navStack?.add(Screen.SettingModels)
+            intent.removeExtra(EXTRA_OPEN_MODEL_SETTINGS)
+        }
         // Navigate to the chat screen if a conversation ID is provided
         intent.getStringExtra("conversationId")?.let { text ->
             navStack?.add(Screen.Chat(text))
@@ -272,6 +279,10 @@ class RouteActivity : ComponentActivity() {
         SideEffect { this@RouteActivity.navStack = backStack }
 
         LaunchedEffect(backStack) {
+            if (intent?.getBooleanExtra(EXTRA_OPEN_MODEL_SETTINGS, false) == true) {
+                backStack.add(Screen.SettingModels)
+                intent?.removeExtra(EXTRA_OPEN_MODEL_SETTINGS)
+            }
             if (intent?.getBooleanExtra(EXTRA_OPEN_USAGE_TRACKER, false) == true) {
                 backStack.add(Screen.UsageTracker)
                 intent?.removeExtra(EXTRA_OPEN_USAGE_TRACKER)
@@ -412,6 +423,10 @@ class RouteActivity : ComponentActivity() {
 
                             entry<Screen.SettingTheme> {
                                 SettingThemePage()
+                            }
+
+                            entry<Screen.SettingLiquidGlass> {
+                                SettingLiquidGlassPage()
                             }
 
                             entry<Screen.SettingPreferences> {
@@ -669,6 +684,9 @@ sealed interface Screen : NavKey {
 
     @Serializable
     data object SettingTheme : Screen
+
+    @Serializable
+    data object SettingLiquidGlass : Screen
 
     @Serializable
     data object SettingPreferences : Screen

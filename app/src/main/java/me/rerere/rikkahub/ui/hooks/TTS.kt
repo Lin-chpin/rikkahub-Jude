@@ -24,7 +24,7 @@ import me.rerere.tts.model.PlaybackState
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.getSelectedTTSProvider
 import me.rerere.rikkahub.utils.keepEnglishOnlyForTts
-import me.rerere.rikkahub.utils.stripMarkdown
+import me.rerere.rikkahub.utils.toChatTtsText
 import me.rerere.tts.model.TTSResponse
 import me.rerere.tts.model.AudioFormat
 import me.rerere.tts.model.CachedAudioSource
@@ -117,11 +117,21 @@ interface CustomTtsState {
     fun speakRealtimeDialogue(
         text: Flow<String>,
         onAudioReady: suspend (TTSResponse) -> Unit,
+        onAlignment: ((String) -> Unit)? = null,
     ): Long
+
+    /** Prepares a text-free connection while a live call waits for user input. */
+    fun setRealtimeDialoguePreconnectionEnabled(enabled: Boolean)
 
     /** Stops the current speech and clears the queue. */
     fun stop()
-    fun playCachedAudio(audioUri: String, format: String, sampleRate: Int? = null)
+    fun playCachedAudio(
+        audioUri: String,
+        format: String,
+        sampleRate: Int? = null,
+        startPositionMs: Long? = null,
+        endPositionMs: Long? = null,
+    )
     fun playCachedAudios(audios: List<CachedAudioSource>, flushCalled: Boolean = true): Long
 
     /** Pauses the current playback. */
@@ -189,13 +199,10 @@ private class CustomTtsStateImpl(
     ) {
         beginPlaybackSession()
         val settings = settingsStore.settingsFlow.value
-        val processed = text.stripMarkdown().let {
-            if (settings.displaySetting.ttsEnglishOnly) {
-                it.keepEnglishOnlyForTts()
-            } else {
-                it
-            }
-        }
+        val processed = text.toChatTtsText(
+            ttsOnlyReadQuoted = settings.displaySetting.ttsOnlyReadQuoted,
+            ttsEnglishOnly = settings.displaySetting.ttsEnglishOnly,
+        )
         controller.speak(
             text = processed,
             flush = flushCalled,
@@ -213,12 +220,14 @@ private class CustomTtsStateImpl(
     override fun speakRealtimeDialogue(
         text: Flow<String>,
         onAudioReady: suspend (TTSResponse) -> Unit,
+        onAlignment: ((String) -> Unit)?,
     ): Long {
         val sessionId = beginPlaybackSession()
         val englishOnly = settingsStore.settingsFlow.value.displaySetting.ttsEnglishOnly
         controller.speakRealtimeDialogue(
             text = if (englishOnly) text.map { it.keepEnglishOnlyForTts() } else text,
             onAudioReady = onAudioReady,
+            onAlignment = onAlignment,
         )
         return sessionId
     }
@@ -228,8 +237,18 @@ private class CustomTtsStateImpl(
         controller.stop()
     }
 
-    override fun playCachedAudio(audioUri: String, format: String, sampleRate: Int?) {
-        beginPlaybackSession()
+    override fun setRealtimeDialoguePreconnectionEnabled(enabled: Boolean) {
+        controller.setRealtimeDialoguePreconnectionEnabled(enabled)
+    }
+
+    override fun playCachedAudio(
+        audioUri: String,
+        format: String,
+        sampleRate: Int?,
+        startPositionMs: Long?,
+        endPositionMs: Long?,
+    ) {
+        val sessionId = beginPlaybackSession()
         Log.i(TAG, "Cached audio playback requested: uri=" + audioUri + ", format=" + format + ", sampleRate=" + sampleRate)
         scope.launch {
             val response = withContext(Dispatchers.IO) {
@@ -251,12 +270,12 @@ private class CustomTtsStateImpl(
                     Log.e(TAG, "Cached audio read failed: uri=" + audioUri, error)
                 }.getOrNull()
             }
-            if (response == null) return@launch
+            if (response == null || playbackSessionId.value != sessionId) return@launch
 
             runCatching {
                 Log.i(TAG, "Starting cached audio player")
                 // ExoPlayer is main-looper bound; only cached-file I/O runs on IO.
-                controller.playCachedAudio(response)
+                controller.playCachedAudio(response, startPositionMs, endPositionMs)
                 Log.i(TAG, "Cached audio player started")
             }.onFailure { error ->
                 Log.e(TAG, "Cached audio player start failed", error)

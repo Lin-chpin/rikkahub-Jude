@@ -35,6 +35,7 @@ object PromptInjectionTransformer : InputMessageTransformer {
             lorebooks = ctx.settings.lorebooks,
             conversationModeInjectionIds = ctx.conversationModeInjectionIds,
             conversationLorebookIds = ctx.conversationLorebookIds,
+            modelId = ctx.model.modelId,
         )
     }
 }
@@ -49,6 +50,7 @@ internal fun transformMessages(
     lorebooks: List<Lorebook>,
     conversationModeInjectionIds: Set<Uuid> = emptySet(),
     conversationLorebookIds: Set<Uuid> = emptySet(),
+    modelId: String? = null,
 ): List<UIMessage> {
     // 收集所有需要注入的内容
     val injections = collectInjections(
@@ -58,6 +60,7 @@ internal fun transformMessages(
         lorebooks = lorebooks,
         conversationModeInjectionIds = conversationModeInjectionIds,
         conversationLorebookIds = conversationLorebookIds,
+        modelId = modelId,
     )
 
     if (injections.isEmpty()) {
@@ -83,6 +86,7 @@ internal fun collectInjections(
     lorebooks: List<Lorebook>,
     conversationModeInjectionIds: Set<Uuid> = emptySet(),
     conversationLorebookIds: Set<Uuid> = emptySet(),
+    modelId: String? = null,
 ): List<PromptInjection> {
     val injections = mutableListOf<PromptInjection>()
     val effectiveModeInjectionIds = if (assistant.allowConversationPromptInjection) {
@@ -113,7 +117,7 @@ internal fun collectInjections(
             lorebook.entries
                 .filter { entry ->
                     val context = extractContextForMatching(nonSystemMessages, entry.scanDepth)
-                    entry.isTriggered(context)
+                    entry.isTriggered(context, modelId)
                 }
                 .forEach { injections.add(it) }
         }
@@ -133,13 +137,15 @@ internal fun applyInjections(
 
     // 找到系统消息的索引（通常是第一条）
     val systemIndex = result.indexOfFirst { it.role == MessageRole.SYSTEM }
+    val beforeInjections = byPosition[InjectionPosition.BEFORE_SYSTEM_PROMPT].orEmpty()
+    val afterInjections = byPosition[InjectionPosition.AFTER_SYSTEM_PROMPT].orEmpty()
 
     // 处理 BEFORE_SYSTEM_PROMPT 和 AFTER_SYSTEM_PROMPT
     if (systemIndex >= 0) {
-        val beforeContent = byPosition[InjectionPosition.BEFORE_SYSTEM_PROMPT]
-            ?.joinToString("\n") { it.content } ?: ""
-        val afterContent = byPosition[InjectionPosition.AFTER_SYSTEM_PROMPT]
-            ?.joinToString("\n") { it.content } ?: ""
+        val beforeContent = beforeInjections.filterNot { it.preservesRole() }
+            .joinToString("\n") { it.content }
+        val afterContent = afterInjections.filterNot { it.preservesRole() }
+            .joinToString("\n") { it.content }
 
         if (beforeContent.isNotEmpty() || afterContent.isNotEmpty()) {
             val systemMessage = result[systemIndex]
@@ -153,10 +159,10 @@ internal fun applyInjections(
         }
     } else {
         // 没有系统消息时，创建一个新的系统消息
-        val beforeContent = byPosition[InjectionPosition.BEFORE_SYSTEM_PROMPT]
-            ?.joinToString("\n") { it.content } ?: ""
-        val afterContent = byPosition[InjectionPosition.AFTER_SYSTEM_PROMPT]
-            ?.joinToString("\n") { it.content } ?: ""
+        val beforeContent = beforeInjections.filterNot { it.preservesRole() }
+            .joinToString("\n") { it.content }
+        val afterContent = afterInjections.filterNot { it.preservesRole() }
+            .joinToString("\n") { it.content }
 
         val combinedContent = buildString {
             if (beforeContent.isNotEmpty()) {
@@ -171,6 +177,20 @@ internal fun applyInjections(
         if (combinedContent.isNotEmpty()) {
             result.add(0, UIMessage.system(combinedContent))
         }
+    }
+
+    val afterRoleInjections = afterInjections.filter { it.preservesRole() }
+    if (afterRoleInjections.isNotEmpty()) {
+        val systemPosition = result.indexOfFirst { it.role == MessageRole.SYSTEM }
+        val insertIndex = if (systemPosition >= 0) systemPosition + 1 else 0
+        result.addAll(insertIndex, createMergedInjectionMessages(afterRoleInjections))
+    }
+
+    val beforeRoleInjections = beforeInjections.filter { it.preservesRole() }
+    if (beforeRoleInjections.isNotEmpty()) {
+        val insertIndex = result.indexOfFirst { it.role == MessageRole.SYSTEM }
+            .takeIf { it >= 0 } ?: 0
+        result.addAll(insertIndex, createMergedInjectionMessages(beforeRoleInjections))
     }
 
     // 处理 TOP_OF_CHAT：在第一条用户消息之前插入
@@ -201,18 +221,20 @@ internal fun applyInjections(
     // 按 injectDepth 分组，相同深度的合并，按深度从大到小处理（避免索引变化问题）
     val atDepthInjections = byPosition[InjectionPosition.AT_DEPTH]
     if (!atDepthInjections.isNullOrEmpty()) {
-        val byDepth = atDepthInjections.groupBy { it.injectDepth }
-        byDepth.keys.sortedDescending().forEach { depth ->
-            val injections = byDepth[depth] ?: return@forEach
-            // 计算插入位置：result.size - depth，但要确保在有效范围内
-            // depth=1 表示在最后一条消息之前，depth=2 表示在倒数第二条之前...
-            var insertIndex = (result.size - depth.coerceAtLeast(1)).coerceIn(0, result.size)
-            insertIndex = findSafeInsertIndex(result, insertIndex)
-            createMergedInjectionMessages(injections).forEach { message ->
-                result.add(insertIndex, message)
-                insertIndex++
+        val byDepth = atDepthInjections.groupBy { it.injectDepth to it.preservesRole() }
+        byDepth.keys
+            .sortedWith(compareByDescending<Pair<Int, Boolean>> { it.first }.thenBy { it.second })
+            .forEach { (depth, preservesRole) ->
+                val injections = byDepth[depth to preservesRole] ?: return@forEach
+                // Existing entries clamp depth to 1; SillyTavern depth 0 means after the latest message.
+                val effectiveDepth = if (preservesRole) depth.coerceAtLeast(0) else depth.coerceAtLeast(1)
+                var insertIndex = (result.size - effectiveDepth).coerceIn(0, result.size)
+                insertIndex = findSafeInsertIndex(result, insertIndex)
+                createMergedInjectionMessages(injections).forEach { message ->
+                    result.add(insertIndex, message)
+                    insertIndex++
+                }
             }
-        }
     }
 
     return result
@@ -288,16 +310,43 @@ private fun String.toSystemPromptPart(section: String) = UIMessagePart.Text(
  * 按 role 分组后合并内容，返回合并后的消息列表
  */
 private fun createMergedInjectionMessages(injections: List<PromptInjection>): List<UIMessage> {
-    return injections
-        .groupBy { it.role }
-        .map { (role, grouped) ->
-            val mergedContent = grouped.joinToString("\n") { it.content }
-            when (role) {
-                MessageRole.ASSISTANT -> UIMessage.assistant(mergedContent)
-                else -> UIMessage.user(mergedContent)
+    if (injections.none { it.preservesRole() }) {
+        return injections
+            .groupBy { it.role }
+            .map { (role, grouped) ->
+                val content = grouped.joinToString("\n") { it.content }
+                if (role == MessageRole.ASSISTANT) UIMessage.assistant(content) else UIMessage.user(content)
             }
+    }
+
+    val groups = mutableListOf<Pair<MessageRole, MutableList<String>>>()
+    injections.forEach { injection ->
+        val role = if (injection.preservesRole()) {
+            injection.role
+        } else if (injection.role == MessageRole.ASSISTANT) {
+            MessageRole.ASSISTANT
+        } else {
+            MessageRole.USER
         }
+        val current = groups.lastOrNull()?.takeIf { it.first == role }
+        if (current != null) {
+            current.second += injection.content
+        } else {
+            groups += role to mutableListOf(injection.content)
+        }
+    }
+    return groups.map { (role, content) ->
+        val text = content.joinToString("\n")
+        when (role) {
+            MessageRole.SYSTEM -> UIMessage.system(text)
+            MessageRole.ASSISTANT -> UIMessage.assistant(text)
+            else -> UIMessage.user(text)
+        }
+    }
 }
+
+private fun PromptInjection.preservesRole(): Boolean =
+    this is PromptInjection.RegexInjection && preserveRole
 
 /**
  * 查找安全的插入位置，避免注入到 USER → ASSISTANT(含Tool) 之间

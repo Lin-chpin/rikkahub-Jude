@@ -2,6 +2,10 @@ package me.rerere.tts.controller
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,10 +26,12 @@ import kotlinx.coroutines.launch
 import me.rerere.tts.model.PlaybackState
 import me.rerere.tts.model.PlaybackStatus
 import me.rerere.tts.model.AudioFormat
+import me.rerere.tts.model.TTSRequest
 import me.rerere.tts.model.TTSResponse
 import me.rerere.tts.provider.TTSManager
 import me.rerere.tts.provider.TTSProviderSetting
-import me.rerere.tts.provider.isElevenLabsV4Turbo
+import me.rerere.tts.provider.forRealtimeCall
+import me.rerere.tts.provider.isElevenLabsV4Family
 import java.util.UUID
 import java.io.ByteArrayOutputStream
 
@@ -51,7 +57,10 @@ class TtsController(
     // Provider & 作业
     private var currentProvider: TTSProviderSetting? = null
     private var workerJob: Job? = null
+    private var captureRealtimeStop: (() -> Unit)? = null
     private var isPaused = false
+    private var realtimePreconnectionEnabled = false
+    private var realtimePreconnection: RealtimeDialoguePreconnection? = null
 
     // 队列与缓存（基于稳定 ID）
     private val queue: java.util.concurrent.ConcurrentLinkedQueue<TtsChunk> = java.util.concurrent.ConcurrentLinkedQueue()
@@ -106,10 +115,46 @@ class TtsController(
 
     /** 选择/取消选择 Provider */
     fun setProvider(provider: TTSProviderSetting?) {
+        if (currentProvider != provider) releaseRealtimePreconnection("provider_changed")
         currentProvider = provider
+        audio.setVoiceCommunication(realtimePreconnectionEnabled && (provider as? TTSProviderSetting.ElevenLabs)?.fullDuplex == true)
         _isAvailable.update { provider != null }
         _isProviderReady.update { true }
         if (provider == null) stop()
+        else prepareRealtimePreconnection()
+    }
+
+    /** Enabled only for a connected call, never for ordinary chat or call history. */
+    fun setRealtimeDialoguePreconnectionEnabled(enabled: Boolean) {
+        realtimePreconnectionEnabled = enabled
+        audio.setVoiceCommunication(enabled && (currentProvider as? TTSProviderSetting.ElevenLabs)?.fullDuplex == true)
+        if (enabled) prepareRealtimePreconnection()
+        else releaseRealtimePreconnection("call_closed")
+    }
+
+    private fun prepareRealtimePreconnection() {
+        if (!realtimePreconnectionEnabled) return
+        val provider = (currentProvider as? TTSProviderSetting.ElevenLabs)?.forRealtimeCall() ?: return
+        if (!provider.isElevenLabsV4Family() || provider.apiKey.isBlank() || provider.voiceId.isBlank()) return
+        if (realtimePreconnection?.matches(provider) == true) return
+        releaseRealtimePreconnection("stale_or_failed")
+        Log.i(TAG, "dialogue_preconnection_started model=${provider.model}")
+        realtimePreconnection = RealtimeDialoguePreconnection(
+            scope = scope,
+            provider = provider,
+            generateAudio = { text -> ttsManager.generateRealtimeDialogue(provider, text) },
+            onFailure = { error ->
+                Log.w(TAG, "dialogue_preconnection_failed type=${error.javaClass.simpleName}")
+            },
+        )
+    }
+
+    private fun releaseRealtimePreconnection(reason: String) {
+        realtimePreconnection?.let {
+            it.close()
+            Log.i(TAG, "dialogue_preconnection_released reason=$reason")
+        }
+        realtimePreconnection = null
     }
 
     /**
@@ -184,56 +229,79 @@ class TtsController(
     fun speakRealtimeDialogue(
         text: Flow<String>,
         onAudioReady: suspend (TTSResponse) -> Unit,
+        onAlignment: ((String) -> Unit)? = null,
     ) {
-        val provider = currentProvider as? TTSProviderSetting.ElevenLabs
-        if (provider?.isElevenLabsV4Turbo() != true) {
-            _error.update { "Realtime dialogue requires ElevenLabs v4 Turbo" }
+        val provider = (currentProvider as? TTSProviderSetting.ElevenLabs)?.forRealtimeCall()
+        if (provider?.isElevenLabsV4Family() != true) {
+            _error.update { "Realtime dialogue requires ElevenLabs v4" }
             _playbackState.update { it.copy(status = PlaybackStatus.Error, errorMessage = _error.value) }
             return
         }
 
+        val prepared = realtimePreconnection?.takeIf { it.matches(provider) }
+        if (prepared == null) releaseRealtimePreconnection("unavailable_at_reply")
+        realtimePreconnection = null
+        Log.i(TAG, "dialogue_reply_connection reused=${prepared != null} model=${provider.model}")
         internalReset()
         _playbackState.update { it.copy(status = PlaybackStatus.Buffering) }
-        workerJob = scope.launch {
+        val capture = RealtimeDialogueCapture()
+        var interruptedAtMs: Long? = null
+        captureRealtimeStop = { interruptedAtMs = audio.positionMs }
+        workerJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             _isSpeaking.update { true }
-            val captured = ByteArrayOutputStream()
-            var format = AudioFormat.MP3
-            var sampleRate: Int? = 44_100
             try {
-                val audioFlow = ttsManager.generateRealtimeDialogue(provider, text).onEach { chunk ->
-                    format = chunk.format
-                    sampleRate = chunk.sampleRate ?: sampleRate
-                    captured.write(chunk.data)
+                var claimedConnection = prepared
+                val audioFlow = recoverRealtimeDialogue(
+                    text = text,
+                    connect = { input ->
+                        val connection = claimedConnection
+                        claimedConnection = null
+                        connection?.audioFor(input) ?: ttsManager.generateRealtimeDialogue(provider, input)
+                    },
+                    fallback = if (provider.fullDuplex) { script ->
+                        Log.w(TAG, "Dialogue unavailable before audio; using existing v4 HTTP provider")
+                        ttsManager.generateStreamingSpeech(
+                            provider.copy(model = "eleven_v4", fullDuplex = false),
+                            TTSRequest(text = script),
+                        )
+                    } else null,
+                ).onEach { chunk ->
+                    capture.append(chunk)?.let { onAlignment?.invoke(it) }
                 }
                 audio.play(audioFlow)
-                onAudioReady(
-                    TTSResponse(
-                        audioData = captured.toByteArray(),
-                        format = format,
-                        sampleRate = sampleRate,
-                    ),
-                )
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
+                interruptedAtMs = audio.positionMs
                 Log.e(TAG, "Realtime dialogue playback error", error)
                 _error.update { error.message ?: "Realtime dialogue playback error" }
                 _playbackState.update {
                     it.copy(status = PlaybackStatus.Error, errorMessage = _error.value)
                 }
             } finally {
+                // Saving an interrupted prefix never resumes playback or mutates the next worker.
+                runCatching {
+                    withContext(NonCancellable) {
+                        withTimeout(15_000) { onAudioReady(capture.snapshot(interruptedAtMs)) }
+                    }
+                }.onFailure { Log.w(TAG, "Dialogue audio capture could not be saved", it) }
                 if (isActive) {
+                    captureRealtimeStop = null
                     _isSpeaking.update { false }
                     if (_playbackState.value.status != PlaybackStatus.Error) {
                         _playbackState.update { it.copy(status = PlaybackStatus.Ended) }
                     }
+                    prepareRealtimePreconnection()
                 }
             }
         }
+        workerJob?.invokeOnCompletion { prepared?.close() }
     }
 
     private fun internalReset() {
         // Reset current session while keeping provider availability
+        captureRealtimeStop?.invoke()
+        captureRealtimeStop = null
         workerJob?.cancel()
         audio.stop()
         audio.clear()
@@ -260,8 +328,30 @@ class TtsController(
         _playbackState.update { it.copy(status = PlaybackStatus.Paused) }
     }
 
-    fun playCachedAudio(response: TTSResponse) {
-        playCachedAudioSequence(listOf(response), flush = true)
+    fun playCachedAudio(
+        response: TTSResponse,
+        startPositionMs: Long? = null,
+        endPositionMs: Long? = null,
+    ) {
+        if (startPositionMs == null && endPositionMs == null) {
+            playCachedAudioSequence(listOf(response), flush = true)
+            return
+        }
+        stop()
+        workerJob = scope.launch {
+            _isSpeaking.update { true }
+            try {
+                audio.play(response, startPositionMs, endPositionMs)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Log.e(TAG, "Cached audio playback error", error)
+                _error.update { error.message ?: "Audio playback error" }
+                _playbackState.update { it.copy(status = PlaybackStatus.Error, errorMessage = _error.value) }
+            } finally {
+                _isSpeaking.update { false }
+            }
+        }
     }
 
     fun playCachedAudioSequence(responses: List<TTSResponse>, flush: Boolean = true) {
@@ -314,6 +404,8 @@ class TtsController(
 
     /** 停止并清空状态 */
     fun stop() {
+        captureRealtimeStop?.invoke()
+        captureRealtimeStop = null
         workerJob?.cancel()
         audio.stop()
         audio.clear()
@@ -330,10 +422,13 @@ class TtsController(
         _currentChunk.update { 0 }
         _totalChunks.update { 0 }
         _playbackState.update { PlaybackState(status = PlaybackStatus.Idle) }
+        // Stopping a reply for user input keeps the next, text-free connection ready.
+        prepareRealtimePreconnection()
     }
 
     /** 释放资源 */
     fun dispose() {
+        setRealtimeDialoguePreconnectionEnabled(false)
         stop()
         _isProviderReady.update { false }
         scope.cancel()
@@ -415,8 +510,8 @@ class TtsController(
                     processedCount++
                 }
             } finally {
-                _isSpeaking.update { false }
-                if (queue.isEmpty()) {
+                if (isActive) _isSpeaking.update { false }
+                if (isActive && queue.isEmpty()) {
                     _playbackState.update { it.copy(status = PlaybackStatus.Ended) }
                 }
             }

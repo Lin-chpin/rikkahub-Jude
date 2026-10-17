@@ -166,6 +166,15 @@
   <string name="moments_refresh_vision_model_required">需要识图模型 %1$d 条。</string>
   <string name="assistant_page_strict">Strict</string>
   <string name="assistant_page_system_prompt">System Prompt</string>
+  <string name="assistant_prompt_import_file">Import image / Word file</string>
+  <string name="assistant_prompt_import_note">Word text is extracted locally. Images use the configured OCR model and may incur API usage.</string>
+  <string name="assistant_prompt_importing">Importing…</string>
+  <string name="assistant_prompt_recovery_message">This prompt contains %1$d characters and is too large or contains non-text control characters. The full text is hidden to keep this page responsive. Your saved text is preserved; you can export it before clearing.</string>
+  <string name="assistant_prompt_recovery_export">Export original text</string>
+  <string name="assistant_prompt_recovery_export_success">Original prompt exported</string>
+  <string name="assistant_prompt_recovery_export_failed">Failed to export the original prompt</string>
+  <string name="assistant_prompt_recovery_clear">Clear assistant system prompt</string>
+  <string name="assistant_prompt_recovery_clear_confirm">Clear this assistant system prompt? This cannot be undone. Conversation prompts and other assistant settings are preserved.</string>
   <string name="assistant_page_tab_basic">Basic Settings</string>
   <string name="assistant_page_tab_extensions">Extensions</string>
   <string name="assistant_page_tab_local_tools">Local Tools</string>
@@ -728,7 +737,7 @@
   <string name="setting_display_page_custom_font_title">Custom Font</string>
   <string name="setting_display_page_enable_auto_scroll_desc">Automatically scroll to the bottom when AI is generating content</string>
   <string name="setting_display_page_enable_auto_scroll_title">Auto Scroll</string>
-  <string name="setting_display_page_enable_blur_effect_desc">Enable blur effect on chat input bar</string>
+  <string name="setting_display_page_enable_blur_effect_desc">Blur the chat input area and components covered by Liquid Glass</string>
   <string name="setting_display_page_enable_blur_effect_title">Enable Blur Effect</string>
   <string name="setting_display_page_enable_latex_rendering_desc">Render mathematical expressions and formulas using LaTeX syntax</string>
   <string name="setting_display_page_enable_latex_rendering_title">Enable LaTeX Rendering</string>
@@ -1244,5 +1253,22 @@
   <string name="web_search_enabled">Web search enabled</string>
   <string name="setting_theme_page_delete_theme_title">Delete Theme</string>
   <string name="setting_theme_page_delete_theme_message">Are you sure you want to delete this theme?</string>
+  <string name="chat_voice_reply_edit_title">Edit reply segments</string>
+  <string name="chat_voice_reply_text_segment">Text</string>
+  <string name="chat_voice_reply_voice_preserved">Voice message · recorded audio preserved</string>
+  <string name="chat_voice_reply_delete_segment">Delete this segment</string>
+  <string name="chat_voice_reply_delete_entire_reply">Delete entire reply</string>
+  <string name="liquid_glass_dialog">Dialog</string>
+  <string name="liquid_glass_opacity_title">Glass tint opacity</string>
+  <string name="message_token_usage_unavailable">API did not provide token usage</string>
+  <string name="message_duration_unavailable">Duration unavailable</string>
+  <string name="liquid_glass_title">Liquid Glass</string>
+  <string name="liquid_glass_settings_desc">Opacity, background blur</string>
+  <string name="liquid_glass_workspace_group">Composer and workspace</string>
+  <string name="liquid_glass_other_group">Bubbles and other components</string>
+  <string name="liquid_glass_blur_title">Frost strength</string>
+  <string name="liquid_glass_blur_unsupported">Background blur requires Android 12 or later.</string>
+  <string name="liquid_glass_preview_assistant">See the frosted background</string>
+  <string name="liquid_glass_preview_user">Adjust both sliders</string>
 </resources>
 

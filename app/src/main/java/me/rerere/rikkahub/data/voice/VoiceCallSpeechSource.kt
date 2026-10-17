@@ -62,13 +62,13 @@ internal class VoiceCallSpeechSource {
 
         fun publish(messages: List<UIMessage>) {
             currentReply(messages)?.let { reply ->
-                input.update { if (it.generationJob === generationJob && !it.finished) it.copy(message = reply) else it }
+                input.update { if (generationJob.isActive && it.generationJob === generationJob && !it.finished) it.copy(message = reply) else it }
             }
         }
 
         fun publishTagged(reply: UIMessage) {
             input.update {
-                if (it.generationJob === generationJob && !it.finished && it.message?.id == reply.id) {
+                if (generationJob.isActive && it.generationJob === generationJob && !it.finished && it.message?.id == reply.id) {
                     it.copy(message = reply)
                 } else it
             }

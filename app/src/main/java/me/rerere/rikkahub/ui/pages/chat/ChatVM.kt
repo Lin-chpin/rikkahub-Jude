@@ -368,13 +368,17 @@ class ChatVM(
         chatService.handleToolApproval(_conversationId, toolCallId, approved = true, answer = answer)
     }
 
-    fun reportVoiceCallClosed(toolCallId: String?, failureMessage: String? = null, voiceCallCompletion: VoiceCallCompletion? = null) {
-        chatService.reportVoiceCallClosed(_conversationId, toolCallId, failureMessage, voiceCallCompletion)
+    suspend fun reportVoiceCallClosed(toolCallId: String?, failureMessage: String? = null, voiceCallCompletion: VoiceCallCompletion? = null) {
+        chatService.reportVoiceCallClosed(_conversationId, toolCallId, failureMessage, voiceCallCompletion).join()
     }
 
+    fun cancelGeneration(): Job? = chatService.cancelGeneration(_conversationId)
+
     fun stopGeneration() {
+        val messageId = conversation.value.messageNodes.lastOrNull()?.currentMessage?.id
+        val job = chatService.cancelGeneration(_conversationId) ?: return
         viewModelScope.launch {
-            chatService.stopGeneration(_conversationId)
+            chatService.stopGeneration(_conversationId, expectedJob = job, expectedMessageId = messageId)
         }
     }
 

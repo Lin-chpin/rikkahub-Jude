@@ -4,6 +4,9 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import me.rerere.rikkahub.utils.NotificationConfig
+import me.rerere.rikkahub.utils.NotificationUtil
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -12,7 +15,6 @@ import me.rerere.rikkahub.CHAT_COMPLETED_NOTIFICATION_CHANNEL_ID
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.RouteActivity
 import me.rerere.rikkahub.utils.cancelNotification
-import me.rerere.rikkahub.utils.sendNotification
 
 object VoiceCallNotifications {
     private const val NOTIFICATION_ID_BASE = 30_000
@@ -23,7 +25,9 @@ object VoiceCallNotifications {
         senderName: String,
         reasonPayload: String,
         channelId: String = CHAT_COMPLETED_NOTIFICATION_CHANNEL_ID,
+        toolCallId: String? = null,
     ) {
+        val invitation = VoiceCallInviteDeadlines.begin(context, conversationId, toolCallId)
         val reason = runCatching {
             Json.parseToJsonElement(reasonPayload)
                 .jsonObject["reason"]
@@ -42,10 +46,7 @@ object VoiceCallNotifications {
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        context.sendNotification(
-            channelId = channelId,
-            notificationId = notificationId(conversationId),
-        ) {
+        val notificationConfig = NotificationConfig().apply {
             title = context.getString(R.string.notification_voice_call_title, senderName)
             content = reason
             autoCancel = true
@@ -53,6 +54,12 @@ object VoiceCallNotifications {
             category = NotificationCompat.CATEGORY_CALL
             useBigTextStyle = true
             this.contentIntent = contentIntent
+        }
+        if (NotificationUtil.hasNotificationPermission(context)) {
+            NotificationManagerCompat.from(context).notify(notificationId(conversationId),
+                NotificationUtil.buildNotification(context, channelId, notificationConfig)
+                    .setTimeoutAfter(invitation.remainingMillis(System.currentTimeMillis()).coerceAtLeast(1))
+                    .build())
         }
     }
 

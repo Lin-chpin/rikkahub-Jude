@@ -11,11 +11,13 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ProcessLifecycleOwner
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.job
 import kotlinx.coroutines.flow.Flow
@@ -95,6 +97,7 @@ import me.rerere.rikkahub.data.voice.ChatVoiceReplyMaterializer
 import me.rerere.rikkahub.data.voice.inspectChatVoiceReplyMaterialization
 import me.rerere.rikkahub.data.voice.toDiagnosticDetails
 import me.rerere.rikkahub.data.voice.chatVoiceReply
+import me.rerere.rikkahub.data.voice.withEditedChatVoiceReplyText
 import me.rerere.rikkahub.data.voice.updateChatVoiceReplySegment
 import me.rerere.rikkahub.data.voice.VoiceCallCompletion
 import me.rerere.rikkahub.data.voice.isStandaloneVoiceCallRecord
@@ -144,6 +147,8 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import me.rerere.tts.provider.TTSProviderSetting
+import me.rerere.tts.provider.isElevenLabsV4Family
 import kotlin.uuid.Uuid
 
 private const val TAG = "ChatService"
@@ -450,12 +455,22 @@ class ChatService(
     ) {
         if (content.isEmptyInputMessage()) return
 
+        val timing = if (requestMode == ChatRequestMode.VoiceCall && answer) {
+            GenerationTimingTrace("voice_call:$conversationId")
+        } else null
+        timing?.mark("send_requested")
         val session = getOrCreateSession(conversationId)
-        session.getJob()?.cancel()
+        val previousJob = session.getJob()
+        previousJob?.cancel()
 
-        val job = appScope.launch(Dispatchers.IO) {
+        val job = appScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+            timing?.mark("send_worker_started")
             try {
+                previousJob?.join()
+                timing?.mark("conversation_initialize_started")
                 initializeConversation(conversationId)
+                timing?.mark("conversation_initialize_finished")
+                timing?.mark("send_state_started")
                 val currentConversation = session.state.value
                 val endedEventConsumption = if (
                     answer && requestMode == ChatRequestMode.Normal
@@ -471,10 +486,15 @@ class ChatService(
                     conversation = conversationBeforeSend,
                     details = "answer=$answer requestMode=$requestMode",
                 )
+                timing?.mark("send_state_finished")
+                timing?.mark("send_settings_started")
                 val settings = settingsStore.settingsFlow.first()
                 val assistant = settings.getAssistantById(conversationBeforeSend.assistantId)
                     ?: settings.getCurrentAssistant()
+                timing?.mark("send_settings_finished")
+                timing?.mark("user_input_preprocess_started")
                 val processedContent = preprocessUserInputParts(content, assistant)
+                timing?.mark("user_input_preprocess_finished")
 
                 // 添加消息到列表
                 val userMessage = UIMessage(
@@ -485,12 +505,16 @@ class ChatService(
                     messageNodes = conversationBeforeSend.messageNodes + userMessage.toMessageNode(),
                     updateAt = Instant.now(),
                 )
-                saveConversation(conversationId, newConversation)
+                timing?.mark("user_message_save_started", userMessage.id.toString())
+                saveConversation(conversationId, newConversation, timing)
+                timing?.mark("user_message_save_finished", userMessage.id.toString())
+                timing?.mark("user_message_hook_started")
                 LocalBuildIntegration.onUserMessageSent(
                     context = context,
                     message = userMessage,
                     assistantId = conversationBeforeSend.assistantId,
                 )
+                timing?.mark("user_message_hook_finished")
                 compressionDiagnostics.record(
                     conversationId = conversationId,
                     stage = "send.saved",
@@ -499,10 +523,12 @@ class ChatService(
 
                 // 开始补全
                 if (answer) {
+                    timing?.mark("auto_compression_started")
                     autoCompressConversationIfNeeded(
                         conversationId = conversationId,
                         conversation = getConversationFlow(conversationId).value
                     )
+                    timing?.mark("auto_compression_finished")
                     val voiceCallRuntimeState = if (endedEventConsumption?.shouldNotifyModel == true) {
                         VoiceCallRuntimeState.ENDED
                     } else {
@@ -520,6 +546,7 @@ class ChatService(
                         requestMode = requestMode,
                         voiceCallRuntimeState = voiceCallRuntimeState,
                         voiceCallUserEventState = voiceCallUserEventState,
+                        requestTiming = timing,
                     )
                 }
 
@@ -530,6 +557,8 @@ class ChatService(
                     )
                 )
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                timing?.mark(if (e is CancellationException) "send_cancelled" else "send_failed")
                 e.printStackTrace()
                 addError(e, conversationId, title = context.getString(R.string.error_title_send_message))
             }
@@ -564,10 +593,12 @@ class ChatService(
         regenerateAssistantMsg: Boolean = true
     ) {
         val session = getOrCreateSession(conversationId)
-        session.getJob()?.cancel()
+        val previousJob = session.getJob()
+        previousJob?.cancel()
 
-        val job = appScope.launch(Dispatchers.IO) {
+        val job = appScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
             try {
+                previousJob?.join()
                 val conversation = session.state.value
 
                 if (message.role == MessageRole.USER) {
@@ -616,10 +647,19 @@ class ChatService(
         answer: String? = null,
     ) {
         val session = getOrCreateSession(conversationId)
-        session.getJob()?.cancel()
+        val invite = VoiceCallInviteDeadlines.forTool(context, toolCallId)
+        val inviteStatus = invite?.effectiveStatus(System.currentTimeMillis())
+        val effectiveApproved = approved && (inviteStatus == null || inviteStatus == "pending")
+        val effectiveReason = if (approved && !effectiveApproved) {
+            if (inviteStatus == "missed") "The voice call was not answered within 30 seconds." else "The voice call invitation is no longer active."
+        } else reason
+        VoiceCallInviteDeadlines.complete(context, toolCallId, effectiveApproved, effectiveReason)
+        val previousJob = session.getJob()
+        previousJob?.cancel()
 
-        val job = appScope.launch(Dispatchers.IO) {
+        val job = appScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
             try {
+                previousJob?.join()
                 val conversation = session.state.value
                 val isVoiceCallTool = conversation.messageNodes.any { node ->
                     node.messages.any { message ->
@@ -630,7 +670,7 @@ class ChatService(
                         }
                     }
                 }
-                val acceptedVoiceCall = approved && answer == null && isVoiceCallTool
+                val acceptedVoiceCall = effectiveApproved && answer == null && isVoiceCallTool
                 val resumeRequestMode = if (acceptedVoiceCall) {
                     ChatRequestMode.VoiceCall
                 } else {
@@ -638,8 +678,8 @@ class ChatService(
                 }
                 val newApprovalState = when {
                     answer != null -> ToolApprovalState.Answered(answer)
-                    approved -> ToolApprovalState.Approved
-                    else -> ToolApprovalState.Denied(reason)
+                    effectiveApproved -> ToolApprovalState.Approved
+                    else -> ToolApprovalState.Denied(effectiveReason)
                 }
                 val connectedVoiceCallOutput = if (acceptedVoiceCall) {
                     listOf(
@@ -707,6 +747,7 @@ class ChatService(
                     )
                 )
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 addError(e, conversationId, title = context.getString(R.string.error_title_tool_approval))
             }
         }
@@ -720,14 +761,14 @@ class ChatService(
         toolCallId: String? = null,
         failureMessage: String? = null,
         voiceCallCompletion: VoiceCallCompletion? = null,
-    ) {
+    ): Job {
         val session = getOrCreateSession(conversationId)
         val previousJob = session.getJob()
         previousJob?.cancel()
 
-        val job = appScope.launch(Dispatchers.IO) {
+        val job = appScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
             try {
-                runCatching { previousJob?.join() }
+                previousJob?.join()
 
                 // Audio tags are call-only speech metadata. Preserve the primary text while
                 // removing the selected branch's tags before it returns to normal chat.
@@ -824,6 +865,7 @@ class ChatService(
             }
         }
         session.setJob(job)
+        return job
     }
 
     // ---- 处理消息补全 ----
@@ -836,8 +878,9 @@ class ChatService(
         voiceCallUserEventState: VoiceCallRuntimeState? = null,
         additionalSystemPrompt: String? = null,
         allowVoiceCallAudioTags: Boolean = true,
+        requestTiming: GenerationTimingTrace? = null,
     ) {
-        val timing = if (requestMode == ChatRequestMode.VoiceCall) {
+        val timing = requestTiming ?: if (requestMode == ChatRequestMode.VoiceCall) {
             GenerationTimingTrace("voice_call:$conversationId")
         } else null
         timing?.mark("completion_handler_started")
@@ -853,6 +896,7 @@ class ChatService(
             model.displayName
         }
 
+        val generationJob = currentCoroutineContext().job
         var speechReply: VoiceCallSpeechSource.Reply? = null
         runCatching {
 
@@ -863,7 +907,10 @@ class ChatService(
             // check invalid messages
             checkInvalidMessages(conversationId)
             val conversation = getConversationFlow(conversationId).value
-            val voiceCallRuntimeContext = buildVoiceCallRuntimeContext(voiceCallRuntimeState)
+            val voiceCallRuntimeContext = buildVoiceCallRuntimeContext(
+                voiceCallRuntimeState,
+                includeConnectionEvent = voiceCallUserEventState != null,
+            )
             val voiceCallAudioTagFormat = settings.getSelectedTTSProvider()
                 ?.voiceCallAudioTagFormatOrNull()
                 ?.takeIf {
@@ -875,17 +922,9 @@ class ChatService(
 
             // start generating
             val session = getOrCreateSession(conversationId)
-            val generationMessages = conversation.messagesForGeneration(messageRange).let { messages ->
-                when (requestMode) {
-                    ChatRequestMode.Normal ->
-                        messages.map(UIMessage::withoutVoiceCallAudioTagsForNormalContext)
-
-                    // Voice-call directions are injected through extraSystemPrompt below.
-                    // Keep persisted/UI messages untouched so temporary protocol text
-                    // can never leak into the user's bubble.
-                    ChatRequestMode.VoiceCall -> messages
-                }
-            }
+            // Both modes upload the same history projection; audio directions belong to speech, not cached history.
+            val generationMessages = conversation.messagesForGeneration(messageRange)
+                .map(UIMessage::withoutVoiceCallAudioTagsForNormalContext)
             val generationBaseMessageIds = conversation.currentMessages.mapTo(mutableSetOf()) { it.id }
             if (requestMode == ChatRequestMode.VoiceCall) {
                 speechReply = session.voiceCallSpeech.begin(
@@ -895,30 +934,15 @@ class ChatService(
                     tagFormat = voiceCallAudioTagFormat,
                 )
             }
-            val transientLastContextMessage = if (
-                requestMode == ChatRequestMode.VoiceCall || voiceCallUserEventState != null
-            ) {
-                generationMessages.lastOrNull()
-                    ?.takeIf { it.role == MessageRole.USER }
-                    ?.withVoiceCallRuntimeInstructionForRequest(
-                        state = voiceCallRuntimeState,
-                        includeConnectionEvent = voiceCallUserEventState != null,
-                    )
-            } else {
-                null
-            }
-            val voiceCallToolEnabled = LocalToolOption.VoiceCall in assistant.localTools &&
-                voiceCallRuntimeState == VoiceCallRuntimeState.INACTIVE
+            val voiceCallToolEnabled = LocalToolOption.VoiceCall in assistant.localTools
             val voiceCallConfigured = settings.getSelectedTTSProvider() != null
             val localToolOptions = assistant.localTools.filterNot {
-                (voiceCallRuntimeState != VoiceCallRuntimeState.INACTIVE && it == LocalToolOption.VoiceCall) ||
-                    (it == LocalToolOption.Tts && (requestMode != ChatRequestMode.Normal || !voiceCallConfigured))
+                it == LocalToolOption.Tts && !voiceCallConfigured
             }
             val ttsVoiceDirectorGuidance = settings.getSelectedTTSProvider()
                 ?.voiceCallAudioTagFormatOrNull()
                 ?.takeIf {
-                    requestMode == ChatRequestMode.Normal &&
-                        LocalToolOption.Tts in localToolOptions &&
+                    LocalToolOption.Tts in localToolOptions &&
                         (it == VoiceCallAudioTagFormat.ELEVEN_LABS_V3 || it == VoiceCallAudioTagFormat.ELEVEN_LABS_V4)
                 }
                 ?.let { settings.elevenLabsVoiceDirectorPrompt }
@@ -939,38 +963,43 @@ class ChatService(
                 else -> null
             }
             var voiceCallFailureReported = false
+            Log.i("PromptCacheContext", "conversation=$conversationId requestMode=$requestMode runtimeState=$voiceCallRuntimeState " +
+                "connectionEvent=${voiceCallUserEventState != null} historyProjection=spoken_text runtimePlacement=tail")
             val generationFlow = generationHandler.generateText(
                 settings = settings,
                 model = model,
                 processingStatus = session.processingStatus,
                 messages = generationMessages,
-                assistant = assistant,
+                startNewAssistantMessage = requestMode == ChatRequestMode.VoiceCall,
+                assistant = if (requestMode == ChatRequestMode.VoiceCall &&
+                    (settings.getSelectedTTSProvider() as? TTSProviderSetting.ElevenLabs)?.let {
+                        it.fullDuplex && it.isElevenLabsV4Family()
+                    } == true
+                ) assistant.copy(streamOutput = true) else assistant,
                 conversationId = conversation.id,
+                requestSource = requestMode.name,
                 conversationSystemPrompt = conversation.customSystemPrompt,
                 conversationContextSummary = conversation.compressedSummary,
                 conversationModeInjectionIds = conversation.modeInjectionIds,
                 conversationLorebookIds = conversation.lorebookIds,
-                runtimeStateSystemPrompt = voiceCallRuntimeContext.systemPrompt,
-                transientLastContextMessage = transientLastContextMessage,
-                extraSystemPrompt = listOfNotNull(
-                    when (requestMode) {
-                        ChatRequestMode.Normal -> null
-                        ChatRequestMode.VoiceCall -> listOf(
-                            VOICE_CALL_SYSTEM_PROMPT_COMMON.trimIndent(),
-                            buildVoiceCallAudioTagPrompt(
-                                voiceCallAudioTagMode,
-                                voiceCallAudioTagFormat,
-                                settings.elevenLabsVoiceDirectorPrompt,
-                            ),
-                        ).joinToString("\n\n")
-                    },
-                    PROACTIVE_VOICE_CALL_SYSTEM_PROMPT.trimIndent().takeIf { proactiveVoiceCallEnabled },
+                runtimeStateSystemPrompt = listOfNotNull(
+                    voiceCallRuntimeContext.systemPrompt,
+                    if (requestMode == ChatRequestMode.VoiceCall) listOf(
+                        VOICE_CALL_SYSTEM_PROMPT_COMMON.trimIndent(),
+                        buildVoiceCallAudioTagPrompt(voiceCallAudioTagMode, voiceCallAudioTagFormat, settings.elevenLabsVoiceDirectorPrompt),
+                    ).joinToString("\n\n") else null,
                     momentContextPrompt,
-                    ANONYMOUS_QUESTION_SYSTEM_PROMPT.takeIf {
-                        requestMode == ChatRequestMode.Normal && assistant.anonymousQuestionBoxEnabled
-                    },
                     anonymousQuestionContextPrompt,
                     additionalSystemPrompt,
+                ).joinToString("\n\n"),
+                disabledToolNames = if (voiceCallRuntimeState == VoiceCallRuntimeState.ENDED) {
+                    setOf(REQUEST_VOICE_CALL_TOOL_NAME)
+                } else emptySet(),
+                extraSystemPrompt = listOfNotNull(
+                    PROACTIVE_VOICE_CALL_SYSTEM_PROMPT.trimIndent().takeIf { proactiveVoiceCallEnabled },
+                    ANONYMOUS_QUESTION_SYSTEM_PROMPT.takeIf {
+                        assistant.anonymousQuestionBoxEnabled
+                    },
                 ).joinToString("\n\n").takeIf { it.isNotBlank() },
                 memories = buildList {
                     // 本地记忆工具记录统一属于助手，所有会话都读取同一份记忆。
@@ -987,18 +1016,13 @@ class ChatService(
                     localToolOptions = localToolOptions,
                     usageLockEnabled = settings.usageReminderConfig.lockEnabled,
                     voiceCallConfigured = voiceCallConfigured,
-                    momentAssistantId = when {
-                        requestMode == ChatRequestMode.Normal && assistant.momentsEnabled -> momentScopeId
-                        else -> null
-                    },
-                    anonymousQuestionScopeId = when {
-                        requestMode == ChatRequestMode.Normal && assistant.anonymousQuestionBoxEnabled -> anonymousQuestionScopeId
-                        else -> null
-                    },
-                    includeBuildTools = requestMode == ChatRequestMode.Normal,
+                    momentAssistantId = momentScopeId.takeIf { assistant.momentsEnabled },
+                    anonymousQuestionScopeId = anonymousQuestionScopeId.takeIf { assistant.anonymousQuestionBoxEnabled },
+                    includeBuildTools = true,
                     buildToolAssistantId = assistant.id,
                     enabledSkills = assistant.enabledSkills,
                     ttsVoiceDirectorGuidance = ttsVoiceDirectorGuidance,
+                    voiceCallActive = requestMode == ChatRequestMode.VoiceCall,
                 ),
             )
             var latestPrimaryMessages: List<UIMessage>? = null
@@ -1060,6 +1084,7 @@ class ChatService(
                                 Logging.log(TAG, "sentence voice-call tagging failed; using no-tag fallback: ${assignmentResult.exceptionOrNull()}")
                             }
                             synchronized(tagProjectionLock) {
+                                if (!generationJob.isActive || session.getJob() !== generationJob) return@synchronized
                                 tagAssignmentsByMessageId
                                     .getOrPut(primaryReply.id) { mutableMapOf() }[index] = assignmentResult.getOrNull()
                                 val currentConversation = getConversationFlow(conversationId).value
@@ -1088,6 +1113,7 @@ class ChatService(
                 }
 
                 generationFlow.onCompletion {
+                    if (session.getJob() !== generationJob) return@onCompletion
                     timing?.mark("generation_flow_completed")
                     // 取消 Live Update 通知
                     cancelLiveUpdateNotification(conversationId)
@@ -1133,12 +1159,16 @@ class ChatService(
                         sendGenerationDoneNotification(conversationId, senderName)
                     }
                 }.collect { chunk ->
+                    currentCoroutineContext().ensureActive()
+                    if (session.getJob() !== generationJob) throw CancellationException("Generation replaced")
                     when (chunk) {
                         is GenerationChunk.Messages -> {
                             val chunkMessages = chunk.messages
                             timing?.firstText("generation_text_received", chunkMessages.lastOrNull())
                             latestPrimaryMessages = chunkMessages
-                            if (!voiceCallNotificationSent && !isForeground.value) {
+                            if (!voiceCallNotificationSent && !isForeground.value &&
+                                voiceCallRuntimeState == VoiceCallRuntimeState.INACTIVE
+                            ) {
                                 chunkMessages.asSequence()
                                     .flatMap { it.parts.asSequence() }
                                     .filterIsInstance<UIMessagePart.Tool>()
@@ -1151,6 +1181,7 @@ class ChatService(
                                             conversationId = conversationId.toString(),
                                             senderName = senderName,
                                             reasonPayload = tool.input,
+                                            toolCallId = tool.toolCallId,
                                         )
                                         voiceCallNotificationSent = true
                                     }
@@ -1324,6 +1355,7 @@ class ChatService(
             Logging.log(TAG, "handleMessageComplete: $it")
             Logging.log(TAG, it.stackTraceToString())
         }.onSuccess {
+            if (getOrCreateSession(conversationId).getJob() !== generationJob) return@onSuccess
             val finalConversation = getConversationFlow(conversationId).value
             speechReply?.publish(finalConversation.currentMessages)
             speechReply?.finish()
@@ -2303,20 +2335,32 @@ class ChatService(
         }
     }
 
-    suspend fun saveConversation(conversationId: Uuid, conversation: Conversation) {
+    suspend fun saveConversation(
+        conversationId: Uuid,
+        conversation: Conversation,
+        timing: GenerationTimingTrace? = null,
+    ) {
+        timing?.mark("save_exists_started")
         val exists = conversationRepo.existsConversationById(conversation.id)
+        timing?.mark("save_exists_finished")
         if (!exists && conversation.title.isBlank() && conversation.messageNodes.isEmpty()) {
             return // 新会话且为空时不保存
         }
 
+        timing?.mark("save_normalize_started")
         val updatedConversation = conversation.normalizeCompressionState()
+        timing?.mark("save_normalize_finished")
+        timing?.mark("save_state_publish_started")
         updateConversation(conversationId, updatedConversation)
+        timing?.mark("save_state_publish_finished")
 
+        timing?.mark("save_repository_write_started")
         if (!exists) {
             conversationRepo.insertConversation(updatedConversation)
         } else {
             conversationRepo.updateConversation(updatedConversation)
         }
+        timing?.mark("save_repository_write_finished")
     }
 
     // ---- 翻译消息 ----
@@ -2389,17 +2433,19 @@ class ChatService(
                     .flatMap { it.messages.asSequence() }
                     .firstOrNull { it.id == message.id }
                 val cachedTranslation = currentMessage?.voiceCallTranslations?.get(bubbleKey)
-                if (cachedTranslation?.isNotBlank() == true && cachedTranslation != loadingText) {
+                if (cachedTranslation?.isNotBlank() == true) {
                     return@launch
                 }
                 if (sourceText.isBlank()) return@launch
 
                 updateVoiceCallTranslationField(conversationId, message.id, bubbleKey, loadingText)
+                var translationEmitted = false
                 generationHandler.translateText(
                     settings = settings,
                     sourceText = sourceText,
                     targetLanguage = targetLanguage,
                 ) { translatedText ->
+                    translationEmitted = true
                     updateVoiceCallTranslationField(
                         conversationId = conversationId,
                         messageId = message.id,
@@ -2408,6 +2454,14 @@ class ChatService(
                     )
                 }.collect { }
 
+                if (!translationEmitted) {
+                    updateVoiceCallTranslationField(
+                        conversationId = conversationId,
+                        messageId = message.id,
+                        bubbleKey = bubbleKey,
+                        translationText = null,
+                    )
+                }
                 saveConversation(conversationId, getConversationFlow(conversationId).value)
             } catch (e: Exception) {
                 updateVoiceCallTranslationField(
@@ -2507,6 +2561,7 @@ class ChatService(
         bubbleKey: String,
         translationText: String?,
         clearLegacyTranslation: Boolean = false,
+        clearAllTranslations: Boolean = false,
     ) {
         val currentConversation = getConversationFlow(conversationId).value
         val updatedNodes = currentConversation.messageNodes.map { node ->
@@ -2516,7 +2571,7 @@ class ChatService(
                         if (msg.id == messageId) {
                             val translations = msg.voiceCallTranslations.toMutableMap().apply {
                                 if (translationText.isNullOrBlank()) {
-                                    remove(bubbleKey)
+                                    if (clearAllTranslations) clear() else remove(bubbleKey)
                                 } else {
                                     put(bubbleKey, translationText)
                                 }
@@ -2586,11 +2641,13 @@ class ChatService(
             }
             edited = true
 
+            val original = node.messages.first { it.id == messageId }
+            val editedMessage = if (original.chatVoiceReply() != null) {
+                original.withEditedChatVoiceReplyText(processedParts).copy(id = Uuid.random())
+            } else UIMessage(role = node.role, parts = processedParts)
+
             node.copy(
-                messages = node.messages + UIMessage(
-                    role = node.role,
-                    parts = processedParts,
-                ),
+                messages = node.messages + editedMessage,
                 selectIndex = node.messages.size
             )
         }
@@ -2856,6 +2913,7 @@ class ChatService(
                 bubbleKey = bubbleKey,
                 translationText = null,
                 clearLegacyTranslation = clearLegacyTranslation,
+                clearAllTranslations = true,
             )
             saveConversation(conversationId, getConversationFlow(conversationId).value)
         }
@@ -2878,14 +2936,26 @@ class ChatService(
     }
 
     // 停止当前会话生成任务（不清理会话缓存）
-    suspend fun stopGeneration(conversationId: Uuid) {
-        val job = sessions[conversationId]?.getJob() ?: return
+    fun cancelGeneration(conversationId: Uuid): Job? =
+        sessions[conversationId]?.getJob()?.also { it.cancel() }
+
+    suspend fun stopGeneration(
+        conversationId: Uuid,
+        expectedJob: Job? = cancelGeneration(conversationId),
+        expectedMessageId: Uuid? = null,
+    ) {
+        val job = expectedJob ?: return
+        val stoppedMessageId = expectedMessageId
+            ?: getConversationFlow(conversationId).value.messageNodes.lastOrNull()?.currentMessage?.id
         job.cancel()
-        runCatching { job.join() }
+        job.join()
+        // Cleanup belongs to the cancelled turn, never to a newly submitted user message.
+        if (sessions[conversationId]?.getJob()?.let { it !== job } == true) return
 
         val currentConversation = getConversationFlow(conversationId).value
         val lastNode = currentConversation.messageNodes.lastOrNull() ?: return
         val lastMessage = lastNode.currentMessage
+        if (lastMessage.id != stoppedMessageId) return
         val updatedMessage = lastMessage.finishPendingTools(::cancelToolByUser)
         if (updatedMessage == lastMessage) {
             return

@@ -173,6 +173,12 @@ object ModelRegistry {
         toolReasoningAbility()
     }
 
+    val GEMINI_3_8_FLASH = defineModel {
+        tokens("gemini", "3", "8", "flash")
+        visionInput()
+        toolReasoningAbility()
+    }
+
     val GEMINI_FLASH_LATEST = defineModel {
         exact("gemini-flash-latest")
         visionInput()
@@ -190,7 +196,7 @@ object ModelRegistry {
     }
 
     val GEMINI_3_SERIES = defineGroup {
-        add(GEMINI_3_PRO, GEMINI_3_FLASH, GEMINI_3_1_PRO_PREVIEW, GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS, GEMINI_3_5)
+        add(GEMINI_3_PRO, GEMINI_3_FLASH, GEMINI_3_1_PRO_PREVIEW, GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS, GEMINI_3_5, GEMINI_3_8_FLASH)
     }
 
     val GEMINI_SERIES = defineGroup {
@@ -472,6 +478,7 @@ object ModelRegistry {
         GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS,
         GEMINI_3_1_FLASH_IMAGE,
         GEMINI_3_5,
+        GEMINI_3_8_FLASH,
         GEMINI_FLASH_LATEST,
         GEMINI_PRO_LATEST,
         CLAUDE_SONNET_3_5,

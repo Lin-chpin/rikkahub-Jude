@@ -25,11 +25,12 @@ class ChatVoiceReplyAudioGenerator(
         text: String,
         provider: TTSProviderSetting,
         englishOnly: Boolean,
+        onlyReadQuoted: Boolean,
     ): List<ChatVoiceReplyAudioGroup> {
         val speechText = text
             .sanitizeVoiceCallTextForSpeech()
             .toChatTtsText(
-                ttsOnlyReadQuoted = false,
+                ttsOnlyReadQuoted = onlyReadQuoted,
                 ttsEnglishOnly = englishOnly,
             )
         val chunks = if (provider is TTSProviderSetting.MiniMax) {

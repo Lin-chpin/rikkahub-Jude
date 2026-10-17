@@ -95,7 +95,9 @@ class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
             })
         }
 
-        Log.i(TAG, "tts_timing trace=$timingId stage=request_started model=$model chars=${request.text.length}")
+        val requestStartedAtNanos = System.nanoTime()
+        fun elapsedMs() = (System.nanoTime() - requestStartedAtNanos) / 1_000_000
+        Log.i(TAG, "tts_timing trace=$timingId stage=request_started elapsedMs=${elapsedMs()} model=$model chars=${request.text.length}")
 
         val httpRequest = Request.Builder()
             .url("$baseUrl/t2a_v2")
@@ -106,10 +108,12 @@ class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
 
         var hasEmittedAudio = false
         var firstAudioReceived = false
+        var audioChunkCount = 0
+        var totalAudioBytes = 0L
 
         httpClient.sseFlow(httpRequest).collect {
             when (it) {
-                is SseEvent.Open -> Log.i(TAG, "tts_timing trace=$timingId stage=sse_open")
+                is SseEvent.Open -> Log.i(TAG, "tts_timing trace=$timingId stage=sse_open elapsedMs=${elapsedMs()}")
                 is SseEvent.Event -> {
                     try {
                         val data = json.decodeFromString<MiniMaxResponse>(it.data)
@@ -118,7 +122,11 @@ class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
                         val audioBytes = hexStringToBytes(data.data.audio)
                         if (!firstAudioReceived && audioBytes.isNotEmpty()) {
                             firstAudioReceived = true
-                            Log.i(TAG, "tts_timing trace=$timingId stage=first_audio_bytes_received bytes=${audioBytes.size}")
+                            Log.i(TAG, "tts_timing trace=$timingId stage=first_audio_bytes_received elapsedMs=${elapsedMs()} bytes=${audioBytes.size}")
+                        }
+                        if (audioBytes.isNotEmpty()) {
+                            audioChunkCount++
+                            totalAudioBytes += audioBytes.size
                         }
 
                         emit(
@@ -139,12 +147,13 @@ class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
                         )
                         hasEmittedAudio = true
                     } catch (e: Exception) {
+                        Log.i(TAG, "tts_timing trace=$timingId stage=audio_chunk_decode_failed elapsedMs=${elapsedMs()} error=${e::class.simpleName}")
                         Log.e(TAG, "Failed to process audio chunk", e)
                     }
                 }
 
                 is SseEvent.Closed -> {
-                    Log.i(TAG, "SSE connection closed")
+                    Log.i(TAG, "tts_timing trace=$timingId stage=sse_closed elapsedMs=${elapsedMs()} chunks=$audioChunkCount bytes=$totalAudioBytes")
                     // Emit final chunk if we haven't already
                     if (hasEmittedAudio) {
                         emit(
@@ -160,6 +169,7 @@ class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
                 }
 
                 is SseEvent.Failure -> {
+                    Log.i(TAG, "tts_timing trace=$timingId stage=sse_failed elapsedMs=${elapsedMs()} chunks=$audioChunkCount bytes=$totalAudioBytes error=${it.throwable?.javaClass?.simpleName ?: "unknown"}")
                     Log.e(TAG, "SSE connection failed", it.throwable)
                     throw it.throwable ?: Exception("MiniMax TTS streaming failed")
                 }

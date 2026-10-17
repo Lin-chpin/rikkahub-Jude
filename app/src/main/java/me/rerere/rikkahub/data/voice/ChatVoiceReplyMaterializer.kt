@@ -80,6 +80,7 @@ class ChatVoiceReplyMaterializer(
                     text = parsedReply.segments[segmentIndex].text,
                     provider = provider,
                     englishOnly = settings.displaySetting.ttsEnglishOnly,
+                    onlyReadQuoted = settings.displaySetting.ttsOnlyReadQuoted,
                 )
                 if (audioGroups.isEmpty()) {
                     throw ChatVoiceReplyGenerationException(ChatVoiceReplyErrorCode.EMPTY_AUDIO)

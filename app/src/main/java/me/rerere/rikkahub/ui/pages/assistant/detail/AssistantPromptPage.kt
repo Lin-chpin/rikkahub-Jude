@@ -7,6 +7,7 @@ import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Refresh03
+import android.util.Log
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -41,10 +42,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -93,6 +96,11 @@ import me.rerere.rikkahub.utils.onSuccess
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import org.koin.core.parameter.parametersOf
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.drop
+import android.os.SystemClock
 import kotlin.uuid.Uuid
 
 @Composable
@@ -122,12 +130,17 @@ fun AssistantPromptPage(id: String) {
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         containerColor = CustomColors.topBarColors.containerColor,
     ) { innerPadding ->
-        AssistantPromptContent(
-            modifier = Modifier.padding(innerPadding),
-            assistant = assistant,
-            settings = settings,
-            onUpdate = { vm.update(it) }
-        )
+        // Do not initialize the editor with the VM's temporary, empty assistant.
+        if (!settings.init && assistant.id.toString() == id) {
+            key(assistant.id) {
+                AssistantPromptContent(
+                    modifier = Modifier.padding(innerPadding),
+                    assistant = assistant,
+                    settings = settings,
+                    onUpdate = { vm.update(it) }
+                )
+            }
+        }
     }
 }
 
@@ -140,6 +153,15 @@ private fun AssistantPromptContent(
 ) {
     val context = LocalContext.current
     val templateTransformer = koinInject<TemplateTransformer>()
+    val latestAssistant by rememberUpdatedState(assistant)
+    val latestOnUpdate by rememberUpdatedState(onUpdate)
+    val recoverSavedPrompt = remember(assistant.systemPrompt) {
+        needsAssistantPromptRecovery(assistant.systemPrompt)
+    }
+
+    LaunchedEffect(assistant.id) {
+        Log.i("AssistantPromptPage", "opened assistant=${assistant.id} chars=${assistant.systemPrompt.length} recovery=$recoverSavedPrompt")
+    }
 
     Column(
         modifier = modifier
@@ -156,43 +178,61 @@ private fun AssistantPromptContent(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                val systemPromptValue = rememberTextFieldState(
-                    initialText = assistant.systemPrompt,
-                )
-                LaunchedEffect(Unit) {
-                    snapshotFlow { systemPromptValue.text }.collect {
-                        onUpdate(
-                            assistant.copy(
-                                systemPrompt = it.toString()
-                            )
+                if (recoverSavedPrompt) {
+                    AssistantPromptRecovery(
+                        prompt = assistant.systemPrompt,
+                        onClear = { latestOnUpdate(latestAssistant.copy(systemPrompt = "")) },
+                    )
+                } else {
+                    val systemPromptValue = rememberTextFieldState(
+                        initialText = assistant.systemPrompt,
+                    )
+                    LaunchedEffect(assistant.id) {
+                        snapshotFlow { systemPromptValue.text.toString() }.drop(1).collect { prompt ->
+                            // Opening the page must neither rewrite settings nor save unsafe drafts.
+                            if (prompt != latestAssistant.systemPrompt && !needsAssistantPromptRecovery(prompt)) {
+                                latestOnUpdate(
+                                    latestAssistant.copy(systemPrompt = prompt)
+                                )
+                            }
+                        }
+                    }
+
+                    if (needsAssistantPromptRecovery(systemPromptValue.text)) {
+                        AssistantPromptRecovery(
+                            prompt = systemPromptValue.text.toString(),
+                            onClear = { systemPromptValue.edit { replace(0, length, "") } },
+                        )
+                    } else {
+                        TextArea(
+                            state = systemPromptValue,
+                            label = stringResource(R.string.assistant_page_system_prompt),
+                            minLines = 5,
+                            maxLines = 10,
+                            supportedFileTypes = arrayOf("text/*", "application/json", "image/*",
+                                "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/msword"),
+                            fileImporter = { uri -> importAssistantPromptFile(context, uri).text },
                         )
                     }
-                }
 
-                TextArea(
-                    state = systemPromptValue,
-                    label = stringResource(R.string.assistant_page_system_prompt),
-                    minLines = 5,
-                    maxLines = 10
-                )
-
-                Column {
-                    Text(
-                        text = stringResource(R.string.assistant_page_available_variables),
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(2.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                    ) {
-                        DefaultPlaceholderProvider.placeholders.forEach { (k, info) ->
-                            Tag(
-                                onClick = {
-                                    systemPromptValue.insertAtCursor("{{$k}}")
+                    Column {
+                        Text(
+                            text = stringResource(R.string.assistant_page_available_variables),
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            DefaultPlaceholderProvider.placeholders.forEach { (k, info) ->
+                                Tag(
+                                    onClick = {
+                                        systemPromptValue.insertAtCursor("{{$k}}")
+                                    }
+                                ) {
+                                    info.displayName()
+                                    Text(": {{$k}}")
                                 }
-                            ) {
-                                info.displayName()
-                                Text(": {{$k}}")
                             }
                         }
                     }
@@ -350,23 +390,30 @@ private fun AssistantPromptContent(
                 )
                 val preview by produceState<UiState<List<UIMessage>>>(
                     UiState.Success(rawMessages),
-                    assistant
+                    assistant.id,
+                    assistant.messageTemplate,
                 ) {
+                    val startedAt = SystemClock.elapsedRealtime()
                     value = runCatching {
-                        UiState.Success(
-                            templateTransformer.transform(
-                                ctx = TransformerContext(
-                                    context = context,
-                                    model = Model(modelId = "gpt-4o", displayName = "GPT-4o"),
-                                    assistant = assistant,
-                                    settings = settings
-                                ),
-                                messages = rawMessages
+                        withContext(Dispatchers.Default) {
+                            UiState.Success(
+                                templateTransformer.transform(
+                                    ctx = TransformerContext(
+                                        context = context,
+                                        model = Model(modelId = "gpt-4o", displayName = "GPT-4o"),
+                                        assistant = assistant,
+                                        settings = settings
+                                    ),
+                                    messages = rawMessages
+                                )
                             )
-                        )
+                        }
                     }.getOrElse {
+                        if (it is CancellationException) throw it
+                        Log.w("AssistantPromptPage", "preview failed assistant=${assistant.id} error=${it::class.simpleName}")
                         UiState.Error(it)
                     }
+                    Log.i("AssistantPromptPage", "preview finished assistant=${assistant.id} elapsedMs=${SystemClock.elapsedRealtime() - startedAt}")
                 }
                 preview.onError {
                     Text(

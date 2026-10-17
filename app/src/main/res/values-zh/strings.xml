@@ -135,6 +135,15 @@
   <string name="assistant_page_stream_output_desc">是否启用消息的流式输出</string>
   <string name="assistant_page_strict">严谨</string>
   <string name="assistant_page_system_prompt">系统提示词</string>
+  <string name="assistant_prompt_import_file">导入图片或 Word 文件</string>
+  <string name="assistant_prompt_import_note">Word 文本在本地提取；图片使用已配置的 OCR 模型识别，可能产生 API 用量。</string>
+  <string name="assistant_prompt_importing">正在导入…</string>
+  <string name="assistant_prompt_recovery_message">这份提示词有 %1$d 个字符，内容过长或含有非文本控制字符。为避免卡顿，暂不加载全文。已保存的原文仍保留，你可以先导出，再清空。</string>
+  <string name="assistant_prompt_recovery_export">导出原文</string>
+  <string name="assistant_prompt_recovery_export_success">原提示词已导出</string>
+  <string name="assistant_prompt_recovery_export_failed">原提示词导出失败</string>
+  <string name="assistant_prompt_recovery_clear">清空助手总系统提示词</string>
+  <string name="assistant_prompt_recovery_clear_confirm">确定清空这个助手的总系统提示词吗？此操作无法撤销，会话独立提示词和其他助手设置仍保留。</string>
   <string name="assistant_page_tab_basic">基础设定</string>
   <string name="assistant_page_tab_extensions">扩展管理</string>
   <string name="assistant_page_tab_local_tools">本地工具</string>
@@ -694,7 +703,7 @@
   <string name="setting_display_page_custom_font_title">自定义字体</string>
   <string name="setting_display_page_enable_auto_scroll_desc">AI生成内容时自动滚动到底部</string>
   <string name="setting_display_page_enable_auto_scroll_title">自动滚动</string>
-  <string name="setting_display_page_enable_blur_effect_desc">在聊天输入栏启用模糊效果</string>
+  <string name="setting_display_page_enable_blur_effect_desc">为聊天输入区及液态玻璃已覆盖的组件启用背景模糊</string>
   <string name="setting_display_page_enable_blur_effect_title">启用模糊效果</string>
   <string name="setting_display_page_enable_latex_rendering_desc">使用 LaTeX 语法渲染数学表达式和公式</string>
   <string name="setting_display_page_enable_latex_rendering_title">启用 LaTeX 渲染</string>
@@ -1208,4 +1217,21 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="setting_page_preferences_general_desc">交互行为、滚动、输入设置</string>
   <string name="setting_page_preferences_ui">界面偏好设置</string>
   <string name="setting_page_preferences_ui_desc">消息显示、字体、代码块</string>
+  <string name="chat_voice_reply_edit_title">编辑回复分段</string>
+  <string name="chat_voice_reply_text_segment">文字</string>
+  <string name="chat_voice_reply_voice_preserved">语音条 · 保留已录制音频</string>
+  <string name="chat_voice_reply_delete_segment">删除这一段</string>
+  <string name="chat_voice_reply_delete_entire_reply">删除整条回复</string>
+  <string name="liquid_glass_dialog">对话框</string>
+  <string name="liquid_glass_opacity_title">玻璃底色不透明度</string>
+  <string name="message_token_usage_unavailable">接口未提供 token 用量</string>
+  <string name="message_duration_unavailable">耗时未提供</string>
+  <string name="liquid_glass_title">液态玻璃</string>
+  <string name="liquid_glass_settings_desc">透明度、背景模糊</string>
+  <string name="liquid_glass_workspace_group">输入框与展开工作区</string>
+  <string name="liquid_glass_other_group">气泡与其他组件</string>
+  <string name="liquid_glass_blur_title">磨砂强度</string>
+  <string name="liquid_glass_blur_unsupported">背景模糊需要 Android 12 或以上版本。</string>
+  <string name="liquid_glass_preview_assistant">看看背景的磨砂效果</string>
+  <string name="liquid_glass_preview_user">试着调节两个滑块</string>
 </resources>

@@ -33,7 +33,7 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ToolProtocolRoundTripTest {
-    private val params = TextGenerationParams(Model(modelId = "test"))
+    private val params = TextGenerationParams(Model(modelId = "test"), suppressContentLogs = true)
     private val openAI = ProviderSetting.OpenAI(apiKey = "test", baseUrl = "https://example.invalid/v1")
 
     @Test

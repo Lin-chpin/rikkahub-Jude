@@ -82,22 +82,30 @@ data class AssistantRegex(
     val replaceString: String = "", // 替换字符串
     val affectingScope: Set<AssistantAffectScope> = setOf(),
     val visualOnly: Boolean = false, // 是否仅在视觉上影响
+    val replaceFirstOnly: Boolean = false,
 )
 
 fun String.replaceRegexes(
     assistant: Assistant?,
     scope: AssistantAffectScope,
-    visual: Boolean = false
+    visual: Boolean = false,
+    lorebooks: List<Lorebook> = emptyList(),
 ): String {
     if (assistant == null) return this
-    if (assistant.regexes.isEmpty()) return this
-    return assistant.regexes.fold(this) { acc, regex ->
+    val presetRegexes = lorebooks
+        .filter { it.enabled && it.id in assistant.lorebookIds }
+        .flatMap { it.responseRegexes }
+    val regexes = assistant.regexes + presetRegexes
+    if (regexes.isEmpty()) return this
+    return regexes.fold(this) { acc, regex ->
         if (regex.enabled && regex.visualOnly == visual && regex.affectingScope.contains(scope)) {
             try {
-                val result = acc.replace(
-                    regex = Regex(regex.findRegex),
-                    replacement = regex.replaceString,
-                )
+                val pattern = Regex(regex.findRegex)
+                val result = if (regex.replaceFirstOnly) {
+                    pattern.replaceFirst(acc, regex.replaceString)
+                } else {
+                    pattern.replace(acc, regex.replaceString)
+                }
                 // println("Regex: ${regex.findRegex} -> ${result}")
                 result
             } catch (e: Exception) {
@@ -110,6 +118,12 @@ fun String.replaceRegexes(
         }
     }
 }
+
+fun Assistant.hasScriptedLorebookHtml(lorebooks: List<Lorebook>): Boolean = lorebooks
+    .asSequence()
+    .filter { it.enabled && it.id in lorebookIds }
+    .flatMap { it.responseRegexes.asSequence() }
+    .any { it.enabled && it.replaceString.contains("<!DOCTYPE html", ignoreCase = true) && it.replaceString.contains("<script", ignoreCase = true) }
 
 /**
  * 注入位置
@@ -146,7 +160,7 @@ sealed class PromptInjection {
     abstract val priority: Int
     abstract val position: InjectionPosition
     abstract val content: String
-    abstract val injectDepth: Int  // 当 position 为 AT_DEPTH 时使用，表示从最新消息往前数的位置
+    abstract val injectDepth: Int  // AT_DEPTH：本项目按 1 开始；导入的酒馆条目支持 depth 0
     abstract val role: MessageRole  // 注入角色：USER 或 ASSISTANT
 
     /**
@@ -184,6 +198,10 @@ sealed class PromptInjection {
         val caseSensitive: Boolean = false,        // 大小写敏感
         val scanDepth: Int = 4,                    // 扫描最近N条消息
         val constantActive: Boolean = false,       // 常驻激活（无需匹配）
+        val modelConditionRegex: String? = null,
+        val modelConditionIgnoreCase: Boolean = false,
+        val preserveRole: Boolean = false,
+        val tavernPresetSlot: String? = null,
     ) : PromptInjection()
 }
 
@@ -197,6 +215,7 @@ data class Lorebook(
     val description: String = "",
     val enabled: Boolean = true,
     val entries: List<PromptInjection.RegexInjection> = emptyList(),
+    val responseRegexes: List<AssistantRegex> = emptyList(),
 )
 
 /**
@@ -205,8 +224,17 @@ data class Lorebook(
  * @param context 要扫描的上下文文本
  * @return 是否触发
  */
-fun PromptInjection.RegexInjection.isTriggered(context: String): Boolean {
+fun PromptInjection.RegexInjection.isTriggered(context: String, modelId: String? = null): Boolean {
     if (!enabled) return false
+    modelConditionRegex?.let { condition ->
+        val matchesModel = runCatching {
+            Regex(
+                condition,
+                if (modelConditionIgnoreCase) setOf(RegexOption.IGNORE_CASE) else emptySet(),
+            ).containsMatchIn(modelId.orEmpty())
+        }.getOrDefault(false)
+        if (!matchesModel) return false
+    }
     if (constantActive) return true
     if (keywords.isEmpty()) return false
 
@@ -253,9 +281,10 @@ fun extractContextForMatching(
  */
 fun getTriggeredInjections(
     injections: List<PromptInjection.RegexInjection>,
-    context: String
+    context: String,
+    modelId: String? = null,
 ): List<PromptInjection.RegexInjection> {
     return injections
-        .filter { it.isTriggered(context) }
+        .filter { it.isTriggered(context, modelId) }
         .sortedByDescending { it.priority }
 }

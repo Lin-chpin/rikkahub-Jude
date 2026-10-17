@@ -199,6 +199,7 @@ sealed class TTSProviderSetting {
         val apiKey: String = "",
         val baseUrl: String = "https://api.elevenlabs.io",
         val model: String = "eleven_v3",
+        val fullDuplex: Boolean = false,
         val voiceId: String = "",
         val languageCode: String? = null,
         val stability: Float = 0.5f,
@@ -292,3 +293,7 @@ fun TTSProviderSetting.isElevenLabsV4Family(): Boolean = isElevenLabsV4() || isE
 
 fun TTSProviderSetting.supportsElevenLabsAudioTags(): Boolean =
     isElevenLabsV3() || isElevenLabsV4Family()
+
+/** Only live calls opt into Turbo; saved provider settings and ordinary TTS stay unchanged. */
+fun TTSProviderSetting.ElevenLabs.forRealtimeCall(): TTSProviderSetting.ElevenLabs =
+    if (fullDuplex && isElevenLabsV4Family()) copy(model = "eleven_v4_turbo") else this

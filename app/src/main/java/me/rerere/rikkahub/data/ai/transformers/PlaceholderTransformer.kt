@@ -6,6 +6,7 @@ import android.os.Build
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
+import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -23,12 +24,14 @@ import java.time.format.FormatStyle
 import java.time.temporal.Temporal
 import java.util.Locale
 import java.util.TimeZone
+import kotlin.random.Random
 
 data class PlaceholderCtx(
     val context: Context,
     val settingsStore: SettingsStore,
     val model: Model,
     val assistant: Assistant,
+    val systemPrompt: String = assistant.systemPrompt,
 )
 
 interface PlaceholderProvider {
@@ -142,12 +145,18 @@ object PlaceholderTransformer : InputMessageTransformer, KoinComponent {
         messages: List<UIMessage>,
     ): List<UIMessage> {
         val settingsStore = get<SettingsStore>()
+        val lastUserMessage = messages.lastOrNull { it.role == MessageRole.USER }?.toText().orEmpty()
         return messages.map {
             it.copy(
                 parts = it.parts.map { part ->
                     if (part is UIMessagePart.Text) {
                         part.copy(
-                            text = replacePlaceholders(text = part.text, ctx = ctx, settingsStore = settingsStore)
+                            text = replacePlaceholders(
+                                text = part.text,
+                                ctx = ctx,
+                                settingsStore = settingsStore,
+                                lastUserMessage = lastUserMessage,
+                            )
                         )
                     } else {
                         part
@@ -160,15 +169,22 @@ object PlaceholderTransformer : InputMessageTransformer, KoinComponent {
     private fun replacePlaceholders(
         text: String,
         ctx: TransformerContext,
-        settingsStore: SettingsStore
+        settingsStore: SettingsStore,
+        lastUserMessage: String,
     ): String {
-        var result = text
+        var result = COMMENT_MACRO.replace(text, "")
+        result = TRIM_MACRO.replace(result, "")
+        result = result.replace("{{assistant_system_prompt}}", ctx.systemPrompt, ignoreCase = true)
+        result = RANDOM_MACRO.replace(result) { match ->
+            match.groupValues[1].split("::").randomOrNull(Random) ?: ""
+        }
 
         val ctx = PlaceholderCtx(
             context = ctx.context,
             settingsStore = settingsStore,
             model = ctx.model,
-            assistant = ctx.assistant
+            assistant = ctx.assistant,
+            systemPrompt = ctx.systemPrompt,
         )
         defaultProvider.placeholders.forEach { (key, placeholderInfo) ->
             val value = placeholderInfo.resolver(ctx)
@@ -177,6 +193,10 @@ object PlaceholderTransformer : InputMessageTransformer, KoinComponent {
                 .replace(oldValue = "{$key}", newValue = value, ignoreCase = true)
         }
 
-        return result
+        return result.replace("{{lastUserMessage}}", lastUserMessage, ignoreCase = true)
     }
+
+    private val COMMENT_MACRO = Regex("""\{\{//.*?}}""", RegexOption.DOT_MATCHES_ALL)
+    private val TRIM_MACRO = Regex("""(?:\r?\n)?[ \t]*\{\{trim}}[ \t]*(?:\r?\n)?""")
+    private val RANDOM_MACRO = Regex("""\{\{random::(.*?)}}""", RegexOption.DOT_MATCHES_ALL)
 }

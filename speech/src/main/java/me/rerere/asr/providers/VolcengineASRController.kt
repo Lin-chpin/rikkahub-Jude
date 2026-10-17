@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import me.rerere.asr.ASRUtterance
 import me.rerere.asr.ASRController
 import me.rerere.asr.ASRProviderSetting
 import me.rerere.asr.ASRState
@@ -59,9 +60,13 @@ class VolcengineASRController(
     private var recorderJob: Job? = null
     private var audioRecord: AudioRecord? = null
     private var onTranscriptChange: ((String) -> Unit)? = null
+    private var onUtterance: ((ASRUtterance) -> Unit)? = null
     private var lastText = ""
 
-    override fun start(onTranscriptChange: (String) -> Unit) {
+    override fun start(
+        onTranscriptChange: (String) -> Unit,
+        onUtterance: ((ASRUtterance) -> Unit)?,
+    ) {
         if (state.value.isRecording) return
         if (ContextCompat.checkSelfPermission(
                 context,
@@ -72,7 +77,9 @@ class VolcengineASRController(
             return
         }
 
+        webSocket?.cancel()
         this.onTranscriptChange = onTranscriptChange
+        this.onUtterance = onUtterance
         lastText = ""
         _state.update {
             ASRState(
@@ -91,33 +98,45 @@ class VolcengineASRController(
 
         webSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                val payload = buildFullClientRequestPayload()
-                val compressed = gzipCompress(payload)
-                val frame = buildFrame(
-                    messageType = MSG_FULL_CLIENT_REQUEST,
-                    flags = 0x00,
-                    serialization = SER_JSON,
-                    compression = COMP_GZIP,
-                    payload = compressed
-                )
-                webSocket.send(frame.toByteString())
-                _state.update { it.copy(status = ASRStatus.Listening, errorMessage = null) }
-                startRecorder(webSocket)
+                scope.launch {
+                    if (this@VolcengineASRController.webSocket !== webSocket) return@launch
+                    val payload = buildFullClientRequestPayload()
+                    val compressed = gzipCompress(payload)
+                    val frame = buildFrame(
+                        messageType = MSG_FULL_CLIENT_REQUEST,
+                        flags = 0x00,
+                        serialization = SER_JSON,
+                        compression = COMP_GZIP,
+                        payload = compressed
+                    )
+                    webSocket.send(frame.toByteString())
+                    _state.update { it.copy(status = ASRStatus.Listening, errorMessage = null) }
+                    startRecorder(webSocket)
+                }
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                handleBinaryResponse(bytes.toByteArray())
+                scope.launch {
+                    if (this@VolcengineASRController.webSocket !== webSocket) return@launch
+                    handleBinaryResponse(bytes.toByteArray())
+                }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "Volcengine ASR websocket failed", t)
-                releaseRecorder()
-                setError(t.message ?: "ASR websocket failed")
+                scope.launch {
+                    if (this@VolcengineASRController.webSocket !== webSocket) return@launch
+                    Log.e(TAG, "Volcengine ASR websocket failed", t)
+                    releaseRecorder()
+                    setError(t.message ?: "ASR websocket failed")
+                }
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                releaseRecorder()
-                _state.update { it.copy(status = ASRStatus.Idle, errorMessage = null) }
+                scope.launch {
+                    if (this@VolcengineASRController.webSocket !== webSocket) return@launch
+                    releaseRecorder()
+                    _state.update { it.copy(status = ASRStatus.Idle, errorMessage = null) }
+                }
             }
         })
     }
@@ -150,7 +169,13 @@ class VolcengineASRController(
     }
 
     override fun dispose() {
-        stop()
+        onUtterance = null
+        onTranscriptChange = null
+        val socket = webSocket
+        webSocket = null
+        recorderJob?.cancel()
+        releaseRecorder()
+        socket?.cancel()
         scope.cancel()
     }
 
@@ -216,11 +241,20 @@ class VolcengineASRController(
                     return
                 }
 
-                val text = json.optJSONObject("result")?.optString("text", "") ?: ""
+                val result = json.optJSONObject("result")
+                val utterances = result?.optJSONArray("utterances")
+                if (utterances != null) {
+                    for (index in 0 until utterances.length()) {
+                        val utterance = utterances.optJSONObject(index) ?: continue
+                        val id = utterance.optLong("start_time").toString()
+                        onUtterance?.invoke(ASRUtterance(id, utterance.optString("text"), utterance.optBoolean("definite")))
+                    }
+                }
+                val text = result?.optString("text", "") ?: ""
                 if (text.isNotEmpty() && text != lastText) {
                     lastText = text
                     _state.update { it.copy(transcript = text, errorMessage = null) }
-                    scope.launch { onTranscriptChange?.invoke(text) }
+                    onTranscriptChange?.invoke(text)
                 }
             }
 
@@ -265,6 +299,7 @@ class VolcengineASRController(
                 chunkSize * 2
             )
             audioRecord = recorder
+            val echoCanceler = me.rerere.asr.enableAcousticEchoCancellation(recorder.audioSessionId)
 
             try {
                 recorder.startRecording()
@@ -291,10 +326,17 @@ class VolcengineASRController(
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Audio recording failed", e)
-                setError(e.message ?: "Audio recording failed")
+                if (isActive) {
+                    Log.e(TAG, "Audio recording failed", e)
+                    setError(e.message ?: "Audio recording failed")
+                }
             } finally {
-                releaseRecorder()
+                echoCanceler?.release()
+                synchronized(this@VolcengineASRController) {
+                    if (audioRecord === recorder) audioRecord = null
+                }
+                runCatching { recorder.stop() }
+                runCatching { recorder.release() }
             }
         }
     }
@@ -303,7 +345,9 @@ class VolcengineASRController(
         _state.update { it.copy(status = ASRStatus.Error, errorMessage = message) }
     }
 
+    @Synchronized
     private fun releaseRecorder() {
+        recorderJob?.cancel()
         recorderJob = null
         runCatching { audioRecord?.stop() }
         runCatching { audioRecord?.release() }

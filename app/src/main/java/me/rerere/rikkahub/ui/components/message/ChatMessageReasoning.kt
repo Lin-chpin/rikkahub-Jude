@@ -45,6 +45,7 @@ import me.rerere.hugeicons.stroke.Idea01
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.AssistantAffectScope
+import me.rerere.rikkahub.data.model.hasScriptedLorebookHtml
 import me.rerere.rikkahub.data.model.replaceRegexes
 import me.rerere.rikkahub.ui.components.richtext.MarkdownBlock
 import me.rerere.rikkahub.ui.components.ui.ChainOfThoughtScope
@@ -129,7 +130,14 @@ private fun ReasoningContent(
     val reasoningTextStyle = MaterialTheme.typography.bodySmall.copy(
         fontFamily = LocalTextStyle.current.fontFamily,
     )
-    val standaloneThinkingTitle = reasoning.reasoning.trim()
+    val settings = LocalSettings.current
+    val displayReasoning = reasoning.reasoning.replaceRegexes(
+        assistant = assistant,
+        scope = AssistantAffectScope.ASSISTANT,
+        visual = true,
+        lorebooks = settings.lorebooks,
+    )
+    val standaloneThinkingTitle = displayReasoning.trim()
         .takeIf { it.lines().size == 1 }
         ?.let { it.extractThinkingTitle() }
     Column(
@@ -175,13 +183,10 @@ private fun ReasoningContent(
                 )
             } else {
                 MarkdownBlock(
-                    content = reasoning.reasoning.replaceRegexes(
-                        assistant = assistant,
-                        scope = AssistantAffectScope.ASSISTANT,
-                        visual = true,
-                    ),
+                    content = displayReasoning,
                     style = reasoningTextStyle,
                     modifier = Modifier.fillMaxSize(),
+                    renderScriptedHtml = assistant?.hasScriptedLorebookHtml(settings.lorebooks) == true,
                 )
             }
         }

@@ -7,6 +7,7 @@ import io.ktor.http.HttpHeaders
 import io.pebbletemplates.pebble.PebbleEngine
 import kotlinx.serialization.json.Json
 import me.rerere.ai.provider.ProviderManager
+import me.rerere.common.http.RequestLogPrivacy
 import me.rerere.common.http.AcceptLanguageBuilder
 import me.rerere.rikkahub.BuildConfig
 import me.rerere.rikkahub.data.ai.AIRequestInterceptor
@@ -124,6 +125,15 @@ val dataSourceModule = module {
     single<OkHttpClient> {
         val acceptLang = AcceptLanguageBuilder.fromAndroid(get())
             .build()
+        val httpLogging = HttpLoggingInterceptor().apply {
+            level = HttpLoggingInterceptor.Level.HEADERS
+            redactHeader("Authorization")
+            redactHeader("Proxy-Authorization")
+            redactHeader("X-Api-Key")
+            redactHeader("Cookie")
+            redactHeader("Set-Cookie")
+            redactHeader("ChatGPT-Account-Id")
+        }
         OkHttpClient.Builder()
             .connectionPool(get())
             .connectTimeout(20, TimeUnit.SECONDS)
@@ -162,15 +172,10 @@ val dataSourceModule = module {
             }
             .addNetworkInterceptor(RequestLoggingInterceptor())
             .addInterceptor(AIRequestInterceptor(remoteConfig = get()))
-            .addInterceptor(HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.HEADERS
-                redactHeader("Authorization")
-                redactHeader("Proxy-Authorization")
-                redactHeader("X-Api-Key")
-                redactHeader("Cookie")
-                redactHeader("Set-Cookie")
-                redactHeader("ChatGPT-Account-Id")
-            })
+            .addInterceptor { chain ->
+                if (chain.request().tag(RequestLogPrivacy::class.java) != null) chain.proceed(chain.request())
+                else httpLogging.intercept(chain)
+            }
             .build().also { SearchService.init(it, get()) }
     }
 

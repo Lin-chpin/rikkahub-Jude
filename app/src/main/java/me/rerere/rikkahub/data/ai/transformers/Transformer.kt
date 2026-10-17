@@ -13,6 +13,7 @@ class TransformerContext(
     val model: Model,
     val assistant: Assistant,
     val settings: Settings,
+    val systemPrompt: String = assistant.systemPrompt,
     val conversationModeInjectionIds: Set<Uuid> = emptySet(),
     val conversationLorebookIds: Set<Uuid> = emptySet(),
     val processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
@@ -66,6 +67,7 @@ suspend fun List<UIMessage>.transforms(
     model: Model,
     assistant: Assistant,
     settings: Settings,
+    systemPrompt: String = assistant.systemPrompt,
     conversationModeInjectionIds: Set<Uuid> = emptySet(),
     conversationLorebookIds: Set<Uuid> = emptySet(),
     processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
@@ -75,6 +77,7 @@ suspend fun List<UIMessage>.transforms(
         model = model,
         assistant = assistant,
         settings = settings,
+        systemPrompt = systemPrompt,
         conversationModeInjectionIds = conversationModeInjectionIds,
         conversationLorebookIds = conversationLorebookIds,
         processingStatus = processingStatus

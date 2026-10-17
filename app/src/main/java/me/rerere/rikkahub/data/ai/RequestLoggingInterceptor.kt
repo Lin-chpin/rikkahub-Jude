@@ -2,6 +2,8 @@ package me.rerere.rikkahub.data.ai
 
 import me.rerere.common.android.LogEntry
 import me.rerere.common.android.Logging
+import me.rerere.common.http.RequestLogPrivacy
+import me.rerere.common.http.privateHttpFailureDetails
 import okhttp3.Interceptor
 import okhttp3.RequestBody
 import okhttp3.Response
@@ -11,9 +13,11 @@ class RequestLoggingInterceptor : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
         val startTime = System.currentTimeMillis()
+        val privateRequest = request.tag(RequestLogPrivacy::class.java) != null
+        val loggedUrl = if (privateRequest) request.url.newBuilder().query(null).build().toString() else request.url.toString()
 
-        val requestHeaders = request.headers.toMap()
-        val requestBody = if (request.url.host == OPENAI_AUTH_HOST) {
+        val requestHeaders = if (privateRequest) emptyMap() else request.headers.toMap()
+        val requestBody = if (privateRequest || request.url.host == OPENAI_AUTH_HOST) {
             REDACTED
         } else {
             request.body?.toLogString()
@@ -25,11 +29,11 @@ class RequestLoggingInterceptor : Interceptor {
         try {
             response = chain.proceed(request)
         } catch (e: Exception) {
-            error = e.message
+            error = if (privateRequest) e::class.simpleName else e.message
             Logging.logRequest(
                 LogEntry.RequestLog(
                     tag = "HTTP",
-                    url = request.url.toString(),
+                    url = loggedUrl,
                     method = request.method,
                     requestHeaders = requestHeaders,
                     requestBody = requestBody,
@@ -40,12 +44,13 @@ class RequestLoggingInterceptor : Interceptor {
         }
 
         val durationMs = System.currentTimeMillis() - startTime
-        val responseHeaders = response.headers.toMap()
+        val responseHeaders = if (privateRequest) emptyMap() else response.headers.toMap()
+        if (privateRequest && !response.isSuccessful) error = privateHttpFailureDetails(response)
 
         Logging.logRequest(
             LogEntry.RequestLog(
                 tag = "HTTP",
-                url = request.url.toString(),
+                url = loggedUrl,
                 method = request.method,
                 requestHeaders = requestHeaders,
                 requestBody = requestBody,
