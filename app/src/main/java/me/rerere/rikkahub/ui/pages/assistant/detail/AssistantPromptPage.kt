@@ -112,33 +112,47 @@ fun AssistantPromptPage(id: String) {
     )
     val assistant by vm.assistant.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    var promptToEdit by remember(id) { mutableStateOf<String?>(null) }
 
-    Scaffold(
-        topBar = {
-            LargeFlexibleTopAppBar(
-                title = {
-                    Text(stringResource(R.string.assistant_page_tab_prompt))
-                },
-                navigationIcon = {
-                    BackButton()
-                },
-                scrollBehavior = scrollBehavior,
-                colors = CustomColors.topBarColors,
-            )
-        },
-        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
-        containerColor = CustomColors.topBarColors.containerColor,
-    ) { innerPadding ->
-        // Do not initialize the editor with the VM's temporary, empty assistant.
-        if (!settings.init && assistant.id.toString() == id) {
-            key(assistant.id) {
-                AssistantPromptContent(
-                    modifier = Modifier.padding(innerPadding),
-                    assistant = assistant,
-                    settings = settings,
-                    onUpdate = { vm.update(it) }
+    // Do not initialize either editor with the VM's temporary, empty assistant.
+    if (!settings.init && assistant.id.toString() == id) {
+        key(assistant.id) {
+            if (promptToEdit != null) {
+                AssistantFullPromptEditor(
+                    prompt = promptToEdit.orEmpty(),
+                    savedPrompt = assistant.systemPrompt,
+                    onCancel = { promptToEdit = null },
+                    onSave = { prompt ->
+                        vm.update(assistant.copy(systemPrompt = prompt))
+                        promptToEdit = null
+                    },
                 )
+            } else {
+                val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+                Scaffold(
+                    topBar = {
+                        LargeFlexibleTopAppBar(
+                            title = {
+                                Text(stringResource(R.string.assistant_page_tab_prompt))
+                            },
+                            navigationIcon = {
+                                BackButton()
+                            },
+                            scrollBehavior = scrollBehavior,
+                            colors = CustomColors.topBarColors,
+                        )
+                    },
+                    modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+                    containerColor = CustomColors.topBarColors.containerColor,
+                ) { innerPadding ->
+                    AssistantPromptContent(
+                        modifier = Modifier.padding(innerPadding),
+                        assistant = assistant,
+                        settings = settings,
+                        onUpdate = { vm.update(it) },
+                        onEditFullPrompt = { promptToEdit = it },
+                    )
+                }
             }
         }
     }
@@ -149,7 +163,8 @@ private fun AssistantPromptContent(
     modifier: Modifier = Modifier,
     assistant: Assistant,
     settings: Settings,
-    onUpdate: (Assistant) -> Unit
+    onUpdate: (Assistant) -> Unit,
+    onEditFullPrompt: (String) -> Unit,
 ) {
     val context = LocalContext.current
     val templateTransformer = koinInject<TemplateTransformer>()
@@ -182,6 +197,7 @@ private fun AssistantPromptContent(
                     AssistantPromptRecovery(
                         prompt = assistant.systemPrompt,
                         onClear = { latestOnUpdate(latestAssistant.copy(systemPrompt = "")) },
+                        onEdit = { onEditFullPrompt(assistant.systemPrompt) },
                     )
                 } else {
                     val systemPromptValue = rememberTextFieldState(
@@ -202,6 +218,7 @@ private fun AssistantPromptContent(
                         AssistantPromptRecovery(
                             prompt = systemPromptValue.text.toString(),
                             onClear = { systemPromptValue.edit { replace(0, length, "") } },
+                            onEdit = { onEditFullPrompt(systemPromptValue.text.toString()) },
                         )
                     } else {
                         TextArea(

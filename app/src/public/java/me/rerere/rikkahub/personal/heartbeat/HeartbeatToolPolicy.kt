@@ -29,6 +29,7 @@ class HeartbeatToolPolicy(private val config: HeartbeatConfig) {
         }
 
     fun classify(tool: Tool): HeartbeatToolRisk {
+        if (tool.name == SentinelRun.NAME && config.enabled && config.sentinel.enabled) return HeartbeatToolRisk.AUTONOMOUS
         if (tool.name.startsWith(MCP_TOOL_PREFIX)) {
             return if (tool.needsApproval) {
                 HeartbeatToolRisk.HIGH_RISK

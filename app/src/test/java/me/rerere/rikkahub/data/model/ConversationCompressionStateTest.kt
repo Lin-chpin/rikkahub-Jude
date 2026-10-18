@@ -102,6 +102,53 @@ class ConversationCompressionStateTest {
     }
 
     @Test
+    fun deletingMessageRemovesAllFollowingNodesAndKeepsEarlierVariants() {
+        val before = messageNode("before")
+        val selected = UIMessage.user("A")
+        val alternate = UIMessage.user("A alternate")
+        val target = MessageNode(messages = listOf(selected, alternate), selectIndex = 0)
+        val reply = MessageNode.of(UIMessage.assistant("B"))
+        val tool = MessageNode.of(
+            UIMessage(
+                role = MessageRole.TOOL,
+                parts = listOf(UIMessagePart.Text("tool result")),
+            )
+        )
+        val conversation = conversationOf(before, target, reply, tool).copy(
+            compressedSummary = "before summary",
+            compressedMessageNodeIds = setOf(before.id),
+        )
+
+        val updated = conversation.deleteMessageAndFollowingNodes(selected.id)
+
+        assertNotNull(updated)
+        updated!!
+        assertEquals(listOf(before.id, target.id), updated.messageNodes.map { it.id })
+        assertEquals(listOf(alternate.id), updated.messageNodes.last().messages.map { it.id })
+        assertEquals("before summary", updated.compressedSummary)
+        assertEquals(setOf(before.id), updated.compressedMessageNodeIds)
+    }
+
+    @Test
+    fun deletingCompressedMessageClearsSummaryContainingDeletedContext() {
+        val before = messageNode("before")
+        val target = messageNode("A")
+        val reply = MessageNode.of(UIMessage.assistant("B"))
+        val conversation = conversationOf(before, target, reply).copy(
+            compressedSummary = "before, A and B",
+            compressedMessageNodeIds = setOf(before.id, target.id),
+        )
+
+        val updated = conversation.deleteMessageAndFollowingNodes(target.currentMessage.id)
+
+        assertNotNull(updated)
+        updated!!
+        assertEquals(listOf(before.id), updated.messageNodes.map { it.id })
+        assertNull(updated.compressedSummary)
+        assertEquals(emptySet<Uuid>(), updated.compressedMessageNodeIds)
+    }
+
+    @Test
     fun updatingAllCurrentMessagesAfterCompressionPreservesNodeStructure() {
         val first = messageNode("A")
         val second = messageNode("B")

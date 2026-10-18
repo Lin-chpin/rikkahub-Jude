@@ -15,10 +15,12 @@ data class HeartbeatConfig(
     val readOnlyToolNames: Set<String> = DEFAULT_READ_ONLY_TOOLS,
     val lowRiskWriteToolNames: Set<String> = DEFAULT_LOW_RISK_WRITE_TOOLS,
     val autonomousToolNames: Set<String> = DEFAULT_AUTONOMOUS_TOOLS,
+    val sentinel: SentinelConfig = SentinelConfig(),
 ) {
     fun normalized(): HeartbeatConfig {
         val normalizedMin = minIntervalMinutes.coerceIn(5, 24 * 60)
         return copy(
+            sentinel = sentinel.normalized().copy(enabled = enabled && sentinel.enabled),
             minIntervalMinutes = normalizedMin,
             maxIntervalMinutes = maxIntervalMinutes.coerceIn(normalizedMin, 7 * 24 * 60),
             generationTimeoutSeconds = generationTimeoutSeconds.coerceIn(30, 10 * 60),

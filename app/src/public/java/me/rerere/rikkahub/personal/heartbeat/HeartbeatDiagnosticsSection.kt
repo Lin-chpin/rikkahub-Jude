@@ -23,11 +23,6 @@ internal fun HeartbeatCurrentDiagnosticsSection(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text(
-            text = stringResource(R.string.heartbeat_diagnostics_title),
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.primary,
-        )
         HeartbeatInfoRow(
             label = stringResource(R.string.heartbeat_run_status_label),
             value = runStatus.phase.displayText(),
@@ -127,6 +122,7 @@ internal fun HeartbeatHistoryDiagnosticsSection(
                 },
             )
         }
+        diagnostics.lastAiResponse?.let { HeartbeatResponseStats(it, R.string.heartbeat_ai_response_usage) }
     }
 }
 
@@ -173,7 +169,7 @@ private fun HeartbeatRunPhase.displayText(): String = stringResource(
 )
 
 @Composable
-private fun HeartbeatRunReason.displayText(): String = stringResource(
+internal fun HeartbeatRunReason.displayText(): String = stringResource(
     when (this) {
         HeartbeatRunReason.NONE -> R.string.heartbeat_reason_none
         HeartbeatRunReason.MESSAGE_SENT -> R.string.heartbeat_reason_message_sent

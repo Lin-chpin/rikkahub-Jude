@@ -209,11 +209,17 @@ class HeartbeatForegroundService : Service(), KoinComponent {
         executionJob = serviceScope.launch {
             var store: HeartbeatConfigStore? = null
             var gateAcquired = false
+            var privateRun = false
+            var sentinelCycleWasActive = false
             val runStartedAtMillis = System.currentTimeMillis()
             try {
                 val activeStore = HeartbeatConfigStore(this@HeartbeatForegroundService, runAssistantId)
                 store = activeStore
                 val config = activeStore.read()
+                privateRun = config.sentinel.enabled
+                val initialSentinelState = activeStore.readSentinelState()
+                sentinelCycleWasActive = initialSentinelState.active
+                val executionConfig = config.forCurrentCycle(initialSentinelState)
                 if (!config.enabled) {
                     activeStore.recordRunStatus(
                         phase = HeartbeatRunPhase.SKIPPED_DISABLED,
@@ -249,10 +255,13 @@ class HeartbeatForegroundService : Service(), KoinComponent {
                     )
                     return@launch
                 }
+                if (config.sentinel.enabled && !autonomousTrigger && !readOnlyTest) activeStore.updateSentinelDiagnostics {
+                    it.begin(runStartedAtMillis, source)
+                }
                 when (
                     HeartbeatExecutionGate.tryAcquire(
                         store = activeStore,
-                        config = config,
+                        config = executionConfig,
                         bypassMinimumInterval = forceTrigger || autonomousTrigger || retryTrigger,
                         recordClaim = !readOnlyTest,
                     )
@@ -303,7 +312,8 @@ class HeartbeatForegroundService : Service(), KoinComponent {
                 )
                 HeartbeatNotifications.updateServiceStatus(this@HeartbeatForegroundService, generating = true)
 
-                val result = withTimeout(config.generationTimeoutSeconds * 1_000L) {
+                if (privateRun) Logging.log(TAG, "run=$runStartedAtMillis event=start")
+                val result = withTimeout(executionConfig.generationTimeoutSeconds * 1_000L) {
                     HeartbeatGenerationWorkflow(this@HeartbeatForegroundService).run(
                         config = config,
                         mode = if (readOnlyTest) {
@@ -311,6 +321,8 @@ class HeartbeatForegroundService : Service(), KoinComponent {
                         } else {
                             HeartbeatExecutionMode.LIVE
                         },
+                        manualTrigger = !readOnlyTest && source == "manual",
+                        runStartedAtMillis = runStartedAtMillis,
                     )
                 }
                 val completionImpact = result.toRunImpact(readOnlyTest)
@@ -330,8 +342,13 @@ class HeartbeatForegroundService : Service(), KoinComponent {
                     )
                 }
             } catch (error: TimeoutCancellationException) {
+                val detail = if (privateRun) error.toPrivateHeartbeatDiagnosticDetail(
+                    store?.readSentinelDiagnostics().generationFailureStage(runStartedAtMillis),
+                ) else null
+                if (detail != null) Logging.log(TAG, "run=$runStartedAtMillis $detail")
                 store?.recordRunStatus(
                     phase = HeartbeatRunPhase.TIMED_OUT,
+                    detail = detail,
                     reason = HeartbeatRunReason.TIMEOUT,
                     assistantId = runAssistantId,
                     triggerSource = source,
@@ -365,10 +382,15 @@ class HeartbeatForegroundService : Service(), KoinComponent {
                 Log.d(TAG, "Heartbeat generation cancelled")
                 throw error
             } catch (error: Exception) {
-                Log.e(TAG, "Heartbeat generation failed", error)
+                val detail = if (privateRun) error.toPrivateHeartbeatDiagnosticDetail(
+                    store?.readSentinelDiagnostics().generationFailureStage(runStartedAtMillis),
+                ) else error::class.simpleName
+                if (privateRun) Log.e(TAG, "Heartbeat generation failed $detail")
+                else Log.e(TAG, "Heartbeat generation failed", error)
+                Logging.log(TAG, "run=$runStartedAtMillis $detail")
                 store?.recordRunStatus(
                     phase = HeartbeatRunPhase.FAILED,
-                    detail = error::class.simpleName,
+                    detail = detail,
                     reason = HeartbeatFailureClassifier.classify(error),
                     assistantId = runAssistantId,
                     triggerSource = source,
@@ -397,7 +419,15 @@ class HeartbeatForegroundService : Service(), KoinComponent {
                         )
                     }
                     store?.let { activeStore ->
+                        if (privateRun && !autonomousTrigger && !readOnlyTest) activeStore.updateSentinelDiagnostics {
+                            if (it.wakeStartedAtMillis == runStartedAtMillis && it.phase == "waking") {
+                                val status = activeStore.runStatus.value
+                                val failed = status.phase in setOf(HeartbeatRunPhase.FAILED, HeartbeatRunPhase.TIMED_OUT)
+                                it.complete(if (failed) "wake_failed" else "not_called", if (status.phase in setOf(HeartbeatRunPhase.SENT, HeartbeatRunPhase.PASS)) "ai_skipped" else status.reason.name.lowercase(), System.currentTimeMillis(), false, failed)
+                            } else it
+                        }
                         val latest = activeStore.read()
+                        val sentinelCycleEnded = sentinelCycleWasActive && !activeStore.readSentinelState().active
                         // A diagnostic run must not consume, replace, or cancel the live alarm plan.
                         if (!readOnlyTest) {
                             if (latest.enabled) {
@@ -405,6 +435,9 @@ class HeartbeatForegroundService : Service(), KoinComponent {
                                     this@HeartbeatForegroundService,
                                     latest,
                                     intervalAnchorAtMillis = runStartedAtMillis,
+                                    preserveRegularPlan = !sentinelCycleEnded && (
+                                        autonomousTrigger || retryTrigger || activeStore.lastUserMessageAt() > runStartedAtMillis
+                                    ),
                                 )
                             } else {
                                 HeartbeatScheduler.cancel(this@HeartbeatForegroundService)

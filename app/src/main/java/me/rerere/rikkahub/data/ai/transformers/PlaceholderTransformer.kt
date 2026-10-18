@@ -196,7 +196,7 @@ object PlaceholderTransformer : InputMessageTransformer, KoinComponent {
         return result.replace("{{lastUserMessage}}", lastUserMessage, ignoreCase = true)
     }
 
-    private val COMMENT_MACRO = Regex("""\{\{//.*?}}""", RegexOption.DOT_MATCHES_ALL)
-    private val TRIM_MACRO = Regex("""(?:\r?\n)?[ \t]*\{\{trim}}[ \t]*(?:\r?\n)?""")
-    private val RANDOM_MACRO = Regex("""\{\{random::(.*?)}}""", RegexOption.DOT_MATCHES_ALL)
+    private val COMMENT_MACRO = Regex("""\{\{//.*?\}\}""", RegexOption.DOT_MATCHES_ALL)
+    private val TRIM_MACRO = Regex("""(?:\r?\n)?[ \t]*\{\{trim\}\}[ \t]*(?:\r?\n)?""")
+    private val RANDOM_MACRO = Regex("""\{\{random::(.*?)\}\}""", RegexOption.DOT_MATCHES_ALL)
 }

@@ -1,6 +1,7 @@
 package me.rerere.rikkahub.personal.heartbeat
 
 import kotlinx.serialization.Serializable
+import me.rerere.ai.ui.UIMessage
 import kotlin.math.pow
 import kotlin.random.Random
 
@@ -17,6 +18,7 @@ data class HeartbeatRunDiagnostics(
     val lastTriggerSource: String? = null,
     val lastStateRecoveryAtMillis: Long? = null,
     val lastStateRecoveryArea: String? = null,
+    val lastAiResponse: UIMessage? = null,
 ) {
     companion object {
         const val CURRENT_SCHEMA_VERSION = 1

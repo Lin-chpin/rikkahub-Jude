@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.personal.heartbeat
 
+import me.rerere.common.http.privateFailureStatusCode
 import java.io.IOException
 import java.net.ConnectException
 import java.net.NoRouteToHostException
@@ -11,6 +12,16 @@ import javax.net.ssl.SSLException
 object HeartbeatFailureClassifier {
     fun classify(error: Throwable): HeartbeatRunReason {
         val causes = error.causeChain().toList()
+        // Numeric quota counters and retry delays must not be mistaken for HTTP status codes.
+        privateFailureStatusCode(error)?.let { status ->
+            return when {
+                status == 401 -> HeartbeatRunReason.AUTHENTICATION_FAILED
+                status == 429 -> HeartbeatRunReason.RATE_LIMITED
+                causes.any { it is SocketTimeoutException } -> HeartbeatRunReason.NETWORK_TIMEOUT
+                causes.any { it is IOException } -> HeartbeatRunReason.NETWORK_UNAVAILABLE
+                else -> HeartbeatRunReason.GENERATION_FAILURE
+            }
+        }
         val searchable = causes.joinToString(" ") { cause ->
             "${cause::class.qualifiedName.orEmpty()} ${cause.message.orEmpty()}"
         }.lowercase()

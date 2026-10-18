@@ -8,6 +8,9 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import me.rerere.rikkahub.data.model.InjectionPosition
@@ -232,6 +235,77 @@ object LorebookSerializer : ExportSerializer<Lorebook> {
         }.getOrNull()
     }
 
+    internal fun tryImportSillyTavernCharacterBook(characterBook: JsonObject, cardName: String): Lorebook? {
+        return runCatching {
+            val rawEntries = when (val entries = characterBook["entries"]) {
+                is JsonArray -> entries
+                is JsonObject -> entries.values.toList()
+                else -> emptyList()
+            }
+            val entries = rawEntries.mapNotNull { element ->
+                val entry = element as? JsonObject ?: return@mapNotNull null
+                val extension = entry["extensions"] as? JsonObject
+                val content = entry.string("content")
+                if (content.isBlank()) return@mapNotNull null
+                val position = when (entry.string("position")) {
+                    "before_char", "0" -> InjectionPosition.BEFORE_SYSTEM_PROMPT
+                    "after_char", "1" -> InjectionPosition.AFTER_SYSTEM_PROMPT
+                    "2", "3" -> InjectionPosition.TOP_OF_CHAT
+                    "4" -> InjectionPosition.AT_DEPTH
+                    else -> InjectionPosition.AFTER_SYSTEM_PROMPT
+                }
+                PromptInjection.RegexInjection(
+                    id = Uuid.random(),
+                    name = entry.string("comment").ifBlank {
+                        entry.strings("keys").firstOrNull() ?: entry.strings("key").firstOrNull().orEmpty()
+                    },
+                    enabled = entry.boolean("enabled") ?: !entry.boolean("disable").orFalse(),
+                    priority = entry.int("insertion_order") ?: entry.int("order") ?: 100,
+                    position = position,
+                    content = content,
+                    injectDepth = extension?.int("depth") ?: entry.int("depth") ?: 4,
+                    role = when (extension?.string("role") ?: entry.string("role")) {
+                        "1", "user" -> MessageRole.USER
+                        "2", "assistant" -> MessageRole.ASSISTANT
+                        else -> MessageRole.SYSTEM
+                    },
+                    keywords = entry.strings("keys").ifEmpty { entry.strings("key") },
+                    useRegex = entry.boolean("use_regex") ?: false,
+                    caseSensitive = extension?.boolean("case_sensitive")
+                        ?: entry.boolean("case_sensitive") ?: false,
+                    scanDepth = extension?.int("scan_depth")
+                        ?: entry.int("scan_depth")
+                        ?: characterBook.int("scan_depth")
+                        ?: 4,
+                    constantActive = entry.boolean("constant") ?: false,
+                )
+            }
+            if (entries.isEmpty()) return null
+            Lorebook(
+                id = Uuid.random(),
+                name = characterBook.string("name").ifBlank { "$cardName 世界书" },
+                description = characterBook.string("description"),
+                enabled = true,
+                entries = entries,
+            )
+        }.getOrNull()
+    }
+
+    private fun JsonObject.string(key: String): String =
+        (this[key] as? JsonPrimitive)?.contentOrNull.orEmpty()
+
+    private fun JsonObject.int(key: String): Int? = string(key).toIntOrNull()
+
+    private fun JsonObject.boolean(key: String): Boolean? = string(key).toBooleanStrictOrNull()
+
+    private fun JsonObject.strings(key: String): List<String> = when (val value = this[key]) {
+        is JsonArray -> value.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+        is JsonPrimitive -> value.contentOrNull?.let(::listOf).orEmpty()
+        else -> emptyList()
+    }
+
+    private fun Boolean?.orFalse() = this ?: false
+
     internal fun tryImportSillyTavernPreset(json: String, fileName: String?): Lorebook? {
         return runCatching {
             val preset = ExportSerializer.DefaultJson.decodeFromString(
@@ -244,10 +318,12 @@ object LorebookSerializer : ExportSerializer<Lorebook> {
             val historyIndex = order.indexOfFirst { it.identifier == "chatHistory" }
             val entryCount = order.size
 
-            val entries = preset.prompts.mapNotNull { prompt ->
-                val orderInfo = orderById[prompt.identifier]
-                val orderIndex = orderInfo?.first ?: order.size
-                val isOrderedAndEnabled = orderInfo?.second == true
+            val entries = preset.prompts
+                .sortedBy { orderById[it.identifier]?.first ?: order.size }
+                .mapNotNull { prompt ->
+                val orderInfo = orderById[prompt.identifier] ?: return@mapNotNull null
+                val orderIndex = orderInfo.first
+                val isOrderedAndEnabled = orderInfo.second
                 val marker = prompt.identifier == "charDescription" && prompt.content.isBlank()
                 val content = when {
                     marker -> "{{assistant_system_prompt}}"
@@ -269,11 +345,7 @@ object LorebookSerializer : ExportSerializer<Lorebook> {
                     isAfterHistory -> 0
                     else -> prompt.injectionDepth
                 }
-                val priority = if (isInChat) {
-                    -prompt.injectionOrder
-                } else {
-                    entryCount - orderIndex
-                }
+                val priority = entryCount - orderIndex
 
                 PromptInjection.RegexInjection(
                     id = Uuid.random(),

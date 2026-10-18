@@ -52,7 +52,12 @@ data class Conversation(
                 .flatMap { reply -> reply.segments }
                 .flatMap { segment -> segment.audioSegments }
                 .map { it.audioUri.toUri() }
-            return (partFiles + ttsFiles + chatVoiceFiles).distinct()
+            val voiceCallFiles = messages
+                .flatMap { it.annotations }
+                .filterIsInstance<UIMessageAnnotation.VoiceCallRecord>()
+                .flatMap { record -> record.audioSegments + record.audioSegmentsByMessageId.values.flatten() }
+                .map { it.audioUri.toUri() }
+            return (partFiles + ttsFiles + chatVoiceFiles + voiceCallFiles).distinct()
         }
 
     /**
@@ -163,6 +168,34 @@ data class Conversation(
 
     fun getMessageNodeByMessageId(messageId: Uuid): MessageNode? {
         return messageNodes.firstOrNull { node -> node.messages.any { it.id == messageId } }
+    }
+
+    fun deleteMessageAndFollowingNodes(messageId: Uuid): Conversation? {
+        val targetNodeIndex = messageNodes.indexOfFirst { node ->
+            node.messages.any { it.id == messageId }
+        }
+        if (targetNodeIndex == -1) return null
+
+        val targetNode = messageNodes[targetNodeIndex]
+        val remainingMessages = targetNode.messages.filterNot { it.id == messageId }
+        val updatedNodes = messageNodes.take(targetNodeIndex) + listOfNotNull(
+            remainingMessages.takeIf { it.isNotEmpty() }?.let { messages ->
+                targetNode.copy(
+                    messages = messages,
+                    selectIndex = targetNode.selectIndex.coerceAtMost(messages.lastIndex),
+                )
+            }
+        )
+        val removesCompressedContext = messageNodes
+            .asSequence()
+            .drop(targetNodeIndex)
+            .any { it.id in activeCompressedMessageNodeIds }
+
+        return copy(
+            messageNodes = updatedNodes,
+            compressedSummary = if (removesCompressedContext) null else compressedSummary,
+            compressedMessageNodeIds = if (removesCompressedContext) emptySet() else compressedMessageNodeIds,
+        )
     }
 
     fun updateCurrentMessages(messages: List<UIMessage>): Conversation {

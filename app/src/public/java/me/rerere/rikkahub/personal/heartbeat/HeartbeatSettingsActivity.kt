@@ -93,6 +93,8 @@ class HeartbeatSettingsActivity : ComponentActivity() {
                 val storedConfig by assistantStore.config.collectAsStateWithLifecycle()
                 val runStatus by assistantStore.runStatus.collectAsStateWithLifecycle()
                 val diagnostics by assistantStore.diagnostics.collectAsStateWithLifecycle()
+                val sentinelState by assistantStore.sentinelState.collectAsStateWithLifecycle()
+                val sentinelDiagnostics by assistantStore.sentinelDiagnostics.collectAsStateWithLifecycle()
                 val nextTriggerAt by assistantStore.nextTriggerAt.collectAsStateWithLifecycle()
                 var draft by remember(currentAssistantId, storedConfig) {
                     mutableStateOf(storedConfig)
@@ -122,7 +124,12 @@ class HeartbeatSettingsActivity : ComponentActivity() {
                             actions = {
                                 Switch(
                                     checked = draft.enabled,
-                                    onCheckedChange = { draft = draft.copy(enabled = it) },
+                                    onCheckedChange = {
+                                        val updated = draft.copy(enabled = it, sentinel = draft.sentinel.copy(enabled = it && draft.sentinel.enabled), assistantId = currentAssistantId)
+                                        draft = updated
+                                        assistantStore.update(updated)
+                                        HeartbeatScheduler.scheduleNext(this@HeartbeatSettingsActivity, updated)
+                                    },
                                 )
                             },
                         )
@@ -161,10 +168,8 @@ class HeartbeatSettingsActivity : ComponentActivity() {
                             onRequestExactAlarm = ::requestExactAlarmPermissionIfNeeded,
                             onOpenBatterySettings = ::openBatteryOptimizationSettings,
                         )
-                        HeartbeatGlassSection {
+                        HeartbeatExpandableSection(stringResource(R.string.heartbeat_diagnostics_title)) {
                             HeartbeatCurrentDiagnosticsSection(visibleRunStatus)
-                        }
-                        HeartbeatGlassSection {
                             HeartbeatHistoryDiagnosticsSection(diagnostics)
                             if (assistantStore.isGoodNightActive()) {
                                 Text(
@@ -177,6 +182,9 @@ class HeartbeatSettingsActivity : ComponentActivity() {
                                 Text(stringResource(R.string.heartbeat_goodnight_off))
                             }
                         }
+                        HeartbeatExpandableSection(stringResource(R.string.sentinel_diagnostics_title)) {
+                            SentinelDiagnosticsSection(sentinelDiagnostics, sentinelState, assistantStore.readRegularTriggerAt(), storedConfig.sentinel.enabled)
+                        }
                         HeartbeatGlassSection {
                             Text(
                                 text = stringResource(R.string.heartbeat_prompt_label),
@@ -188,7 +196,7 @@ class HeartbeatSettingsActivity : ComponentActivity() {
                                 onValueChange = { draft = draft.copy(heartbeatPrompt = it) },
                                 placeholder = {
                                     Text(
-                                        text = stringResource(R.string.heartbeat_prompt_placeholder),
+                                        text = stringResource(if (draft.sentinel.enabled) R.string.sentinel_prompt_example else R.string.heartbeat_prompt_placeholder),
                                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
                                     )
                                 },
@@ -201,11 +209,23 @@ class HeartbeatSettingsActivity : ComponentActivity() {
                             )
                         }
 
-                        HeartbeatGlassSection {
-                            Text(
-                                text = stringResource(R.string.heartbeat_runtime_settings_title),
-                                style = MaterialTheme.typography.titleMedium,
-                            )
+                        SentinelSettingsSection(
+                            config = draft, settings = settings, assistant = currentAssistant, state = sentinelState,
+                            onChange = { updated ->
+                                val changedEnabled = updated.sentinel.enabled != draft.sentinel.enabled
+                                val changedPrivacy = updated.sentinel.blockedPackages != draft.sentinel.blockedPackages
+                                draft = updated
+                                if (changedEnabled || changedPrivacy) {
+                                    assistantStore.update(updated.copy(assistantId = currentAssistantId))
+                                    HeartbeatScheduler.scheduleNext(this@HeartbeatSettingsActivity, updated.copy(assistantId = currentAssistantId), preserveRegularPlan = !changedEnabled)
+                                }
+                            },
+                            onResumeObservation = {
+                                assistantStore.update(draft.copy(assistantId = currentAssistantId))
+                                assistantStore.updateSentinelState { it.copy(pauseReason = null).invalidate() }
+                            },
+                        )
+                        HeartbeatExpandableSection(stringResource(R.string.heartbeat_runtime_settings_title)) {
                             NumberField(
                                 label = stringResource(R.string.heartbeat_min_interval),
                                 value = draft.minIntervalMinutes,
@@ -250,7 +270,7 @@ class HeartbeatSettingsActivity : ComponentActivity() {
                             Button(
                                 onClick = {
                                     assistantStore.update(draft.copy(assistantId = currentAssistantId))
-                                    HeartbeatScheduler.sync(this@HeartbeatSettingsActivity)
+                                    HeartbeatScheduler.scheduleNext(this@HeartbeatSettingsActivity, draft.copy(assistantId = currentAssistantId))
                                     if (draft.enabled) {
                                         requestExactAlarmPermissionIfNeeded()
                                     }
@@ -369,28 +389,6 @@ private fun ToggleRow(
         )
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
-}
-
-@androidx.compose.runtime.Composable
-private fun NumberField(
-    label: String,
-    value: Int,
-    onValueChange: (Int) -> Unit,
-) {
-    var text by remember(value) { mutableStateOf(value.toString()) }
-    OutlinedTextField(
-        value = text,
-        onValueChange = { newText ->
-            text = newText
-            newText.toIntOrNull()?.let(onValueChange)
-        },
-        label = { Text(label) },
-        modifier = Modifier.fillMaxWidth(),
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        shape = RoundedCornerShape(18.dp),
-        colors = heartbeatTextFieldColors(),
-    )
 }
 
 @Composable

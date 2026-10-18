@@ -2777,14 +2777,6 @@ class ChatService(
                 if (!record.standalone) add(message.id.toString())
             }
         }
-        val audioUris = recordMessages
-            .flatMap { (_, record) ->
-                record.audioSegments + record.audioSegmentsByMessageId.values.flatten()
-            }
-            .map { it.audioUri }
-            .distinct()
-            .map(String::toUri)
-
         val updatedNodes = conversation.messageNodes.mapNotNull { node ->
             val remainingMessages = node.messages.filterNot { message ->
                 message.id.toString() in linkedMessageIds ||
@@ -2803,7 +2795,6 @@ class ChatService(
             conversationId,
             conversation.copy(messageNodes = updatedNodes),
         )
-        filesManager.deleteChatFiles(audioUris)
     }
 
     suspend fun deleteMessage(
@@ -2812,7 +2803,7 @@ class ChatService(
         failIfMissing: Boolean = true,
     ) {
         val currentConversation = getConversationFlow(conversationId).value
-        val updatedConversation = buildConversationAfterMessageDelete(currentConversation, messageId)
+        val updatedConversation = currentConversation.deleteMessageAndFollowingNodes(messageId)
 
         if (updatedConversation == null) {
             if (failIfMissing) {
@@ -2829,37 +2820,6 @@ class ChatService(
         message: UIMessage,
     ) {
         deleteMessage(conversationId, message.id, failIfMissing = false)
-    }
-
-    private fun buildConversationAfterMessageDelete(
-        conversation: Conversation,
-        messageId: Uuid,
-    ): Conversation? {
-        val targetNodeIndex = conversation.messageNodes.indexOfFirst { node ->
-            node.messages.any { it.id == messageId }
-        }
-        if (targetNodeIndex == -1) {
-            return null
-        }
-
-        val updatedNodes = conversation.messageNodes.mapIndexedNotNull { index, node ->
-            if (index != targetNodeIndex) {
-                return@mapIndexedNotNull node
-            }
-
-            val nextMessages = node.messages.filterNot { it.id == messageId }
-            if (nextMessages.isEmpty()) {
-                return@mapIndexedNotNull null
-            }
-
-            val nextSelectIndex = node.selectIndex.coerceAtMost(nextMessages.lastIndex)
-            node.copy(
-                messages = nextMessages,
-                selectIndex = nextSelectIndex,
-            )
-        }
-
-        return conversation.copy(messageNodes = updatedNodes)
     }
 
     private fun UIMessagePart.copyWithForkedFileUrl(): UIMessagePart {

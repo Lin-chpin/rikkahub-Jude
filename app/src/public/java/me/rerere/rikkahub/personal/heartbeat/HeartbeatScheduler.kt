@@ -33,18 +33,24 @@ object HeartbeatScheduler {
                 triggerAt?.let { autonomousWakeAt < it } == true
             // Reopening the app must not postpone an already scheduled heartbeat.
             if (triggerAt == null || autonomousTriggerEarlier) {
-                scheduleNext(context, config)
+                scheduleNext(context, config, preserveRegularPlan = triggerAt != null)
             }
         }
         rearmEarliest(context)
     }
 
+    @Synchronized
     fun scheduleNext(
         context: Context,
         rawConfig: HeartbeatConfig,
         intervalAnchorAtMillis: Long? = null,
+        preserveRegularPlan: Boolean = false,
     ) {
-        val config = rawConfig.normalized()
+        val normalized = rawConfig.normalized()
+        val cycleStore = HeartbeatConfigStore(context, normalized.assistantId)
+        val cycle = cycleStore.readSentinelState()
+        cycleStore.close()
+        val config = normalized.forCurrentCycle(cycle)
         val assistantId = config.assistantId
         if (!config.enabled || assistantId.isNullOrBlank()) {
             cancel(context, assistantId)
@@ -55,6 +61,7 @@ object HeartbeatScheduler {
         val goodNightActive = store.isGoodNightActive()
         val lastAssistantMessageAt = store.lastAssistantMessageAt()
         val lastUserMessageAt = store.lastUserMessageAt()
+        val existingRegularTriggerAt = store.readRegularTriggerAt()
         val now = System.currentTimeMillis()
         val desireState = store.readDesireState().advance(now)
         val retryAtMillis = store.readDiagnostics().nextRetryAtMillis
@@ -62,7 +69,7 @@ object HeartbeatScheduler {
         store.close()
         val autonomousWakeAt = HeartbeatScheduleStore(context)
             .nextWakeAtMillis(assistantId)
-        val delayMinutes = if (goodNightActive) {
+        val delayMinutes = if (goodNightActive && !cycle.active) {
             GOOD_NIGHT_INTERVAL_MINUTES
         } else {
             val baseDelayMinutes = desireState.nextWakeMinutes(
@@ -75,22 +82,32 @@ object HeartbeatScheduler {
                 maximumMinutes = config.maxIntervalMinutes,
             )
         }
-        val regularTriggerAt = HeartbeatScheduleTiming.nextRegularTriggerAtMillis(
+        val preserveUserPlan = intervalAnchorAtMillis != null && lastUserMessageAt > intervalAnchorAtMillis
+        val regularTriggerAt = existingRegularTriggerAt?.takeIf { (preserveRegularPlan || preserveUserPlan) && it > now }
+            ?: HeartbeatScheduleTiming.nextRegularTriggerAtMillis(
             nowMillis = now,
             delayMinutes = delayMinutes,
             anchorAtMillis = if (intervalAnchorAtMillis != null) {
-                maxOf(intervalAnchorAtMillis, lastUserMessageAt)
+                maxOf(intervalAnchorAtMillis, lastUserMessageAt, cycle.anchorAtMillis)
             } else {
-                maxOf(lastAssistantMessageAt, lastUserMessageAt).takeIf { it > 0L }
+                maxOf(lastAssistantMessageAt, lastUserMessageAt, cycle.anchorAtMillis).takeIf { it > 0L }
             },
             preserveAnchor = intervalAnchorAtMillis != null,
             minimumLeadMillis = MIN_SCHEDULE_LEAD_MILLIS,
         )
-        val retryAwareTriggerAt = HeartbeatScheduleTiming.earliestRetryOrRegularTriggerAtMillis(
-            nowMillis = now,
-            retryAtMillis = retryAtMillis,
-            regularTriggerAtMillis = regularTriggerAt,
-        )
+        HeartbeatConfigStore(context, assistantId).run { recordRegularTriggerAt(regularTriggerAt); close() }
+        if (!cycle.active && cycle.anchorAtMillis > 0) {
+            HeartbeatConfigStore(context, assistantId).run {
+                updateSentinelState { it.copy(ordinaryNotBeforeMillis = regularTriggerAt) }
+                close()
+            }
+        }
+        val retryAwareTriggerAt = if (cycle.active) regularTriggerAt else
+            HeartbeatScheduleTiming.earliestRetryOrRegularTriggerAtMillis(
+                nowMillis = now,
+                retryAtMillis = retryAtMillis,
+                regularTriggerAtMillis = regularTriggerAt,
+            )
         val autonomousTriggerAt = autonomousWakeAt?.let {
             maxOf(it, now + MIN_SCHEDULE_LEAD_MILLIS)
         }
@@ -99,6 +116,7 @@ object HeartbeatScheduler {
         scheduleAt(context, triggerAt, assistantId)
     }
 
+    @Synchronized
     fun cancel(context: Context, assistantId: String? = null) {
         val alarmManager = context.getSystemService(AlarmManager::class.java)
         val existing = alarmPendingIntent(context, PendingIntent.FLAG_NO_CREATE)
@@ -136,6 +154,11 @@ object HeartbeatScheduler {
     fun onAlarmReceived(context: Context, intent: Intent?) {
         val assistantId = intent?.getStringExtra(HeartbeatForegroundService.EXTRA_ASSISTANT_ID)
             ?: dueAssistantId(context)
+        val latestTrigger = HeartbeatConfigStore(context, assistantId).run { readNextTriggerAt().also { close() } }
+        if (latestTrigger != null && latestTrigger > System.currentTimeMillis()) {
+            rearmEarliest(context)
+            return
+        }
         startHeartbeatService(context, false, "alarm", false, assistantId)
     }
 
@@ -163,6 +186,7 @@ object HeartbeatScheduler {
         }
     }
 
+    @Synchronized
     private fun rearmEarliest(context: Context) {
         val rootStore = HeartbeatConfigStore(context)
         val earliest = rootStore.readAllConfigs()
@@ -276,6 +300,18 @@ class HeartbeatAlarmReceiver : BroadcastReceiver() {
 
 class HeartbeatBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
+        if (intent?.action == Intent.ACTION_BOOT_COMPLETED) {
+            HeartbeatConfigStore(context).run {
+                readAllConfigs().forEach { config ->
+                    HeartbeatConfigStore(context, config.assistantId).run {
+                        updateSentinelState { it.exit(System.currentTimeMillis(), it.pauseReason).invalidate() }
+                        recordNextTriggerAt(null)
+                        close()
+                    }
+                }
+                close()
+            }
+        }
         HeartbeatScheduler.sync(context)
     }
 }

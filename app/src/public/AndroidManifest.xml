@@ -3,6 +3,16 @@
   <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
   <application>
+    <service
+      android:name=".personal.heartbeat.SentinelCaptureService"
+      android:label="@string/sentinel_title"
+      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+      android:exported="true">
+      <intent-filter>
+        <action android:name="android.accessibilityservice.AccessibilityService" />
+      </intent-filter>
+      <meta-data android:name="android.accessibilityservice" android:resource="@xml/sentinel_accessibility" />
+    </service>
     <activity
       android:name=".personal.heartbeat.HeartbeatSettingsActivity"
       android:exported="false"

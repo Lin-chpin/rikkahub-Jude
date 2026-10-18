@@ -1,5 +1,16 @@
 package me.rerere.rikkahub.personal.heartbeat
 
+import me.rerere.common.http.privateFailureDiagnosticDetail
+
+internal fun Throwable.toPrivateHeartbeatDiagnosticDetail(stage: String): String =
+    "stage=$stage ${privateFailureDiagnosticDetail(this) ?: "error=${javaClass.simpleName}"}"
+
+internal fun SentinelDiagnostics?.generationFailureStage(startedAtMillis: Long): String = when {
+    this == null || wakeStartedAtMillis != startedAtMillis || toolCalled != true -> "main_decision"
+    phase == "observing" -> "observation"
+    else -> "main_followup"
+}
+
 /**
  * Keeps the complete exception cause chain in the private heartbeat diagnostics.
  * Android's foreground-service exceptions often put the useful reason in the

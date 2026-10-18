@@ -54,7 +54,6 @@ internal fun LiquidGlassScene(
         content = content,
     )
 }
-
 /** Decoration only: no gestures, focus, padding or touch-target changes. */
 @Composable
 fun Modifier.liquidGlassChrome(

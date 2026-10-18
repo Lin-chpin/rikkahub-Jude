@@ -170,11 +170,17 @@
   <string name="assistant_prompt_import_note">Word text is extracted locally. Images use the configured OCR model and may incur API usage.</string>
   <string name="assistant_prompt_importing">Importing…</string>
   <string name="assistant_prompt_recovery_message">This prompt contains %1$d characters and is too large or contains non-text control characters. The full text is hidden to keep this page responsive. Your saved text is preserved; you can export it before clearing.</string>
+  <string name="assistant_prompt_recovery_edit">Edit full prompt</string>
   <string name="assistant_prompt_recovery_export">Export original text</string>
   <string name="assistant_prompt_recovery_export_success">Original prompt exported</string>
   <string name="assistant_prompt_recovery_export_failed">Failed to export the original prompt</string>
   <string name="assistant_prompt_recovery_clear">Clear assistant system prompt</string>
   <string name="assistant_prompt_recovery_clear_confirm">Clear this assistant system prompt? This cannot be undone. Conversation prompts and other assistant settings are preserved.</string>
+  <string name="assistant_prompt_editor_title">Edit full system prompt</string>
+  <string name="assistant_prompt_editor_hint">Edit all %1$d characters here. You can add user persona text directly.</string>
+  <string name="assistant_prompt_editor_discard_title">Discard unsaved changes?</string>
+  <string name="assistant_prompt_editor_discard">Discard changes</string>
+  <string name="assistant_prompt_editor_discard_message">Unsaved edits will be lost. The saved prompt will stay unchanged.</string>
   <string name="assistant_page_tab_basic">Basic Settings</string>
   <string name="assistant_page_tab_extensions">Extensions</string>
   <string name="assistant_page_tab_local_tools">Local Tools</string>

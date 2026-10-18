@@ -18,13 +18,14 @@ class SillyTavernPresetImportTest {
         val preset = """
             {
               "prompts": [
-                {"identifier":"opening","name":"Opening","content":"opening","role":"system"},
-                {"identifier":"main","name":"Main","content":"main","role":"user"},
-                {"identifier":"charDescription","name":"Char Description","content":"","role":"system"},
-                {"identifier":"chatHistory","name":"Chat History","content":"","role":"system"},
-                {"identifier":"closing","name":"Closing","content":"closing","role":"system"},
+                {"identifier":"conditional","name":"Conditional","content":"conditional","role":"system","spreset_condition_enabled":true,"spreset_condition_script":"({ model }) => /3\\.1/i.test(model)"},
                 {"identifier":"depth","name":"Depth","content":"depth","role":"assistant","injection_position":1,"injection_depth":0},
-                {"identifier":"conditional","name":"Conditional","content":"conditional","role":"system","spreset_condition_enabled":true,"spreset_condition_script":"({ model }) => /3\\.1/i.test(model)"}
+                {"identifier":"closing","name":"Closing","content":"closing","role":"system"},
+                {"identifier":"chatHistory","name":"Chat History","content":"","role":"system"},
+                {"identifier":"charDescription","name":"Char Description","content":"","role":"system"},
+                {"identifier":"main","name":"Main","content":"main","role":"user"},
+                {"identifier":"opening","name":"Opening","content":"opening","role":"system"},
+                {"identifier":"unused","name":"Unused draft","content":"unused","role":"system","enabled":false}
               ],
               "prompt_order": [{"character_id":100001,"order":[
                 {"identifier":"opening","enabled":true},
@@ -49,6 +50,10 @@ class SillyTavernPresetImportTest {
         val depth = lorebook.entries.first { it.name == "Depth" }
         val conditional = lorebook.entries.first { it.name == "Conditional" }
 
+        assertEquals(
+            listOf("Opening", "Main", "Char Description", "Closing", "Depth", "Conditional"),
+            lorebook.entries.map { it.name },
+        )
         assertEquals(InjectionPosition.AFTER_SYSTEM_PROMPT, opening.position)
         assertEquals(MessageRole.USER, main.role)
         assertTrue(main.preserveRole)
@@ -70,12 +75,15 @@ class SillyTavernPresetImportTest {
 
         assertEquals(
             listOf(MessageRole.SYSTEM, MessageRole.SYSTEM, MessageRole.USER, MessageRole.SYSTEM,
-                MessageRole.USER, MessageRole.SYSTEM, MessageRole.ASSISTANT),
+                MessageRole.USER, MessageRole.SYSTEM, MessageRole.ASSISTANT, MessageRole.SYSTEM),
             messages.map { it.role },
         )
         assertTrue(messages.any { it.toText().contains("conditional") })
         assertTrue(messages.any { it.toText() == "{{assistant_system_prompt}}" })
-        assertEquals("depth", messages.last().toText())
+        assertEquals(
+            listOf("latest", "closing", "depth", "conditional"),
+            messages.takeLast(4).map { it.toText() },
+        )
     }
 
     @Test

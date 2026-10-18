@@ -7,6 +7,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.Json
 import me.rerere.common.android.Logging
+import me.rerere.ai.ui.UIMessage
+import me.rerere.rikkahub.data.ai.responseMetadata
 
 private const val HEARTBEAT_LOG_TAG = "Heartbeat"
 
@@ -26,8 +28,12 @@ class HeartbeatConfigStore(
     private val mutableNextTriggerAt = MutableStateFlow(readNextTriggerAtFromDisk())
     private val mutableRunStatus = MutableStateFlow(readRunStatusFromDisk())
     private val mutableDiagnostics = MutableStateFlow(readDiagnosticsFromDisk())
+    private val mutableSentinel = MutableStateFlow(readSentinelState())
+    private val mutableSentinelDiagnostics = MutableStateFlow(readSentinelDiagnostics())
     private val preferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         when {
+            key == scopedKey("sentinel_diagnostics") -> mutableSentinelDiagnostics.value = readSentinelDiagnostics()
+            key == scopedKey("sentinel_state") -> mutableSentinel.value = readSentinelState()
             key == configKey() -> mutableConfig.value = readFromDisk()
             key == scopedKey(NEXT_TRIGGER_KEY) -> mutableNextTriggerAt.value = readNextTriggerAtFromDisk()
             key in setOf(
@@ -56,6 +62,45 @@ class HeartbeatConfigStore(
     val nextTriggerAt: StateFlow<Long?> = mutableNextTriggerAt.asStateFlow()
     val runStatus: StateFlow<HeartbeatRunStatus> = mutableRunStatus.asStateFlow()
     val diagnostics: StateFlow<HeartbeatRunDiagnostics> = mutableDiagnostics.asStateFlow()
+    val sentinelState: StateFlow<SentinelState> = mutableSentinel.asStateFlow()
+    val sentinelDiagnostics: StateFlow<SentinelDiagnostics> = mutableSentinelDiagnostics.asStateFlow()
+
+    fun readSentinelDiagnostics(): SentinelDiagnostics {
+        val raw = preferences.getString(scopedKey("sentinel_diagnostics"), null) ?: return SentinelDiagnostics()
+        return try { json.decodeFromString<SentinelDiagnostics>(raw) }
+        catch (error: Exception) {
+            recordStateRecovery("sentinel_diagnostics", "sentinel_diagnostics", error)
+            SentinelDiagnostics()
+        }
+    }
+
+    fun updateSentinelDiagnostics(change: (SentinelDiagnostics) -> SentinelDiagnostics) = synchronized(sentinelLock) {
+        val updated = change(readSentinelDiagnostics())
+        preferences.edit().putString(scopedKey("sentinel_diagnostics"), json.encodeToString(SentinelDiagnostics.serializer(), updated)).commit()
+        mutableSentinelDiagnostics.value = updated
+    }
+
+    fun readSentinelState(): SentinelState {
+        val raw = preferences.getString(scopedKey("sentinel_state"), null) ?: return SentinelState()
+        return try {
+            json.decodeFromString<SentinelState>(raw).also {
+                require(it.consecutiveRounds in 0..3 && (!it.active || it.consecutiveRounds > 0))
+            }
+        } catch (error: Exception) {
+            recordStateRecovery("sentinel_state", "sentinel_state", error)
+            // Losing the counter must require a recheck rather than grant another short cycle.
+            SentinelState(pauseReason = "state_recovered").also {
+                preferences.edit().putString(scopedKey("sentinel_state"), json.encodeToString(SentinelState.serializer(), it)).commit()
+            }
+        }
+    }
+
+    fun updateSentinelState(change: (SentinelState) -> SentinelState): SentinelState = synchronized(sentinelLock) {
+        val state = change(readSentinelState())
+        preferences.edit().putString(scopedKey("sentinel_state"), json.encodeToString(SentinelState.serializer(), state)).commit()
+        mutableSentinel.value = state
+        state
+    }
 
     fun read(): HeartbeatConfig = readFromDisk()
 
@@ -64,6 +109,14 @@ class HeartbeatConfigStore(
         if (assistantId == null && normalized.assistantId != null) {
             HeartbeatConfigStore(appContext, normalized.assistantId).update(normalized)
             return
+        }
+        val previous = read()
+        if (previous.enabled != normalized.enabled || previous.sentinel != normalized.sentinel) {
+            updateSentinelState {
+                if (!normalized.enabled || !normalized.sentinel.enabled || !previous.sentinel.enabled) {
+                    it.exit(System.currentTimeMillis()).invalidate()
+                } else it.invalidate()
+            }
         }
         preferences.edit()
             .putString(configKey(), json.encodeToString(HeartbeatConfig.serializer(), normalized))
@@ -101,6 +154,11 @@ class HeartbeatConfigStore(
     }
 
     fun readNextTriggerAt(): Long? = readNextTriggerAtFromDisk()
+
+    fun readRegularTriggerAt(): Long? = preferences.getLong(scopedKey("regular_trigger_at"), 0L).takeIf { it > 0 }
+    fun recordRegularTriggerAt(timestamp: Long) {
+        preferences.edit().putLong(scopedKey("regular_trigger_at"), timestamp).apply()
+    }
 
     fun readDesireState(): HeartbeatDesireState {
         val raw = preferences.getString(scopedKey(DESIRE_STATE_KEY), null)
@@ -145,6 +203,7 @@ class HeartbeatConfigStore(
         preferences.getLong(scopedKey(LAST_USER_MESSAGE_AT_KEY), 0L)
 
     fun setLastUserMessageAt(timestampMillis: Long) {
+        if (timestampMillis > lastUserMessageAt()) updateSentinelState { it.invalidate() }
         val monotonicTimestamp = maxOf(lastUserMessageAt(), timestampMillis)
         preferences.edit()
             .putLong(scopedKey(LAST_USER_MESSAGE_AT_KEY), monotonicTimestamp)
@@ -235,6 +294,14 @@ class HeartbeatConfigStore(
 
     fun readRunStatus(): HeartbeatRunStatus = readRunStatusFromDisk()
     fun readDiagnostics(): HeartbeatRunDiagnostics = readDiagnosticsFromDisk()
+
+    fun recordAiResponse(message: UIMessage, runStartedAtMillis: Long) {
+        // A superseded run may not overwrite the current assistant's diagnostic response.
+        if (readRunStatusFromDisk().startedAtMillis != runStartedAtMillis) return
+        val updated = readDiagnosticsFromDisk().copy(lastAiResponse = message.responseMetadata())
+        preferences.edit().putString(scopedKey(DIAGNOSTICS_KEY), json.encodeToString(HeartbeatRunDiagnostics.serializer(), updated)).commit()
+        mutableDiagnostics.value = updated
+    }
 
     fun clearPendingRetry() {
         val updated = readDiagnosticsFromDisk().copy(nextRetryAtMillis = null)
@@ -340,6 +407,7 @@ class HeartbeatConfigStore(
         }
 
     companion object {
+        private val sentinelLock = Any()
         private const val PREFERENCES_NAME = "personal_heartbeat"
         private const val CONFIG_KEY = "config"
         private const val CONFIG_ASSISTANT_IDS_KEY = "config_assistant_ids"

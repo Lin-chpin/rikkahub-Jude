@@ -35,7 +35,7 @@ internal fun needsAssistantPromptRecovery(prompt: CharSequence): Boolean =
     }
 
 @Composable
-internal fun AssistantPromptRecovery(prompt: String, onClear: () -> Unit) {
+internal fun AssistantPromptRecovery(prompt: String, onClear: () -> Unit, onEdit: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
@@ -75,6 +75,9 @@ internal fun AssistantPromptRecovery(prompt: String, onClear: () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(stringResource(R.string.assistant_page_system_prompt))
         Text(stringResource(R.string.assistant_prompt_recovery_message, prompt.length))
+        TextButton(onClick = onEdit, enabled = exportingPrompt == null) {
+            Text(stringResource(R.string.assistant_prompt_recovery_edit))
+        }
         TextButton(
             onClick = {
                 exportingPrompt = prompt
