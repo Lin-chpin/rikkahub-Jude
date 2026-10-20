@@ -29,8 +29,19 @@ data class UsageReminderRule(
 data class UsageReminderState(
     val date: String = todayKey(),
     val appStates: Map<String, UsageReminderAppState> = emptyMap(),
+    @Deprecated("Use locks")
     val activeLock: UsageReminderLock? = null,
-)
+    val locks: Map<String, UsageReminderLock> = emptyMap(),
+) {
+    @Suppress("DEPRECATION")
+    fun allLocks(): Map<String, UsageReminderLock> = buildMap {
+        activeLock?.let { put(it.storageKey(), it) }
+        putAll(locks)
+    }
+
+    fun withLocks(locks: Map<String, UsageReminderLock>): UsageReminderState =
+        copy(locks = locks, activeLock = null)
+}
 
 @Serializable
 data class UsageReminderAppState(
@@ -49,7 +60,9 @@ data class UsageReminderLock(
     val targetPackageName: String? = null,
     val targetLabel: String = "",
     val createdAtMillis: Long = System.currentTimeMillis(),
-)
+) {
+    fun storageKey(): String = targetPackageName ?: "@$source"
+}
 
 data class ForegroundAppEvent(
     val packageName: String,

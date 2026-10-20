@@ -159,10 +159,9 @@ class RikkaHubApp : Application() {
             runCatching {
                 delay(500)
                 val settings = get<SettingsStore>().settingsFlowRaw.first()
-                val hasAiLock = settings.usageReminderState.activeLock
-                    ?.takeIf { it.source == "ai_tool" }
-                    ?.lockedUntilMillis
-                    ?.let { it > System.currentTimeMillis() } == true
+                val hasAiLock = settings.usageReminderState.allLocks().values.any {
+                    it.source == "ai_tool" && it.lockedUntilMillis > System.currentTimeMillis()
+                }
                 if (settings.usageReminderConfig.rules.any { it.enabled } || hasAiLock) {
                     UsageReminderService.sync(this@RikkaHubApp, settings.usageReminderConfig)
                 }

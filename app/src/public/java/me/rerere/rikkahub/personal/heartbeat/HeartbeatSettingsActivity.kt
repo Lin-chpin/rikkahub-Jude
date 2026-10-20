@@ -99,6 +99,9 @@ class HeartbeatSettingsActivity : ComponentActivity() {
                 var draft by remember(currentAssistantId, storedConfig) {
                     mutableStateOf(storedConfig)
                 }
+                var showSentinelIntervalMismatch by remember(currentAssistantId) {
+                    mutableStateOf(storedConfig.sentinelIntervalsExceedHeartbeat())
+                }
                 val visibleRunStatus = runStatus.takeIf {
                     it.assistantId == currentAssistantId
                 } ?: HeartbeatRunStatus()
@@ -126,9 +129,11 @@ class HeartbeatSettingsActivity : ComponentActivity() {
                                     checked = draft.enabled,
                                     onCheckedChange = {
                                         val updated = draft.copy(enabled = it, sentinel = draft.sentinel.copy(enabled = it && draft.sentinel.enabled), assistantId = currentAssistantId)
-                                        draft = updated
-                                        assistantStore.update(updated)
-                                        HeartbeatScheduler.scheduleNext(this@HeartbeatSettingsActivity, updated)
+                                        val normalized = updated.normalized()
+                                        draft = normalized
+                                        assistantStore.update(normalized)
+                                        HeartbeatScheduler.scheduleNext(this@HeartbeatSettingsActivity, normalized)
+                                        if (updated.sentinelIntervalsExceedHeartbeat()) showSentinelIntervalMismatch = true
                                     },
                                 )
                             },
@@ -269,8 +274,12 @@ class HeartbeatSettingsActivity : ComponentActivity() {
                         ) {
                             Button(
                                 onClick = {
-                                    assistantStore.update(draft.copy(assistantId = currentAssistantId))
-                                    HeartbeatScheduler.scheduleNext(this@HeartbeatSettingsActivity, draft.copy(assistantId = currentAssistantId))
+                                    val updated = draft.copy(assistantId = currentAssistantId)
+                                    val normalized = updated.normalized()
+                                    draft = normalized
+                                    assistantStore.update(normalized)
+                                    HeartbeatScheduler.scheduleNext(this@HeartbeatSettingsActivity, normalized)
+                                    if (updated.sentinelIntervalsExceedHeartbeat()) showSentinelIntervalMismatch = true
                                     if (draft.enabled) {
                                         requestExactAlarmPermissionIfNeeded()
                                     }
@@ -282,6 +291,7 @@ class HeartbeatSettingsActivity : ComponentActivity() {
                             OutlinedButton(
                                 onClick = {
                                     assistantStore.update(draft.copy(assistantId = currentAssistantId))
+                                    if (draft.sentinelIntervalsExceedHeartbeat()) showSentinelIntervalMismatch = true
                                     HeartbeatScheduler.triggerNow(
                                         context = this@HeartbeatSettingsActivity,
                                         assistantId = currentAssistantId,
@@ -307,6 +317,7 @@ class HeartbeatSettingsActivity : ComponentActivity() {
                             TextButton(
                                 onClick = {
                                     assistantStore.update(draft.copy(assistantId = currentAssistantId))
+                                    if (draft.sentinelIntervalsExceedHeartbeat()) showSentinelIntervalMismatch = true
                                     HeartbeatScheduler.triggerReadOnlyTest(
                                         context = this@HeartbeatSettingsActivity,
                                         assistantId = currentAssistantId,
@@ -322,6 +333,16 @@ class HeartbeatSettingsActivity : ComponentActivity() {
                         }
                     }
                 }
+                if (showSentinelIntervalMismatch) androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { showSentinelIntervalMismatch = false },
+                    title = { Text(stringResource(R.string.sentinel_interval_mismatch_title)) },
+                    text = { Text(stringResource(R.string.sentinel_interval_mismatch_blocked)) },
+                    confirmButton = {
+                        TextButton(onClick = { showSentinelIntervalMismatch = false }) {
+                            Text(stringResource(R.string.sentinel_interval_mismatch_ack))
+                        }
+                    },
+                )
             }
         }
     }

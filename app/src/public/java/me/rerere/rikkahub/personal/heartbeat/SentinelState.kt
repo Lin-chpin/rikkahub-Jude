@@ -13,13 +13,17 @@ data class SentinelConfig(
     val verifiedVisionKey: String = "",
     val blockedPackages: Set<String> = emptySet(),
 ) {
-    fun normalized() = copy(
-        minIntervalMinutes = minIntervalMinutes.coerceIn(5, 24 * 60),
-        maxIntervalMinutes = maxIntervalMinutes.coerceIn(minIntervalMinutes.coerceIn(5, 24 * 60), 7 * 24 * 60),
-        generationTimeoutSeconds = generationTimeoutSeconds.coerceIn(30, 600),
-        visionTimeoutSeconds = visionTimeoutSeconds.coerceIn(5, generationTimeoutSeconds.coerceIn(30, 600)),
-        blockedPackages = blockedPackages.map(String::trim).filter(String::isNotEmpty).toSet(),
-    )
+    fun normalized(): SentinelConfig {
+        val normalizedMin = minIntervalMinutes.coerceIn(1, 24 * 60)
+        val normalizedTimeout = generationTimeoutSeconds.coerceIn(30, 600)
+        return copy(
+            minIntervalMinutes = normalizedMin,
+            maxIntervalMinutes = maxIntervalMinutes.coerceIn(normalizedMin, 7 * 24 * 60),
+            generationTimeoutSeconds = normalizedTimeout,
+            visionTimeoutSeconds = visionTimeoutSeconds.coerceIn(5, normalizedTimeout),
+            blockedPackages = blockedPackages.map(String::trim).filter(String::isNotEmpty).toSet(),
+        )
+    }
 }
 
 /** Persistent cycle state, distinct from permission to use the tool. */

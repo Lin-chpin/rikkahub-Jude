@@ -130,7 +130,10 @@ fun UsageTrackerPage(
     val usages by produceState<List<AppUsageSummary>>(emptyList(), selectedPeriod, refreshKey, hasAccess) {
         value = if (hasAccess) reader.loadUsage(selectedPeriod) else emptyList()
     }
-    val reminderState = usageReminderState.takeIf { it.date == todayKey() } ?: UsageReminderState(date = todayKey())
+    val reminderState = usageReminderState.takeIf { it.date == todayKey() } ?: UsageReminderState(
+        date = todayKey(),
+        locks = usageReminderState.allLocks(),
+    )
     val maxUsageMillis = usages.maxOfOrNull { it.totalTimeForegroundMillis } ?: 0L
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -223,7 +226,11 @@ fun UsageTrackerPage(
                                 usageReminderConfig.copy(lockEnabled = enabled)
                             )
                             if (!enabled) {
-                                onUsageReminderStateChange(reminderState.copy(activeLock = null))
+                                onUsageReminderStateChange(
+                                    reminderState.withLocks(
+                                        reminderState.allLocks().filterValues { it.source != "ai_tool" }
+                                    )
+                                )
                             } else if (!hasOverlayPermission) {
                                 context.openOverlayPermissionSettings()
                             }

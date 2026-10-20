@@ -102,7 +102,7 @@ class ConversationCompressionStateTest {
     }
 
     @Test
-    fun deletingMessageRemovesAllFollowingNodesAndKeepsEarlierVariants() {
+    fun deletingMessagePreservesFollowingNodesAndEarlierVariants() {
         val before = messageNode("before")
         val selected = UIMessage.user("A")
         val alternate = UIMessage.user("A alternate")
@@ -119,12 +119,12 @@ class ConversationCompressionStateTest {
             compressedMessageNodeIds = setOf(before.id),
         )
 
-        val updated = conversation.deleteMessageAndFollowingNodes(selected.id)
+        val updated = conversation.deleteMessageFromNode(selected.id)
 
         assertNotNull(updated)
         updated!!
-        assertEquals(listOf(before.id, target.id), updated.messageNodes.map { it.id })
-        assertEquals(listOf(alternate.id), updated.messageNodes.last().messages.map { it.id })
+        assertEquals(listOf(before.id, target.id, reply.id, tool.id), updated.messageNodes.map { it.id })
+        assertEquals(listOf(alternate.id), updated.messageNodes[1].messages.map { it.id })
         assertEquals("before summary", updated.compressedSummary)
         assertEquals(setOf(before.id), updated.compressedMessageNodeIds)
     }
@@ -139,11 +139,11 @@ class ConversationCompressionStateTest {
             compressedMessageNodeIds = setOf(before.id, target.id),
         )
 
-        val updated = conversation.deleteMessageAndFollowingNodes(target.currentMessage.id)
+        val updated = conversation.deleteMessageFromNode(target.currentMessage.id)
 
         assertNotNull(updated)
         updated!!
-        assertEquals(listOf(before.id), updated.messageNodes.map { it.id })
+        assertEquals(listOf(before.id, reply.id), updated.messageNodes.map { it.id })
         assertNull(updated.compressedSummary)
         assertEquals(emptySet<Uuid>(), updated.compressedMessageNodeIds)
     }

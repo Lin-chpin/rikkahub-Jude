@@ -167,24 +167,36 @@ internal fun generateElevenLabsRealtimeDialogue(
             val firstSentence = StringBuilder()
             var firstSentenceFlushed = false
             var sentCharacters = 0
-            fun sendText(value: String) {
+            fun sendValue(value: String) {
+                if (value.isEmpty()) return
                 if (!readySocket.send(dialogueInput(value, voiceId))) {
                     throw IOException("ElevenLabs dialogue WebSocket stopped accepting text")
                 }
                 firstTextAt.compareAndSet(0L, SystemClock.elapsedRealtime())
                 if (sentCharacters == 0) logTiming("first text queued: chars=${value.length}")
                 sentCharacters += value.length
+            }
+            fun sendText(value: String) {
                 if (!firstSentenceFlushed) {
-                    firstSentence.append(value)
-                    if (elevenLabsFirstSentenceReady(firstSentence.toString())) {
-                        if (!readySocket.send(JSONObject().put("flush", true).toString())) {
-                            throw IOException("ElevenLabs dialogue WebSocket rejected first-sentence flush")
-                        }
-                        firstSentenceFlushed = true
-                        firstSentence.clear()
-                        logTiming("first sentence flushed: chars=$sentCharacters")
+                    val previousLength = firstSentence.length
+                    val boundary = elevenLabsFirstSentenceEnd(firstSentence.toString() + value)
+                    if (boundary < 0) {
+                        firstSentence.append(value)
+                        sendValue(value)
+                        return
                     }
+                    val currentBoundary = (boundary - previousLength).coerceIn(0, value.length)
+                    sendValue(value.substring(0, currentBoundary))
+                    if (!readySocket.send(JSONObject().put("flush", true).toString())) {
+                        throw IOException("ElevenLabs dialogue WebSocket rejected first-sentence flush")
+                    }
+                    firstSentenceFlushed = true
+                    firstSentence.clear()
+                    logTiming("first sentence flushed: chars=$sentCharacters")
+                    sendValue(value.substring(currentBoundary))
+                    return
                 }
+                sendValue(value)
             }
             text.collect { delta ->
                 pendingText.append(delta)
@@ -256,11 +268,23 @@ internal fun generateElevenLabsRealtimeDialogue(
     }
 }
 
-// Flush the first spoken phrase; subsequent increments retain the server prosody context.
-internal fun elevenLabsFirstSentenceReady(text: String): Boolean {
-    val spoken = text.replace(Regex("\\[[^\\]\\r\\n]*]"), "").trimStart()
-    val boundary = spoken.indexOfFirst { it in "。！？!?；;\n.，,：:" }
-    return boundary >= 0 && spoken.take(boundary).any(Char::isLetterOrDigit)
+// Flush at the first complete spoken sentence; subsequent increments retain server prosody context.
+internal fun elevenLabsFirstSentenceEnd(text: String): Int {
+    var inAudioTag = false
+    var hasSpokenText = false
+    text.forEachIndexed { index, char ->
+        when {
+            char == '[' -> inAudioTag = true
+            char == ']' -> inAudioTag = false
+            !inAudioTag -> {
+                if (char.isLetterOrDigit()) hasSpokenText = true
+                if (hasSpokenText && (char in "。！？!?." || char == '\n' || char == '\r')) {
+                    return index + 1
+                }
+            }
+        }
+    }
+    return -1
 }
 
 // Only buffer incomplete tags or Unicode characters on the client.

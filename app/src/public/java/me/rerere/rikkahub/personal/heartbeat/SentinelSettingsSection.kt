@@ -42,6 +42,7 @@ internal fun SentinelSettingsSection(
     val selection = remember(settings, assistant.chatModelId) { SentinelVision.configured(settings, assistant) }
     val visionReady = SentinelVision.ready(selection, config.sentinel)
     var showSetup by remember(assistant.id) { mutableStateOf(false) }
+    var showIntervalMismatch by remember(assistant.id) { mutableStateOf(false) }
     var showBlockedApps by remember(assistant.id) { mutableStateOf(false) }
     var acknowledged by remember(assistant.id) { mutableStateOf(false) }
     val testResultResource = when (verification.failureReason) {
@@ -68,6 +69,7 @@ internal fun SentinelSettingsSection(
             Switch(checked = config.sentinel.enabled, onCheckedChange = { enable ->
                 if (!enable) onChange(config.copy(sentinel = config.sentinel.copy(enabled = false)))
                 else if (!config.enabled) Toast.makeText(context, R.string.sentinel_heartbeat_required, Toast.LENGTH_SHORT).show()
+                else if (config.sentinelIntervalsExceedHeartbeat()) showIntervalMismatch = true
                 else if (!config.sentinel.guideAccepted || !captureReady || !visionReady || config.heartbeatPrompt.isBlank()) showSetup = true
                 else onChange(config.copy(sentinel = config.sentinel.copy(enabled = true)))
             })
@@ -102,8 +104,18 @@ internal fun SentinelSettingsSection(
             { onChange(config.copy(sentinel = config.sentinel.copy(visionTimeoutSeconds = it))) }, stringResource(R.string.sentinel_vision_timeout_hint))
         NumberField(stringResource(R.string.heartbeat_timeout), config.sentinel.generationTimeoutSeconds,
             { onChange(config.copy(sentinel = config.sentinel.copy(generationTimeoutSeconds = it))) }, stringResource(R.string.sentinel_run_timeout_hint))
+        if (config.sentinelIntervalsExceedHeartbeat()) {
+            Text(stringResource(R.string.sentinel_interval_mismatch_message), color = MaterialTheme.colorScheme.error)
+        }
         if (config.sentinel != config.sentinel.normalized()) Text(stringResource(R.string.heartbeat_config_adjustment_warning), color = MaterialTheme.colorScheme.error)
     }
+
+    if (showIntervalMismatch) AlertDialog(
+        onDismissRequest = { showIntervalMismatch = false },
+        title = { Text(stringResource(R.string.sentinel_interval_mismatch_title)) },
+        text = { Text(stringResource(R.string.sentinel_interval_mismatch_message)) },
+        confirmButton = { TextButton(onClick = { showIntervalMismatch = false }) { Text(stringResource(R.string.sentinel_interval_mismatch_ack)) } },
+    )
 
     if (showSetup) AlertDialog(
         onDismissRequest = { showSetup = false }, title = { Text(stringResource(R.string.sentinel_setup_title)) },
@@ -111,6 +123,9 @@ internal fun SentinelSettingsSection(
             Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
                 Text(stringResource(R.string.sentinel_setup_note))
                 Text(stringResource(R.string.sentinel_prompt_example), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (config.sentinelIntervalsExceedHeartbeat()) {
+                    Text(stringResource(R.string.sentinel_interval_mismatch_message), color = MaterialTheme.colorScheme.error)
+                }
                 if (config.heartbeatPrompt.isBlank()) Text(stringResource(R.string.sentinel_prompt_required), color = MaterialTheme.colorScheme.error)
                 Row {
                     Checkbox(checked = acknowledged, onCheckedChange = { acknowledged = it })
@@ -140,7 +155,7 @@ internal fun SentinelSettingsSection(
             }
         },
         confirmButton = { TextButton(
-            enabled = config.enabled && captureReady && visionReady && config.heartbeatPrompt.isNotBlank() && (acknowledged || config.sentinel.guideAccepted),
+            enabled = config.enabled && captureReady && visionReady && !config.sentinelIntervalsExceedHeartbeat() && config.heartbeatPrompt.isNotBlank() && (acknowledged || config.sentinel.guideAccepted),
             onClick = {
                 onChange(config.copy(sentinel = config.sentinel.copy(enabled = true, guideAccepted = true)))
                 onResumeObservation(); showSetup = false

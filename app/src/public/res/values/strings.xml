@@ -137,8 +137,12 @@
   <string name="sentinel_permission_problem">无障碍截图服务不可用，请检查授权。</string>
   <string name="sentinel_capture_problem">截图工具发生故障，请重新检查服务；详细原因见日志。</string>
   <string name="sentinel_runtime_title">哨兵运行参数</string>
-  <string name="sentinel_min_hint">例：5 分钟，建议从 5 分钟起。</string>
-  <string name="sentinel_max_hint">例：15 分钟，持续监督时建议不超过 30 分钟；应不小于最短间隔。</string>
+  <string name="sentinel_min_hint">例：3 分钟；必须不大于普通心跳最短间隔，最短可设为 1 分钟。</string>
+  <string name="sentinel_max_hint">例：15 分钟；不能大于普通心跳最长间隔，且应不小于最短间隔。</string>
+  <string name="sentinel_interval_mismatch_title">哨兵间隔过长</string>
+  <string name="sentinel_interval_mismatch_message">哨兵的最短和最长间隔都不能大于普通心跳对应的间隔，请缩短哨兵间隔后再启用。</string>
+  <string name="sentinel_interval_mismatch_blocked">哨兵间隔超过普通心跳对应间隔，已暂停哨兵。缩短哨兵间隔后再启用。</string>
+  <string name="sentinel_interval_mismatch_ack">知道了</string>
   <string name="sentinel_vision_timeout">单次观察超时（秒）</string>
   <string name="sentinel_vision_timeout_hint">例：60 秒，建议 30–120 秒；不能超过整轮超时。</string>
   <string name="sentinel_run_timeout_hint">例：180 秒，包含模型回复和工具执行。</string>

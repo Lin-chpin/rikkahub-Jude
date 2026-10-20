@@ -7,15 +7,15 @@ import org.junit.Test
 
 class ElevenLabsDialogueInputTest {
     @Test
-    fun firstSentenceFlushIgnoresPunctuationInsideAudioTags() {
-        assertFalse(elevenLabsFirstSentenceReady("[softly, slowly.]你好"))
-        assertTrue(elevenLabsFirstSentenceReady("[softly]你好。"))
-        assertTrue(elevenLabsFirstSentenceReady("Hello!"))
-        assertTrue(elevenLabsFirstSentenceReady("好的，我们"))
-        assertTrue(elevenLabsFirstSentenceReady("Yes, I"))
-        assertFalse(elevenLabsFirstSentenceReady("[softly, slowly]你好"))
-        assertFalse(elevenLabsFirstSentenceReady("Hello"))
-        assertFalse(elevenLabsFirstSentenceReady("[softly.]\n"))
+    fun firstSentenceBoundaryIgnoresAudioTagsAndClausePunctuation() {
+        assertEquals(-1, elevenLabsFirstSentenceEnd("[softly, slowly.]你好"))
+        assertEquals("[softly]你好。".length, elevenLabsFirstSentenceEnd("[softly]你好。继续"))
+        assertEquals("Hello!".length, elevenLabsFirstSentenceEnd("Hello! Next"))
+        assertEquals(-1, elevenLabsFirstSentenceEnd("好的，我们"))
+        assertEquals(-1, elevenLabsFirstSentenceEnd("Yes, I"))
+        assertEquals(-1, elevenLabsFirstSentenceEnd("[softly, slowly]你好"))
+        assertEquals(-1, elevenLabsFirstSentenceEnd("Hello"))
+        assertEquals(-1, elevenLabsFirstSentenceEnd("[softly.]\n"))
     }
     @Test
     fun sendsWholeAvailableTextAndOnlyBuffersIncompleteTagsOrUnicodeCharacters() {

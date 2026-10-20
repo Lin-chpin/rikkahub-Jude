@@ -319,11 +319,6 @@
   <string name="deep_thinking">深く考える</string>
   <string name="deep_thinking_seconds">%1$.1f 秒間思考中</string>
   <string name="delete">削除</string>
-  <string name="donate_page_afdian_desc">🇨🇳ユーザー向け</string>
-  <string name="donate_page_donation_methods">寄付方法</string>
-  <string name="donate_page_kofi_desc">グローバルユーザー向け</string>
-  <string name="donate_page_sponsor_list">スポンサーリスト</string>
-  <string name="donate_page_title">寄付</string>
   <string name="edit">編集</string>
   <string name="editing">編集中</string>
   <string name="emoji_picker_search_placeholder">絵文字を検索...</string>
@@ -782,10 +777,6 @@
   <string name="setting_page_default_model_desc">各機能のデフォルトモデルを設定</string>
   <string name="setting_page_display_setting">表示設定</string>
   <string name="setting_page_display_setting_desc">表示設定を管理</string>
-  <string name="setting_page_documentation">ドキュメント</string>
-  <string name="setting_page_documentation_desc">アプリの使用方法とヘルプドキュメントを表示</string>
-  <string name="setting_page_donate">寄付</string>
-  <string name="setting_page_donate_desc">このアプリを気に入った場合は、作者の作品をスポンサーしてください</string>
   <string name="setting_page_dynamic_color">ダイナミックカラー</string>
   <string name="setting_page_dynamic_color_desc">壁紙に基づいてアプリのテーマ配色を動的に生成するかどうか</string>
   <string name="setting_page_extensions">拡張機能</string>
@@ -796,7 +787,6 @@
   <string name="setting_page_mcp_desc">MCPサーバーを設定</string>
   <string name="setting_page_message_display_settings">メッセージ表示</string>
   <string name="setting_page_model_and_services">モデルとサービス</string>
-  <string name="setting_page_no_share_app">共有アプリが見つかりません</string>
   <string name="setting_page_providers">プロバイダー</string>
   <string name="setting_page_providers_desc">AIプロバイダーを設定</string>
   <string name="setting_page_request_logs">リクエストログ</string>
@@ -812,9 +802,6 @@
   <string name="setting_page_search_test_query_hint">テストクエリを入力…</string>
   <string name="setting_page_search_test_run">テスト実行</string>
   <string name="setting_page_search_title">検索サービス</string>
-  <string name="setting_page_share">共有</string>
-  <string name="setting_page_share_desc">このアプリを友達と共有</string>
-  <string name="setting_page_share_text">RikkaHub - オープンソースAndroid AIアシスタント\n\nウェブサイト: https://rikka-ai.com/</string>
   <string name="setting_page_sponsor_alert_confirm">寄付</string>
   <string name="setting_page_sponsor_alert_desc">アプリを100回以上起動しました！気に入っていただけたら、開発者をサポートしていただけると嬉しいです。</string>
   <string name="setting_page_sponsor_alert_dismiss">今はしない</string>

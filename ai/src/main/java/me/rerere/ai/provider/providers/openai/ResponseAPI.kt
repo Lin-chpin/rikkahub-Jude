@@ -263,10 +263,9 @@ class ResponseAPI(
             }
             if (params.maxTokens != null) put("max_output_tokens", params.maxTokens)
 
-            val systemParts = messages.firstOrNull { it.role == MessageRole.SYSTEM }
-                ?.parts
-                ?.filterIsInstance<UIMessagePart.Text>()
-                .orEmpty()
+            val systemParts = messages
+                .filter { it.role == MessageRole.SYSTEM }
+                .flatMap { message -> message.parts.filterIsInstance<UIMessagePart.Text>() }
             val prompt = buildResponsePrompt(
                 systemParts = systemParts,
                 messageItems = buildMessages(

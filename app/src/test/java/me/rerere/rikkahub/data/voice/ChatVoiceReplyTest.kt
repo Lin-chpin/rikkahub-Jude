@@ -109,15 +109,16 @@ class ChatVoiceReplyTest {
     fun materializationKeepsReadableTextAndOrderedSegments() {
         val message = UIMessage(
             role = MessageRole.ASSISTANT,
-            parts = listOf(UIMessagePart.Text("模型流式前缀")),
+            parts = listOf(UIMessagePart.Text("模型流式前缀一"), UIMessagePart.Text("模型流式前缀二")),
         )
         val parsed = requireNotNull(parseChatVoiceReplyArguments(Json.parseToJsonElement(
             """{"segments":[{"type":"voice","text":"我好想你"},{"type":"text","text":"你刚刚没听见吧"}]}"""
         )))
         val materialized = message.withChatVoiceReply(parsed)
 
-        assertEquals("我好想你\n\n你刚刚没听见吧", materialized.toText())
-        assertEquals(2, materialized.chatVoiceReply()?.segments?.size)
+        assertEquals("模型流式前缀一\n\n模型流式前缀二\n\n我好想你\n\n你刚刚没听见吧", materialized.toText())
+        assertEquals(3, materialized.chatVoiceReply()?.segments?.size)
+        assertEquals("模型流式前缀一\n\n模型流式前缀二", materialized.chatVoiceReply()?.segments?.first()?.text)
     }
 
     @Test

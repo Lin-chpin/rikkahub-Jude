@@ -132,6 +132,7 @@ import me.rerere.rikkahub.data.model.personaScopeId
 import me.rerere.rikkahub.data.model.MemoryScope
 import me.rerere.rikkahub.data.model.replaceRegexes
 import me.rerere.rikkahub.data.model.toMessageNode
+import me.rerere.rikkahub.data.model.toInitialMessageNodes
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.repository.MomentAuthor
@@ -435,7 +436,7 @@ class ChatService(
                     id = conversationId,
                     assistantId = assistant.id,
                     newConversation = true
-                ).updateCurrentMessages(assistant.presetMessages)
+                ).copy(messageNodes = assistant.toInitialMessageNodes())
             }
         }
         compressionDiagnostics.record(
@@ -2803,7 +2804,7 @@ class ChatService(
         failIfMissing: Boolean = true,
     ) {
         val currentConversation = getConversationFlow(conversationId).value
-        val updatedConversation = currentConversation.deleteMessageAndFollowingNodes(messageId)
+        val updatedConversation = currentConversation.deleteMessageFromNode(messageId)
 
         if (updatedConversation == null) {
             if (failIfMissing) {

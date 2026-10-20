@@ -538,7 +538,7 @@ class LocalTools(
                         })
                         put("target_package_name", buildJsonObject {
                             put("type", "string")
-                            put("description", "Package name of the app being locked. Required for action=lock; use the current app package when locking RikkaHub itself.")
+                            put("description", "App package to lock, or app package to unlock. Required for action=lock; optional for action=unlock, which clears all AI locks when omitted.")
                         })
                         put("target_label", buildJsonObject {
                             put("type", "string")
@@ -552,11 +552,10 @@ class LocalTools(
             execute = { params ->
                 val settings = settingsStore.settingsFlowRaw.first()
                 val lockEnabled = settings.usageReminderConfig.lockEnabled
-                val activeLock = settings.usageReminderState.activeLock
-                    ?.takeIf {
-                        lockEnabled && it.source == "ai_tool" &&
-                            it.lockedUntilMillis > System.currentTimeMillis()
-                    }
+                val activeLocks = settings.usageReminderState.allLocks().values.filter {
+                    lockEnabled && it.source == "ai_tool" &&
+                        it.lockedUntilMillis > System.currentTimeMillis()
+                }
                 val obj = params.jsonObject
                 val action = obj["action"]?.jsonPrimitive?.contentOrNull ?: error("action is required")
                 when (action) {
@@ -565,8 +564,19 @@ class LocalTools(
                             UIMessagePart.Text(
                                 buildJsonObject {
                                     put("enabled", lockEnabled)
-                                    put("locked", activeLock != null)
-                                    activeLock?.let { lock ->
+                                    put("locked", activeLocks.isNotEmpty())
+                                    put("locks", buildJsonArray {
+                                        activeLocks.forEach { lock ->
+                                            addJsonObject {
+                                                put("target_package_name", lock.targetPackageName.orEmpty())
+                                                put("target_label", lock.targetLabel)
+                                                put("locked_until_timestamp_ms", lock.lockedUntilMillis)
+                                                put("reason", lock.reason)
+                                                put("source", lock.source)
+                                            }
+                                        }
+                                    })
+                                    activeLocks.singleOrNull()?.let { lock ->
                                         put("locked_until_timestamp_ms", lock.lockedUntilMillis)
                                         put("reason", lock.reason)
                                         put("source", lock.source)
@@ -660,12 +670,17 @@ class LocalTools(
                     }
 
                     "unlock" -> {
-                        UsageReminderService.unlock(context)
+                        val targetPackageName = obj["target_package_name"]?.jsonPrimitive?.contentOrNull
+                            ?.takeIf { it.isNotBlank() }
+                        UsageReminderService.unlock(context, targetPackageName)
                         listOf(
                             UIMessagePart.Text(
                                 buildJsonObject {
                                     put("success", true)
-                                    put("locked", false)
+                                    put("target_package_name", targetPackageName)
+                                    put("locked", targetPackageName?.let { target ->
+                                        activeLocks.any { it.targetPackageName != target }
+                                    } ?: false)
                                 }.toString()
                             )
                         )

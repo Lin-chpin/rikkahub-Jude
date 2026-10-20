@@ -170,26 +170,25 @@ data class Conversation(
         return messageNodes.firstOrNull { node -> node.messages.any { it.id == messageId } }
     }
 
-    fun deleteMessageAndFollowingNodes(messageId: Uuid): Conversation? {
+    fun deleteMessageFromNode(messageId: Uuid): Conversation? {
         val targetNodeIndex = messageNodes.indexOfFirst { node ->
             node.messages.any { it.id == messageId }
         }
         if (targetNodeIndex == -1) return null
 
         val targetNode = messageNodes[targetNodeIndex]
+        val targetMessageIndex = targetNode.messages.indexOfFirst { it.id == messageId }
         val remainingMessages = targetNode.messages.filterNot { it.id == messageId }
-        val updatedNodes = messageNodes.take(targetNodeIndex) + listOfNotNull(
-            remainingMessages.takeIf { it.isNotEmpty() }?.let { messages ->
-                targetNode.copy(
-                    messages = messages,
-                    selectIndex = targetNode.selectIndex.coerceAtMost(messages.lastIndex),
-                )
-            }
-        )
-        val removesCompressedContext = messageNodes
-            .asSequence()
-            .drop(targetNodeIndex)
-            .any { it.id in activeCompressedMessageNodeIds }
+        val updatedTargetNode = remainingMessages.takeIf { it.isNotEmpty() }?.let { messages ->
+            targetNode.copy(
+                messages = messages,
+                selectIndex = (targetNode.selectIndex - if (targetMessageIndex < targetNode.selectIndex) 1 else 0)
+                    .coerceAtMost(messages.lastIndex),
+            )
+        }
+        val updatedNodes = messageNodes.take(targetNodeIndex) + listOfNotNull(updatedTargetNode) +
+            messageNodes.drop(targetNodeIndex + 1)
+        val removesCompressedContext = targetNode.id in activeCompressedMessageNodeIds
 
         return copy(
             messageNodes = updatedNodes,
@@ -373,6 +372,16 @@ fun UIMessage.toMessageNode(): MessageNode {
         messages = listOf(this),
         selectIndex = 0
     )
+}
+
+fun Assistant.toInitialMessageNodes(): List<MessageNode> = presetMessages.mapIndexed { index, message ->
+    if (index == 0 && message.role == MessageRole.ASSISTANT && alternateGreetings.isNotEmpty()) {
+        MessageNode(
+            messages = listOf(message) + alternateGreetings.map { UIMessage.assistant(it) },
+        )
+    } else {
+        MessageNode.of(message)
+    }
 }
 
 fun Conversation.momentScopeId(assistant: Assistant): Uuid {

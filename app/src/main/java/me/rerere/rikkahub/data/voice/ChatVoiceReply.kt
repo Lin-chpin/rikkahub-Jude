@@ -78,17 +78,32 @@ fun UIMessage.hasPendingChatVoiceReply(): Boolean {
     return chatVoiceReplyDraft() != null
 }
 
-fun UIMessage.withChatVoiceReply(reply: ParsedChatVoiceReply): UIMessage =
-    replaceChatVoiceReplyText(reply.plainText).copy(
+fun UIMessage.withChatVoiceReply(reply: ParsedChatVoiceReply): UIMessage {
+    val completeReply = reply.withExistingText(this)
+    return replaceChatVoiceReplyText(completeReply.plainText).copy(
         annotations = annotations
             .filterNot { it is UIMessageAnnotation.ChatVoiceReply }
-            .plus(UIMessageAnnotation.ChatVoiceReply(reply.segments)),
+            .plus(UIMessageAnnotation.ChatVoiceReply(completeReply.segments)),
     )
+}
 
-fun UIMessage.withChatVoiceReplyPlainText(reply: ParsedChatVoiceReply): UIMessage =
-    replaceChatVoiceReplyText(reply.plainText).copy(
+fun UIMessage.withChatVoiceReplyPlainText(reply: ParsedChatVoiceReply): UIMessage {
+    val completeReply = reply.withExistingText(this)
+    return replaceChatVoiceReplyText(completeReply.plainText).copy(
         annotations = annotations.filterNot { it is UIMessageAnnotation.ChatVoiceReply },
     )
+}
+
+private fun ParsedChatVoiceReply.withExistingText(message: UIMessage): ParsedChatVoiceReply {
+    if (message.chatVoiceReply() != null) return this
+    val existingText = message.parts
+        .filterIsInstance<UIMessagePart.Text>()
+        .map { it.text }
+        .filter { it.isNotBlank() }
+        .joinToString("\n\n")
+    if (existingText.isBlank()) return this
+    return copy(segments = listOf(ChatVoiceReplySegment(ChatVoiceReplySegmentType.TEXT, existingText)) + segments)
+}
 
 private fun UIMessage.replaceChatVoiceReplyText(text: String): UIMessage {
     var textReplaced = false

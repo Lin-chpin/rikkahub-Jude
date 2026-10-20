@@ -19,10 +19,14 @@ data class HeartbeatConfig(
 ) {
     fun normalized(): HeartbeatConfig {
         val normalizedMin = minIntervalMinutes.coerceIn(5, 24 * 60)
+        val normalizedMax = maxIntervalMinutes.coerceIn(normalizedMin, 7 * 24 * 60)
+        val normalizedSentinel = sentinel.normalized()
         return copy(
-            sentinel = sentinel.normalized().copy(enabled = enabled && sentinel.enabled),
+            sentinel = normalizedSentinel.copy(
+                enabled = enabled && sentinel.enabled && normalizedSentinel.fitsHeartbeatIntervals(normalizedMin, normalizedMax),
+            ),
             minIntervalMinutes = normalizedMin,
-            maxIntervalMinutes = maxIntervalMinutes.coerceIn(normalizedMin, 7 * 24 * 60),
+            maxIntervalMinutes = normalizedMax,
             generationTimeoutSeconds = generationTimeoutSeconds.coerceIn(30, 10 * 60),
             maxToolSteps = maxToolSteps.coerceIn(1, 8),
             heartbeatPrompt = heartbeatPrompt.take(MAX_HEARTBEAT_PROMPT_LENGTH),
@@ -59,4 +63,13 @@ data class HeartbeatConfig(
             "usage_lock_control",
         )
     }
+}
+
+private fun SentinelConfig.fitsHeartbeatIntervals(minimum: Int, maximum: Int) =
+    minIntervalMinutes <= minimum && maxIntervalMinutes <= maximum
+
+fun HeartbeatConfig.sentinelIntervalsExceedHeartbeat(): Boolean {
+    val heartbeatMin = minIntervalMinutes.coerceIn(5, 24 * 60)
+    val heartbeatMax = maxIntervalMinutes.coerceIn(heartbeatMin, 7 * 24 * 60)
+    return !sentinel.normalized().fitsHeartbeatIntervals(heartbeatMin, heartbeatMax)
 }

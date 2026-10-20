@@ -673,7 +673,7 @@ private fun TextInputRow(
         settings.getQuickMessagesOfAssistant(assistant)
     }
     var lockNowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    val activeLock = settings.usageReminderState.activeLock
+    val activeLock = settings.usageReminderState.allLocks()[context.packageName]
     LaunchedEffect(
         settings.usageReminderConfig.lockEnabled,
         activeLock?.source,
@@ -695,7 +695,7 @@ private fun TextInputRow(
                 }
             }
     }
-    val rikkahubLock = settings.usageReminderState.activeLock?.takeIf { lock ->
+    val rikkahubLock = activeLock?.takeIf { lock ->
         settings.usageReminderConfig.lockEnabled &&
         lock.source == "ai_tool" &&
         lock.lockedUntilMillis > lockNowMillis &&

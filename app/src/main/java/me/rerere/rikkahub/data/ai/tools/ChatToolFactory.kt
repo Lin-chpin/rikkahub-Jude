@@ -7,6 +7,7 @@ import me.rerere.ai.provider.Model
 import me.rerere.rikkahub.data.ai.mcp.McpManager
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.files.SkillManager
+import me.rerere.rikkahub.data.voice.CHAT_VOICE_REPLY_TOOL_NAME
 import kotlin.uuid.Uuid
 
 class ChatToolFactory(
@@ -47,8 +48,10 @@ class ChatToolFactory(
                 usageLockEnabled = usageLockEnabled,
             ).mapTo(mutableSetOf()) { it.name }
         } else configuredLocalTools.mapTo(mutableSetOf()) { it.name }
-        // Keep definitions stable for prompt caching; unavailable tools fail before approval or execution.
-        addAll(configuredLocalTools.map { tool ->
+        // Keep unrelated definitions stable for prompt caching; call controls have no valid in-call use.
+        addAll(configuredLocalTools.filterNot { tool ->
+            voiceCallActive && (tool.name == CHAT_VOICE_REPLY_TOOL_NAME || tool.name == REQUEST_VOICE_CALL_TOOL_NAME)
+        }.map { tool ->
             if (tool.name !in allowedLocalNames) tool.copy(
                 needsApproval = false,
                 execute = { error("Tool unavailable during an active voice call") },

@@ -36,9 +36,12 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.model.InjectionPosition
 import me.rerere.rikkahub.data.model.Lorebook
+import me.rerere.rikkahub.data.model.PromptInjection
 import me.rerere.rikkahub.data.export.LorebookSerializer
 import me.rerere.rikkahub.ui.components.ui.AutoAIIcon
 import me.rerere.rikkahub.ui.context.LocalToaster
@@ -172,7 +175,7 @@ private class CharaCardV3Parser : TavernCardParser {
     }
 }
 
-private fun createAssistant(data: JsonObject, name: String): Assistant {
+internal fun createAssistant(data: JsonObject, name: String): Assistant {
     fun text(key: String) = data[key]?.jsonPrimitiveOrNull?.contentOrNull.orEmpty()
         .let { cleanTavernCardText(it, name) }
 
@@ -180,7 +183,9 @@ private fun createAssistant(data: JsonObject, name: String): Assistant {
         .mapNotNull { it.jsonPrimitiveOrNull?.contentOrNull }
         .map { cleanTavernCardText(it, name) }
         .filter(String::isNotBlank)
-    val firstMessage = text("first_mes").ifBlank { alternateGreetings.firstOrNull().orEmpty() }
+    val firstMessage = text("first_mes").takeUnless { it == "系统：展示开局预览" }
+    val greetings = (listOfNotNull(firstMessage?.takeIf(String::isNotBlank)) + alternateGreetings)
+        .distinct()
     val depthPrompt = data["extensions"]?.jsonObject?.get("depth_prompt")?.jsonObject
         ?.get("prompt")?.jsonPrimitiveOrNull?.contentOrNull.orEmpty()
         .let { cleanTavernCardText(it, name) }
@@ -194,8 +199,6 @@ private fun createAssistant(data: JsonObject, name: String): Assistant {
             "Example dialogue" to text("mes_example"),
             "Post-history instructions" to text("post_history_instructions"),
             "Depth prompt" to depthPrompt,
-            "Alternate greetings" to alternateGreetings.drop(if (text("first_mes").isBlank()) 1 else 0)
-                .joinToString("\n\n"),
         ).forEach { (title, content) ->
             if (content.isNotBlank()) {
                 appendLine()
@@ -206,7 +209,8 @@ private fun createAssistant(data: JsonObject, name: String): Assistant {
     }
     return Assistant(
         name = name,
-        presetMessages = firstMessage.takeIf(String::isNotBlank)?.let { listOf(UIMessage.assistant(it)) }.orEmpty(),
+        presetMessages = greetings.firstOrNull()?.let { listOf(UIMessage.assistant(it)) }.orEmpty(),
+        alternateGreetings = greetings.drop(1),
         systemPrompt = prompt,
     )
 }
@@ -222,10 +226,35 @@ internal fun cleanTavernCardText(value: String, characterName: String): String =
     .replace(Regex("</?[A-Za-z][^>]*>"), "")
     .trim()
 
-private data class ImportedTavernCard(
+internal data class ImportedTavernCard(
     val assistant: Assistant,
     val lorebook: Lorebook?,
 )
+
+internal fun attachCharacterBook(assistant: Assistant, lorebook: Lorebook?): ImportedTavernCard {
+    val sourceLorebook = lorebook ?: return ImportedTavernCard(assistant, null)
+    val characterDescriptionEntries = sourceLorebook.entries.filter { entry ->
+        entry.enabled &&
+            entry.constantActive &&
+            entry.position == InjectionPosition.AFTER_SYSTEM_PROMPT &&
+            entry.role == MessageRole.SYSTEM &&
+            entry.keywords.isEmpty() &&
+            entry.modelConditionRegex == null
+    }
+    if (characterDescriptionEntries.isEmpty()) return ImportedTavernCard(assistant, sourceLorebook)
+
+    val systemPrompt = buildString {
+        append(assistant.systemPrompt)
+        characterDescriptionEntries.forEach { entry ->
+            appendLine()
+            if (entry.name.isNotBlank()) appendLine("## ${entry.name}")
+            appendLine(entry.content)
+        }
+    }
+    val remainingLorebook = sourceLorebook.copy(entries = sourceLorebook.entries - characterDescriptionEntries.toSet())
+        .takeIf { it.entries.isNotEmpty() }
+    return ImportedTavernCard(assistant.copy(systemPrompt = systemPrompt), remainingLorebook)
+}
 
 private val TAVERN_PARSERS: Map<String, TavernCardParser> = listOf(
     CharaCardV2Parser(),
@@ -258,7 +287,7 @@ private fun parseAssistantFromJson(
             ).takeIf { it.entries.isNotEmpty() }
         }
     }
-    return ImportedTavernCard(assistant, lorebook)
+    return attachCharacterBook(assistant, lorebook)
 }
 
 // endregion
