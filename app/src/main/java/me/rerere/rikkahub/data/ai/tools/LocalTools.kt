@@ -505,8 +505,8 @@ class LocalTools(
                 Use only when the user asks to lock/unlock usage, enforce a break, or check lock status.
                 This AI tool is available only when enabled in the usage time settings.
                 For action=lock, provide one of: duration_minutes, unlock_at_timestamp_ms, or unlock_at_iso.
-                For action=lock, provide target_package_name for the app being locked, or use RikkaHub's own package name for the current app.
-                If the target is RikkaHub itself, set target_package_name to ${context.packageName}; only the chat input is disabled and no system overlay is shown.
+                For action=lock, provide the exact installed app name in target_label. If target_package_name is also provided, it must belong to that app; label-only targets are accepted only when the name is unique.
+                If locking RikkaHub itself, use its exact installed app name; only the chat input is disabled and no system overlay is shown.
             """.trimIndent().replace("\n", " "),
             parameters = {
                 InputSchema.Obj(
@@ -538,11 +538,11 @@ class LocalTools(
                         })
                         put("target_package_name", buildJsonObject {
                             put("type", "string")
-                            put("description", "App package to lock, or app package to unlock. Required for action=lock; optional for action=unlock, which clears all AI locks when omitted.")
+                            put("description", "Exact installed app package to lock or unlock. For action=lock, it must match target_label when provided; optional for action=unlock, which clears all AI locks when omitted.")
                         })
                         put("target_label", buildJsonObject {
                             put("type", "string")
-                            put("description", "Optional readable target app name, such as RikkaHub.")
+                            put("description", "Exact installed app display name required for action=lock. If target_package_name is omitted, this name must identify exactly one installed app.")
                         })
                     },
                     required = listOf("action")
@@ -617,36 +617,29 @@ class LocalTools(
                                 ?: error("Provide duration_minutes, unlock_at_timestamp_ms, or unlock_at_iso for action=lock.")
                             require(lockedUntilMillis > now) { "unlock time must be in the future" }
                             val reason = obj["reason"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                            val targetLabel = obj["target_label"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                            val requestedTargetPackage = obj["target_package_name"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                            val targetPackageName = when {
-                                requestedTargetPackage.isNotBlank() -> requestedTargetPackage
-                                targetLabel.equals("RikkaHub", ignoreCase = true) -> context.packageName
-                                targetLabel.equals("rikkahub", ignoreCase = true) -> context.packageName
-                                else -> null
-                            }
-                            if (targetPackageName == null) {
+                            val targetResolution = resolveUsageLockTarget(
+                                packageName = obj["target_package_name"]?.jsonPrimitive?.contentOrNull,
+                                label = obj["target_label"]?.jsonPrimitive?.contentOrNull,
+                                installedApps = usageStatsReader.loadLaunchableAppLabels(),
+                            )
+                            if (targetResolution is UsageLockTargetResolution.Rejected) {
                                 listOf(
                                     UIMessagePart.Text(
                                         buildJsonObject {
                                             put("success", false)
-                                            put(
-                                                "error",
-                                                "Provide target_package_name for the app to lock, or target_label=RikkaHub to lock RikkaHub input."
-                                            )
+                                            put("error", targetResolution.reason)
                                         }.toString()
                                     )
                                 )
                             } else {
+                                val target = (targetResolution as UsageLockTargetResolution.Resolved).target
                                 UsageReminderService.lock(
                                     context = context,
                                     lockedUntilMillis = lockedUntilMillis,
                                     reason = reason,
                                     source = "ai_tool",
-                                    targetPackageName = targetPackageName,
-                                    targetLabel = targetLabel.ifBlank {
-                                        if (targetPackageName == context.packageName) "RikkaHub" else ""
-                                    },
+                                    targetPackageName = target.packageName,
+                                    targetLabel = target.label,
                                 )
                                 listOf(
                                     UIMessagePart.Text(
@@ -658,10 +651,11 @@ class LocalTools(
                                             put("overlay_permission_granted", UsageReminderService.canDrawOverlays(context))
                                             put(
                                                 "target_requires_foreground_monitor",
-                                                targetPackageName != context.packageName
+                                                target.packageName != context.packageName
                                             )
                                             put("monitoring_started", true)
-                                            put("target_package_name", targetPackageName)
+                                            put("target_package_name", target.packageName)
+                                            put("target_label", target.label)
                                         }.toString()
                                     )
                                 )

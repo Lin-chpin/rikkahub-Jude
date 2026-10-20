@@ -67,7 +67,8 @@ class UsageReminderService : Service() {
     private var lockNoticeView: View? = null
     private var lockNoticeSignature: String? = null
     private var lockNoticeJob: Job? = null
-    private val lastLockNotificationSignatures = mutableMapOf<Int, String>()
+    private val lastLockNotificationSignatures = mutableMapOf<String?, String>()
+    private var legacyUntargetedLockNotificationCleared = false
     private var lastLockStateLogSignature: String? = null
     private var lastTargetRedirectPackageName: String? = null
     private var lastTargetRedirectAtMillis: Long = 0L
@@ -234,6 +235,10 @@ class UsageReminderService : Service() {
         } else {
             emptyList()
         }
+        if (activeLocks.none { it.targetPackageName == null } && !legacyUntargetedLockNotificationCleared) {
+            NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID_LOCK)
+            legacyUntargetedLockNotificationCleared = true
+        }
         if (activeLocks.isNotEmpty()) {
             // ponytail: the existing 1s monitor expires every app lock without per-lock scheduler state.
             activeLocks.forEach(::sendLockNotification)
@@ -352,8 +357,13 @@ class UsageReminderService : Service() {
                 )
             )
         }
-        if (targetPackageName != null) {
+        val hasActiveUntargetedLock = settingsStore.settingsFlowRaw.first()
+            .usageReminderState.allLocks().values.any {
+                it.targetPackageName == null && it.lockedUntilMillis > now
+            }
+        if (targetPackageName != null && !hasActiveUntargetedLock) {
             NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID_LOCK)
+            legacyUntargetedLockNotificationCleared = true
         }
         logUsageLock(
             "lockUntil: accepted target=$targetPackageName label=$targetLabel source=$source " +
@@ -384,10 +394,17 @@ class UsageReminderService : Service() {
                 usageReminderState = current.usageReminderState.withLocks(locks - toRemove.keys)
             )
         }
+        val notificationManager = NotificationManagerCompat.from(this)
         removedLocks.forEach { lock ->
             val notificationId = lockNotificationId(lock)
-            NotificationManagerCompat.from(this).cancel(notificationId)
-            lastLockNotificationSignatures.remove(notificationId)
+            notificationManager.cancel(lock.targetPackageName, notificationId)
+            if (lock.targetPackageName != null) {
+                // Remove the untagged notification posted by the previous multi-lock build.
+                notificationManager.cancel(notificationId)
+            } else {
+                legacyUntargetedLockNotificationCleared = true
+            }
+            lastLockNotificationSignatures.remove(lock.targetPackageName)
         }
         logUsageLock(
             "clearLocks: source=$source target=$targetPackageName expiredAt=$expiredAtMillis " +
@@ -788,6 +805,7 @@ class UsageReminderService : Service() {
     }
 
     private fun sendLockNotification(lock: UsageReminderLock) {
+        val notificationTag = lock.targetPackageName
         val notificationId = lockNotificationId(lock)
         val signature = buildString {
             append(lock.createdAtMillis)
@@ -798,7 +816,7 @@ class UsageReminderService : Service() {
             append('|')
             append(lock.reason)
         }
-        if (lastLockNotificationSignatures[notificationId] == signature) {
+        if (lastLockNotificationSignatures[notificationTag] == signature) {
             return
         }
         val unlockText = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
@@ -817,8 +835,14 @@ class UsageReminderService : Service() {
                 unlockText,
             )
         }
+        val notificationManager = NotificationManagerCompat.from(this)
         runCatching {
-            NotificationManagerCompat.from(this).notify(
+            if (notificationTag != null) {
+                // Clear the untagged notification posted by older releases for this app.
+                notificationManager.cancel(notificationId)
+            }
+            notificationManager.notify(
+                notificationTag,
                 notificationId,
                 NotificationCompat.Builder(this, USAGE_LIMIT_REMINDER_CHANNEL_ID)
                     .setSmallIcon(R.drawable.small_icon)
@@ -829,7 +853,8 @@ class UsageReminderService : Service() {
                     .setCategory(NotificationCompat.CATEGORY_REMINDER)
                     .build()
             )
-            lastLockNotificationSignatures[notificationId] = signature
+            lastLockNotificationSignatures[notificationTag] = signature
+            if (notificationTag == null) legacyUntargetedLockNotificationCleared = false
         }.onFailure {
             logUsageLock("sendLockNotification: notify failed target=${lock.targetPackageName}", it)
         }

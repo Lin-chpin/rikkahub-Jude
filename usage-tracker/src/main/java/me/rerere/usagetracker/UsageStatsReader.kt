@@ -59,6 +59,16 @@ class UsageStatsReader(private val context: Context) {
         appContext.packageManager.loadInstalledApps()
     }
 
+    suspend fun loadLaunchableAppLabels(): Map<String, String> = withContext(Dispatchers.IO) {
+        val packageManager = appContext.packageManager
+        val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val launchablePackages = packageManager.queryIntentActivities(
+            launcherIntent,
+            PackageManager.MATCH_DEFAULT_ONLY,
+        ).mapTo(mutableSetOf()) { it.activityInfo.packageName }
+        packageManager.loadInstalledApps().filterKeys { it in launchablePackages }
+    }
+
     suspend fun loadAppIcon(packageName: String) = withContext(Dispatchers.IO) {
         appContext.packageManager.loadIconOrNull(packageName)
     }
