@@ -35,6 +35,7 @@ fun ASRProviderConfigure(
                     is ASRProviderSetting.OpenAIRealtime -> "OpenAI Realtime"
                     is ASRProviderSetting.DashScope -> "DashScope"
                     is ASRProviderSetting.Volcengine -> "Volcengine"
+                    is ASRProviderSetting.ElevenLabsRealtime -> "ElevenLabs Scribe Realtime"
                 },
                 onValueChange = {},
                 readOnly = true,
@@ -58,6 +59,7 @@ fun ASRProviderConfigure(
             is ASRProviderSetting.OpenAIRealtime -> OpenAIRealtimeASRConfiguration(setting, onValueChange)
             is ASRProviderSetting.DashScope -> DashScopeASRConfiguration(setting, onValueChange)
             is ASRProviderSetting.Volcengine -> VolcengineASRConfiguration(setting, onValueChange)
+            is ASRProviderSetting.ElevenLabsRealtime -> ElevenLabsRealtimeASRConfiguration(setting, onValueChange)
         }
     }
 }
@@ -313,6 +315,36 @@ private fun VolcengineASRConfiguration(
             onValueChange = { onValueChange(setting.copy(language = it)) },
             modifier = Modifier.fillMaxWidth(),
             placeholder = { Text("auto") }
+        )
+    }
+}
+
+@Composable
+private fun ElevenLabsRealtimeASRConfiguration(
+    setting: ASRProviderSetting.ElevenLabsRealtime,
+    onValueChange: (ASRProviderSetting) -> Unit,
+) {
+    FormItem(
+        label = { Text(stringResource(R.string.setting_asr_configure_api_key)) },
+        description = { Text(stringResource(R.string.setting_asr_configure_elevenlabs_api_key_desc)) }
+    ) {
+        OutlinedTextField(
+            value = setting.apiKey,
+            onValueChange = { onValueChange(setting.copy(apiKey = it)) },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("xi-api-key") }
+        )
+    }
+
+    FormItem(
+        label = { Text(stringResource(R.string.setting_asr_configure_language)) },
+        description = { Text(stringResource(R.string.setting_asr_configure_language_iso_desc)) }
+    ) {
+        OutlinedTextField(
+            value = setting.language,
+            onValueChange = { onValueChange(setting.copy(language = it)) },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("zh") }
         )
     }
 }

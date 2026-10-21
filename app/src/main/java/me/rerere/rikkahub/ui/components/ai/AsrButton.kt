@@ -49,23 +49,29 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Voice
 
 private enum class AsrDisplayState {
-    Idle, Connecting, Active
+    Idle, Connecting, Active, Muted
 }
 
 @Composable
 internal fun AsrButton(
     state: ASRState,
+    muted: Boolean,
+    enabled: Boolean,
     onClick: () -> Unit,
 ) {
-    val isIdle = state.status == ASRStatus.Idle
-    val targetContainerColor = when (state.status) {
+    val isIdle = muted || state.status == ASRStatus.Idle
+    val targetContainerColor = if (muted) {
+        MaterialTheme.colorScheme.surfaceVariant
+    } else when (state.status) {
         ASRStatus.Idle -> Color.Transparent
         ASRStatus.Connecting -> MaterialTheme.colorScheme.secondaryContainer
         ASRStatus.Listening -> MaterialTheme.colorScheme.primaryContainer
         ASRStatus.Stopping -> MaterialTheme.colorScheme.tertiaryContainer
         ASRStatus.Error -> MaterialTheme.colorScheme.errorContainer
     }
-    val targetContentColor = when (state.status) {
+    val targetContentColor = if (muted) {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    } else when (state.status) {
         ASRStatus.Idle -> LocalContentColor.current
         ASRStatus.Connecting -> MaterialTheme.colorScheme.onSecondaryContainer
         ASRStatus.Listening -> MaterialTheme.colorScheme.onPrimaryContainer
@@ -83,14 +89,16 @@ internal fun AsrButton(
         label = "asr_content"
     )
 
-    val displayState = when (state.status) {
-        ASRStatus.Idle, ASRStatus.Error -> AsrDisplayState.Idle
-        ASRStatus.Connecting -> AsrDisplayState.Connecting
-        ASRStatus.Listening, ASRStatus.Stopping -> AsrDisplayState.Active
+    val displayState = when {
+        muted -> AsrDisplayState.Muted
+        state.status == ASRStatus.Connecting -> AsrDisplayState.Connecting
+        state.status == ASRStatus.Listening || state.status == ASRStatus.Stopping -> AsrDisplayState.Active
+        else -> AsrDisplayState.Idle
     }
 
     Surface(
         onClick = onClick,
+        enabled = enabled,
         modifier = Modifier
             .height(36.dp)
             .widthIn(min = 36.dp)
@@ -109,14 +117,21 @@ internal fun AsrButton(
         ) { display ->
             when (display) {
                 AsrDisplayState.Idle -> {
-                    Box(
-                        modifier = Modifier.size(36.dp),
-                        contentAlignment = Alignment.Center
+                    Row(
+                        modifier = Modifier.height(36.dp).padding(horizontal = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(
                             imageVector = HugeIcons.Voice,
-                            contentDescription = stringResource(R.string.asr_button_content_description),
+                            contentDescription = stringResource(R.string.asr_auto_mute),
                             tint = contentColor
+                        )
+                        Text(
+                            text = stringResource(R.string.asr_auto_mute),
+                            color = contentColor,
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
                         )
                     }
                 }
@@ -159,10 +174,30 @@ internal fun AsrButton(
                             color = contentColor,
                         )
                         Text(
-                            text = stringResource(R.string.asr_button_stop),
+                            text = stringResource(R.string.asr_auto_mute),
                             color = contentColor,
                             style = MaterialTheme.typography.labelLarge,
                             maxLines = 1
+                        )
+                    }
+                }
+
+                AsrDisplayState.Muted -> {
+                    Row(
+                        modifier = Modifier.height(36.dp).padding(horizontal = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = HugeIcons.Voice,
+                            contentDescription = stringResource(R.string.asr_auto_resume),
+                            tint = contentColor,
+                        )
+                        Text(
+                            text = stringResource(R.string.asr_auto_resume),
+                            color = contentColor,
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
                         )
                     }
                 }

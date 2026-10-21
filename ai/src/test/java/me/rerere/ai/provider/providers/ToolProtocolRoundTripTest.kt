@@ -117,6 +117,53 @@ class ToolProtocolRoundTripTest {
     }
 
     @Test
+    fun `Google serializes sequential tool steps as separate model and result turns`() {
+        val firstCall = completedGoogleTool("get_time_info", "native_A", "signature_A", "result_A")
+        val secondCall = completedGoogleTool("get_local_weather", "native_B", "signature_B", "result_B")
+        val api = GoogleProvider(OkHttpClient())
+
+        val contents = api.buildCompletionRequestBody(
+            messages = listOf(UIMessage.user("question"), firstCall, secondCall),
+            params = params,
+        ).getValue("contents").jsonArray
+
+        assertEquals(listOf("user", "model", "user", "model", "user"), contents.map {
+            it.jsonObject.getValue("role").jsonPrimitive.content
+        })
+        assertEquals("native_A", contents[1].jsonObject["parts"]!!.jsonArray.single()
+            .jsonObject["functionCall"]!!.jsonObject["id"]!!.jsonPrimitive.content)
+        assertEquals("signature_A", contents[1].jsonObject["parts"]!!.jsonArray.single()
+            .jsonObject["thoughtSignature"]!!.jsonPrimitive.content)
+        assertEquals("native_B", contents[3].jsonObject["parts"]!!.jsonArray.single()
+            .jsonObject["functionCall"]!!.jsonObject["id"]!!.jsonPrimitive.content)
+        assertEquals("signature_B", contents[3].jsonObject["parts"]!!.jsonArray.single()
+            .jsonObject["thoughtSignature"]!!.jsonPrimitive.content)
+        assertEquals("result_A", contents[2].jsonObject["parts"]!!.jsonArray.single()
+            .jsonObject["functionResponse"]!!.jsonObject["response"]!!
+            .jsonObject["result"]!!.jsonPrimitive.content)
+        assertEquals("result_B", contents[4].jsonObject["parts"]!!.jsonArray.single()
+            .jsonObject["functionResponse"]!!.jsonObject["response"]!!
+            .jsonObject["result"]!!.jsonPrimitive.content)
+    }
+
+    private fun completedGoogleTool(name: String, id: String, signature: String, result: String) =
+        UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool(
+                    toolCallId = "call_$id",
+                    toolName = name,
+                    input = "{}",
+                    output = listOf(UIMessagePart.Text(result)),
+                    metadata = buildJsonObject {
+                        put("google_function_call_id", id)
+                        put("thoughtSignature", signature)
+                    },
+                ),
+            ),
+        )
+
+    @Test
     fun `Claude joins signature fragments preserves redacted block and pairs indexed tools`() = runBlocking {
         val events = listOf(
             """{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}""",

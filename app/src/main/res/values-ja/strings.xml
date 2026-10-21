@@ -10,6 +10,8 @@
   <string name="app_name">RikkaHub</string>
   <string name="asr_button_content_description">音声認識</string>
   <string name="asr_button_stop">停止</string>
+  <string name="asr_auto_mute">ミュート</string>
+  <string name="asr_auto_resume">聴取を再開</string>
   <string name="assistant_detail_basic_desc">名前、アバター、モデル、パラメータを設定</string>
   <string name="assistant_detail_extensions_desc">プロンプトインジェクション、ロアブック、スキルを管理</string>
   <string name="assistant_detail_local_tools_desc">JavaScriptエンジンなどのローカルツールを有効化</string>
@@ -600,6 +602,7 @@
   <string name="setting_asr_configure_name">名前</string>
   <string name="setting_asr_configure_name_desc">このASRプロバイダーのカスタム名</string>
   <string name="setting_asr_configure_openai_api_key_desc">リアルタイムWebSocketで使用するOpenAI APIキー</string>
+  <string name="setting_asr_configure_elevenlabs_api_key_desc">Scribe v2 Realtime WebSocketで使用するElevenLabs APIキー</string>
   <string name="setting_asr_configure_openai_websocket_desc">OpenAIリアルタイムWebSocketエンドポイント</string>
   <string name="setting_asr_configure_prefix_padding">プレフィックスパディング</string>
   <string name="setting_asr_configure_prefix_padding_desc">検出された音声の前に保持される音声（ミリ秒単位）</string>

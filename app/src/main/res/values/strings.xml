@@ -10,6 +10,8 @@
   <string name="app_name">RikkaHub</string>
   <string name="asr_button_content_description">Speech Recognition</string>
   <string name="asr_button_stop">Stop</string>
+  <string name="asr_auto_mute">Mute</string>
+  <string name="asr_auto_resume">Resume listening</string>
   <string name="assistant_detail_basic_desc">Configure name, avatar, model, and parameters</string>
   <string name="assistant_detail_extensions_desc">Manage quick messages, prompt injections, lorebooks and skills</string>
   <string name="assistant_detail_local_tools_desc">Enable local tools like JavaScript engine</string>
@@ -692,6 +694,7 @@
   <string name="setting_asr_configure_name">Name</string>
   <string name="setting_asr_configure_name_desc">Custom name for this ASR provider</string>
   <string name="setting_asr_configure_openai_api_key_desc">OpenAI API key used by the realtime websocket</string>
+  <string name="setting_asr_configure_elevenlabs_api_key_desc">ElevenLabs API key used by Scribe v2 Realtime over WebSocket</string>
   <string name="setting_asr_configure_openai_websocket_desc">OpenAI realtime websocket endpoint</string>
   <string name="setting_asr_configure_prefix_padding">Prefix Padding</string>
   <string name="setting_asr_configure_prefix_padding_desc">Audio kept before detected speech, in milliseconds</string>

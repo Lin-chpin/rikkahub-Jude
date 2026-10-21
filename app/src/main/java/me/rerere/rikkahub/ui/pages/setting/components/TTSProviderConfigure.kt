@@ -509,19 +509,6 @@ private fun ElevenLabsTTSConfiguration(
         }
     }
 
-    if (setting.isElevenLabsV4Family()) {
-        FormItem(
-            label = { Text("全双工对话") },
-            description = { Text("通话使用 Eleven v4 Turbo，持续监听并支持说话打断。需配置语音识别服务。") },
-            tail = {
-                Switch(
-                    checked = setting.fullDuplex,
-                    onCheckedChange = { onValueChange(setting.copy(fullDuplex = it)) },
-                )
-            },
-        ) {}
-    }
-
     FormItem(
         label = { Text("语言") },
         description = { Text("可选。用于指定语言和文本规范化；口音仍由所选音色决定。Eleven Multilingual v2 不支持此参数。") },

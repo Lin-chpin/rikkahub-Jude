@@ -10,6 +10,8 @@
   <string name="app_name">RikkaHub</string>
   <string name="asr_button_content_description">Распознавание речи</string>
   <string name="asr_button_stop">Стоп</string>
+  <string name="asr_auto_mute">Отключить микрофон</string>
+  <string name="asr_auto_resume">Включить микрофон</string>
   <string name="assistant_detail_basic_desc">Настройте имя, аватар, модель и параметры</string>
   <string name="assistant_detail_extensions_desc">Управление внедрениями подсказок, лорбуками и навыками</string>
   <string name="assistant_detail_local_tools_desc">Включите локальные инструменты, например движок JavaScript</string>
@@ -600,6 +602,7 @@
   <string name="setting_asr_configure_name">Имя</string>
   <string name="setting_asr_configure_name_desc">Пользовательское имя для этого поставщика ASR</string>
   <string name="setting_asr_configure_openai_api_key_desc">Ключ API OpenAI, используемый для веб-сокета в реальном времени</string>
+  <string name="setting_asr_configure_elevenlabs_api_key_desc">Ключ ElevenLabs API для Scribe v2 Realtime через WebSocket</string>
   <string name="setting_asr_configure_openai_websocket_desc">Конечная точка веб-сокета OpenAI realtime</string>
   <string name="setting_asr_configure_prefix_padding">Префиксный отступ</string>
   <string name="setting_asr_configure_prefix_padding_desc">Аудио, сохраняемое до обнаружения речи, в миллисекундах</string>

@@ -11,6 +11,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
+import me.rerere.asr.ASRState
 import me.rerere.asr.ASRStatus
 import me.rerere.rikkahub.data.voice.VoiceCallUtteranceGate
 import me.rerere.rikkahub.ui.context.LocalASRState
@@ -21,7 +22,17 @@ internal class VoiceCallDuplexInputState {
     var pendingText by mutableStateOf("")
     var fallback by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
+    var asrState by mutableStateOf(ASRState())
+    var muted by mutableStateOf(false)
     var stop: () -> Unit = {}
+
+    fun toggleMute() {
+        muted = !muted
+        if (!muted) {
+            error = null
+            fallback = false
+        }
+    }
 }
 
 @Composable
@@ -41,6 +52,13 @@ internal fun rememberVoiceCallDuplexInput(
     var accepting by remember { mutableStateOf(false) }
     var attempts by remember(providerId) { mutableStateOf(0) }
 
+    LaunchedEffect(status) {
+        state.asrState = status
+    }
+    LaunchedEffect(state.muted) {
+        if (!state.muted) attempts = 0
+    }
+
     DisposableEffect(asr, enabled, permissionGranted, providerId) {
         accepting = enabled && permissionGranted
         state.fallback = false
@@ -58,13 +76,21 @@ internal fun rememberVoiceCallDuplexInput(
         }
     }
 
-    LaunchedEffect(enabled, permissionGranted, providerId, status.status, status.isAvailable) {
-        if (!enabled || !permissionGranted || !accepting || state.fallback) return@LaunchedEffect
-        if (!status.isAvailable) {
-            state.fallback = true
-            state.error = "请配置语音识别服务；当前使用输入法语音。"
+    LaunchedEffect(enabled, permissionGranted, providerId, status.status, status.isAvailable, state.muted) {
+        if (!enabled || !permissionGranted || state.muted) {
+            if (accepting) asr.stop()
+            accepting = false
+            state.pendingText = ""
             return@LaunchedEffect
         }
+        accepting = true
+        if (!status.isAvailable) {
+            state.fallback = true
+            state.error = null
+            return@LaunchedEffect
+        }
+        state.fallback = false
+        if (state.error != null) return@LaunchedEffect
         if (status.status == ASRStatus.Connecting) {
             delay(10_000)
             if (accepting && asr.state.value.status == ASRStatus.Connecting) asr.stop()
@@ -76,8 +102,8 @@ internal fun rememberVoiceCallDuplexInput(
         }
         if (status.status != ASRStatus.Idle && status.status != ASRStatus.Error) return@LaunchedEffect
         if (attempts >= 3) {
-            state.fallback = true
-            state.error = "语音识别连接中断，已恢复输入法语音。"
+            state.error = "语音识别连接失败，请重试或检查 ASR 配置。"
+            accepting = false
             asr.stop()
             return@LaunchedEffect
         }

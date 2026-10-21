@@ -534,8 +534,13 @@ class GenerationHandler(
             processingStatus = processingStatus,
         ).withRuntimeContextInstruction(runtimeStateSystemPrompt)
 
-        var responseMessages = beginAssistantResponse(messages, model.id, startNewAssistantMessage)
-        if (startNewAssistantMessage) {
+        var responseMessages = beginAssistantResponse(
+            messages = messages,
+            modelId = model.id,
+            startNewMessage = startNewAssistantMessage,
+            providerSetting = provider,
+        )
+        if (responseMessages.lastOrNull()?.id != messages.lastOrNull()?.id) {
             timing.mark("assistant_response_started", responseMessages.last().id.toString(), 0)
         }
         val params = TextGenerationParams(

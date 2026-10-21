@@ -73,6 +73,30 @@ import kotlin.uuid.Uuid
 
 private const val TAG = "GoogleProvider"
 
+internal fun parseGoogleModelList(body: JsonObject): List<Model> {
+    val models = body["models"] as? JsonArray ?: return emptyList()
+    return models.mapNotNull { element ->
+        val modelObject = element as? JsonObject ?: return@mapNotNull null
+        val modelId = modelObject["name"]?.jsonPrimitiveOrNull?.contentOrNull
+            ?.substringAfter('/') ?: return@mapNotNull null
+        val methods = (modelObject["supportedGenerationMethods"] as? JsonArray)
+            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+        val type = when {
+            "generateContent" in methods.orEmpty() -> ModelType.CHAT
+            "embedContent" in methods.orEmpty() -> ModelType.EMBEDDING
+            methods != null -> return@mapNotNull null
+            // ponytail: relay omits capabilities; use Gemini IDs as fallback, switch to documented metadata if available.
+            modelId.contains("gemini", ignoreCase = true) && !modelId.contains("embedding", ignoreCase = true) -> ModelType.CHAT
+            else -> return@mapNotNull null
+        }
+        Model(
+            modelId = modelId,
+            displayName = modelObject["displayName"]?.jsonPrimitiveOrNull?.contentOrNull ?: modelId,
+            type = type,
+        )
+    }
+}
+
 class GoogleProvider(private val client: OkHttpClient, context: Context? = null) : Provider<ProviderSetting.Google> {
     private val keyRoulette = if (context != null) KeyRoulette.lru(context) else KeyRoulette.default()
     private val serviceAccountTokenProvider by lazy {
@@ -130,25 +154,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 val body = response.body?.string() ?: error("empty body")
                 Log.d(TAG, "listModels: $body")
                 val bodyObject = json.parseToJsonElement(body).jsonObject
-                val models = bodyObject["models"]?.jsonArray ?: return@withContext emptyList()
-
-                models.mapNotNull {
-                    val modelObject = it.jsonObject
-
-                    // 忽略非chat/embedding模型
-                    val supportedGenerationMethods =
-                        modelObject["supportedGenerationMethods"]!!.jsonArray
-                            .map { method -> method.jsonPrimitive.content }
-                    if ("generateContent" !in supportedGenerationMethods && "embedContent" !in supportedGenerationMethods) {
-                        return@mapNotNull null
-                    }
-
-                    Model(
-                        modelId = modelObject["name"]!!.jsonPrimitive.content.substringAfter("/"),
-                        displayName = modelObject["displayName"]!!.jsonPrimitive.content,
-                        type = if ("generateContent" in supportedGenerationMethods) ModelType.CHAT else ModelType.EMBEDDING,
-                    )
-                }
+                parseGoogleModelList(bodyObject)
             } else {
                 emptyList()
             }

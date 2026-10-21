@@ -10,6 +10,8 @@
   <string name="app_name">RikkaHub</string>
   <string name="asr_button_content_description">語音辨識</string>
   <string name="asr_button_stop">停止</string>
+  <string name="asr_auto_mute">靜音</string>
+  <string name="asr_auto_resume">繼續聆聽</string>
   <string name="assistant_detail_basic_desc">設定名稱、頭像、模型與參數</string>
   <string name="assistant_detail_extensions_desc">管理提示注入、背景知識庫與技能</string>
   <string name="assistant_detail_local_tools_desc">啟用本機工具如 JavaScript 引擎</string>
@@ -623,6 +625,7 @@
   <string name="setting_asr_configure_name">名稱</string>
   <string name="setting_asr_configure_name_desc">此 ASR 提供者的自訂名稱</string>
   <string name="setting_asr_configure_openai_api_key_desc">即時 websocket 使用的 OpenAI API 金鑰</string>
+  <string name="setting_asr_configure_elevenlabs_api_key_desc">Scribe v2 Realtime WebSocket 使用的 ElevenLabs API 金鑰</string>
   <string name="setting_asr_configure_openai_websocket_desc">OpenAI 即時 websocket 端點</string>
   <string name="setting_asr_configure_prefix_padding">前綴填充</string>
   <string name="setting_asr_configure_prefix_padding_desc">偵測到語音前保留的音訊長度，以毫秒為單位</string>

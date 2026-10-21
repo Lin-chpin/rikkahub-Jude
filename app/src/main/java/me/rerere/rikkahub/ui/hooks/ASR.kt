@@ -23,6 +23,7 @@ import me.rerere.asr.ASRController
 import me.rerere.asr.ASRProviderSetting
 import me.rerere.asr.ASRState
 import me.rerere.asr.providers.DashScopeASRController
+import me.rerere.asr.providers.ElevenLabsRealtimeASRController
 import me.rerere.asr.providers.OpenAIRealtimeASRController
 import me.rerere.asr.providers.VolcengineASRController
 import me.rerere.rikkahub.data.datastore.SettingsStore
@@ -163,6 +164,11 @@ private class CustomAsrStateImpl(
             is ASRProviderSetting.Volcengine -> {
                 if (provider.apiKey.isBlank()) return null
                 VolcengineASRController(context, httpClient, provider)
+            }
+
+            is ASRProviderSetting.ElevenLabsRealtime -> {
+                if (provider.apiKey.isBlank()) return null
+                ElevenLabsRealtimeASRController(context, httpClient, provider)
             }
         }
     }

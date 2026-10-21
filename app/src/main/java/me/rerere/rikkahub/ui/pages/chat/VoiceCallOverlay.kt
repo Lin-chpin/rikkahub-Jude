@@ -79,6 +79,8 @@ import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 import java.util.Locale
 import me.rerere.ai.core.MessageRole
@@ -108,6 +110,7 @@ import me.rerere.rikkahub.data.voice.sanitizeVoiceCallTextForTranslation
 import me.rerere.rikkahub.service.ChatRequestMode
 import me.rerere.rikkahub.service.VoiceCallSessionRegistry
 import me.rerere.rikkahub.ui.components.richtext.appendVoiceCallAudioTagAwareText
+import me.rerere.rikkahub.ui.components.ai.AsrButton
 import me.rerere.rikkahub.ui.components.message.CollapsibleTranslationText
 import me.rerere.rikkahub.ui.components.message.TranslateMessageButton
 import me.rerere.rikkahub.ui.components.ui.KeepScreenOn
@@ -119,6 +122,7 @@ import me.rerere.rikkahub.ui.components.ui.permission.rememberPermissionState
 import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.context.LocalTTSState
 import me.rerere.rikkahub.ui.context.LocalToaster
+import me.rerere.rikkahub.ui.hooks.rememberCustomAsrState
 import me.rerere.rikkahub.ui.components.message.ChatMessageBubbleShape
 import me.rerere.rikkahub.ui.components.message.MessageBubbleSurface
 import me.rerere.rikkahub.ui.theme.LocalLiquidGlass
@@ -187,6 +191,8 @@ fun VoiceCallOverlay(
         !selectedTtsProvider.isElevenLabsV4() && voiceCallAudioTagFormat != null
     val asrPermission = rememberPermissionState(PermissionRecordAudio)
     PermissionManager(permissionState = asrPermission)
+    val callAsr = rememberCustomAsrState()
+    val callAsrState by callAsr.state.collectAsState()
 
     val speechPlayback = rememberVoiceCallSpeechPlaybackState(awaitInitialAssistantReply)
     var keyboardCaptureActive by remember { mutableStateOf(false) }
@@ -196,6 +202,7 @@ fun VoiceCallOverlay(
     var submittedKeyboardInputSession by remember { mutableStateOf(0) }
     var keyboardInput by remember { mutableStateOf("") }
     var submittedKeyboardInput by remember { mutableStateOf("") }
+    var submittingCallAsr by remember { mutableStateOf(false) }
     val reportedCallState = remember(initialVoiceCallToolCallId) { mutableStateOf(false) }
     var voiceCallResultReported by reportedCallState
     val callScope = rememberCoroutineScope()
@@ -299,6 +306,7 @@ fun VoiceCallOverlay(
     }
     val pendingUserInputText = keyboardInput.trim()
     val pendingBubbleText = pendingUserInputText.ifBlank { submittedKeyboardInput }
+        .ifBlank { callAsrState.transcript.takeIf { callAsrState.isRecording }.orEmpty() }
     LaunchedEffect(visibleMessages.size, currentAssistantText, pendingBubbleText) {
         val scrollTarget = if (pendingBubbleText.isNotBlank()) {
             visibleMessages.size
@@ -322,6 +330,10 @@ fun VoiceCallOverlay(
                     useWholeReplyTts -> "whole_reply_http"
                     else -> "sentence_queue"
                 } + ", tagMode=" + voiceCallAudioTagMode
+        )
+        recordVoiceCallFlow(
+            "ASR配置 provider=" + (settings.getSelectedASRProvider()?.javaClass?.simpleName ?: "none") +
+                ", available=" + callAsrState.isAvailable
         )
         if (isHistory) {
             val savedSegments = historyAudioSegmentsByMessageId.values.flatten().ifEmpty {
@@ -371,6 +383,7 @@ fun VoiceCallOverlay(
         if (voiceCallResultReported) return
         voiceCallResultReported = true
         stopDuplexInput[0]()
+        callAsr.stop()
         val closingGeneration = vm.cancelGeneration()
         vm.stopGeneration()
         recordVoiceCallFlow(
@@ -482,6 +495,27 @@ fun VoiceCallOverlay(
         }
     }
 
+    fun finishCallAsrInput() {
+        if (submittingCallAsr) return
+        submittingCallAsr = true
+        callScope.launch {
+            callAsr.stop()
+            val completed = withTimeoutOrNull(2_500) {
+                callAsr.state.first { !it.isRecording }
+            }
+            val result = callAsr.state.value
+            recordVoiceCallFlow(
+                "按键 ASR结束 status=" + result.status +
+                    ", chars=" + result.transcript.length + ", completed=" + (completed != null)
+            )
+            if (result.status != me.rerere.asr.ASRStatus.Error && sendCapturedText(result.transcript)) {
+                keyboardInput = ""
+                submittedKeyboardInput = result.transcript.trim()
+            }
+            submittingCallAsr = false
+        }
+    }
+
     fun keepPendingKeyboardInputAlive() {
         if (keyboardInput.trim().isBlank()) return
         if (!keyboardCaptureActive) {
@@ -586,7 +620,7 @@ fun VoiceCallOverlay(
     }
 
     val duplexInput = rememberVoiceCallDuplexInput(
-        enabled = fullDuplex && !voiceCallResultReported,
+        enabled = !isHistory && !voiceCallResultReported,
         permissionGranted = asrPermission.allRequiredPermissionsGranted,
         providerId = settings.getSelectedASRProvider()?.id,
         onInterrupt = {
@@ -595,16 +629,39 @@ fun VoiceCallOverlay(
         onSubmit = { text -> sendCapturedText(text) },
     )
     stopDuplexInput[0] = duplexInput.stop
-    val duplexListening = fullDuplex && !duplexInput.fallback
-    LaunchedEffect(fullDuplex, asrPermission.allRequiredPermissionsGranted) {
-        if (fullDuplex && !asrPermission.allRequiredPermissionsGranted) asrPermission.requestPermissions()
+    val autoListenEnabled = !isHistory && duplexInput.asrState.isAvailable
+    val duplexListening = autoListenEnabled && !duplexInput.muted &&
+        duplexInput.asrState.status == me.rerere.asr.ASRStatus.Listening && duplexInput.error == null
+    LaunchedEffect(callAsrState.status, callAsrState.isAvailable, callAsrState.errorMessage) {
+        if (!isHistory && !autoListenEnabled) {
+            recordVoiceCallFlow(
+                "按键 ASR状态 provider=" +
+                    (settings.getSelectedASRProvider()?.javaClass?.simpleName ?: "none") +
+                    ", status=" + callAsrState.status +
+                    ", available=" + callAsrState.isAvailable +
+                    ", hasError=" + (callAsrState.errorMessage != null)
+            )
+        }
+        callAsrState.errorMessage?.let { toaster.show(it, type = ToastType.Error) }
+    }
+    LaunchedEffect(autoListenEnabled, asrPermission.allRequiredPermissionsGranted) {
+        if (autoListenEnabled && !asrPermission.allRequiredPermissionsGranted) asrPermission.requestPermissions()
     }
     LaunchedEffect(duplexInput.error) {
         duplexInput.error?.let { toaster.show(it, type = ToastType.Warning) }
     }
+    LaunchedEffect(duplexInput.fallback, duplexInput.error) {
+        if (autoListenEnabled) {
+            recordVoiceCallFlow(
+                "全双工 ASR状态 fallback=" + duplexInput.fallback +
+                    ", hasError=" + (duplexInput.error != null)
+            )
+        }
+    }
     DisposableEffect(duplexInput, callId, isHistory) {
         onDispose {
             duplexInput.stop()
+            callAsr.stop()
             if (!isHistory) {
                 tts.setRealtimeDialoguePreconnectionEnabled(false)
                 tts.stop()
@@ -779,6 +836,8 @@ fun VoiceCallOverlay(
                                     ttsAvailable = ttsAvailable,
                                     ttsProviderReady = ttsProviderReady,
                                     keyboardCaptureActive = keyboardCaptureActive,
+                                    asrAvailable = callAsrState.isAvailable,
+                                    asrRecording = duplexListening || callAsrState.isRecording,
                                     loading = aiReplyActive,
                                 ),
                                 style = MaterialTheme.typography.titleLarge,
@@ -793,9 +852,14 @@ fun VoiceCallOverlay(
                                     !ttsProviderReady -> "正在连接语音模型..."
                                     !ttsAvailable -> "电话里的 AI 声音使用「文本转语音」里选中的语音模型。"
                                     !asrPermission.allRequiredPermissionsGranted -> "电话输入需要麦克风权限。"
-                                    duplexListening -> "正在持续聆听，直接说话即可打断 AI。"
+                                    duplexInput.muted -> "聆听已静音，点击按钮恢复聆听。"
+                                    autoListenEnabled && duplexInput.asrState.status == me.rerere.asr.ASRStatus.Connecting -> "正在连接 ASR..."
+                                    duplexListening -> "正在持续聆听，识别完成后自动发送；说话时可打断 AI。"
+                                    callAsrState.isRecording -> "正在使用已配置的 ASR 识别语音。"
+                                    duplexInput.error != null && autoListenEnabled -> "ASR连接失败，静音后再恢复可重试。"
                                     aiReplyActive -> "AI 正在回复..."
-                                    else -> "点按语音输入，用输入法麦克风说话。"
+                                    callAsrState.isAvailable -> "点按语音输入，使用已配置的 ASR。"
+                                    else -> "未配置 ASR，点按语音输入使用输入法麦克风。"
                                 },
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -917,14 +981,21 @@ fun VoiceCallOverlay(
                         // TextButton(onClick = { showVoiceCallFlowDialog = true }) {
                         //     Text("排查流程")
                         // }
-                        Button(
+                        if (autoListenEnabled && asrPermission.allRequiredPermissionsGranted) {
+                            AsrButton(
+                                state = duplexInput.asrState,
+                                muted = duplexInput.muted,
+                                enabled = !voiceCallResultReported,
+                                onClick = duplexInput::toggleMute,
+                            )
+                        } else Button(
                             shape = callActionShape,
                             modifier = if (liquidGlass) Modifier.liquidGlassChrome(callActionShape) else Modifier,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = if (liquidGlass) Color.Transparent else MaterialTheme.colorScheme.primary,
                                 contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
                             ),
-                            enabled = !voiceCallResultReported && (
+                            enabled = !voiceCallResultReported && !submittingCallAsr && (
                                 !asrPermission.allRequiredPermissionsGranted ||
                                 !keyboardCaptureActive ||
                                 (hasChatModel && ttsAvailable)),
@@ -934,6 +1005,19 @@ fun VoiceCallOverlay(
                                     asrPermission.requestPermissions()
                                 } else if (duplexListening) {
                                     interruptCurrentReplyForInput()
+                                } else if (callAsrState.isRecording) {
+                                    finishCallAsrInput()
+                                } else if (callAsrState.isAvailable) {
+                                    if (canStartInput()) {
+                                        if (aiReplyActive) interruptCurrentReplyForInput()
+                                        keyboardInput = ""
+                                        submittedKeyboardInput = ""
+                                        recordVoiceCallFlow(
+                                            "按键 ASR启动 provider=" +
+                                                (settings.getSelectedASRProvider()?.javaClass?.simpleName ?: "none")
+                                        )
+                                        callAsr.start {}
+                                    }
                                 } else if (keyboardCaptureActive) {
                                     if (pendingUserInputText.isNotBlank()) {
                                         finishKeyboardInput()
@@ -960,7 +1044,9 @@ fun VoiceCallOverlay(
                                 when {
                                     !asrPermission.allRequiredPermissionsGranted -> "获取麦克风权限"
                                     duplexListening -> "打断 AI"
+                                    callAsrState.isRecording -> "结束并发送"
                                     keyboardCaptureActive -> "语音输入"
+                                    callAsrState.isAvailable -> "ASR 语音输入"
                                     aiReplyActive -> "打断并说话"
                                     else -> "语音输入"
                                 }
@@ -1271,6 +1357,8 @@ private fun voiceCallTitle(
     ttsAvailable: Boolean,
     ttsProviderReady: Boolean,
     keyboardCaptureActive: Boolean,
+    asrAvailable: Boolean,
+    asrRecording: Boolean,
     loading: Boolean,
 ): String = when {
     !hasChatModel -> "请先选择聊天模型"
@@ -1278,6 +1366,8 @@ private fun voiceCallTitle(
     !ttsAvailable -> "请先到「设置 > 语音服务 > 文本转语音」选择语音模型"
     !micPermissionGranted -> "请允许麦克风权限"
     keyboardCaptureActive -> "等待输入法语音"
+    asrRecording -> "正在使用 ASR 识别"
     loading -> "AI 正在回复"
+    asrAvailable -> "ASR 语音模式"
     else -> "输入法语音模式"
 }
