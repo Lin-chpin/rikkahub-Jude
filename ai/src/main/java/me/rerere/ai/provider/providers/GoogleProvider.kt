@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
@@ -302,7 +303,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                         usage = usage
                     )
 
-                    trySend(messageChunk)
+                    trySendBlocking(messageChunk).getOrThrow()
                 } catch (e: Exception) {
                     if (!params.suppressContentLogs) e.printStackTrace()
                     if (!params.suppressContentLogs) println("[onEvent] 解析错误: $data")

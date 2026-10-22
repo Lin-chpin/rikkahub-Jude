@@ -83,9 +83,7 @@ class HeartbeatConfigStore(
     fun readSentinelState(): SentinelState {
         val raw = preferences.getString(scopedKey("sentinel_state"), null) ?: return SentinelState()
         return try {
-            json.decodeFromString<SentinelState>(raw).also {
-                require(it.consecutiveRounds in 0..3 && (!it.active || it.consecutiveRounds > 0))
-            }
+            json.decodeSentinelState(raw)
         } catch (error: Exception) {
             recordStateRecovery("sentinel_state", "sentinel_state", error)
             // Losing the counter must require a recheck rather than grant another short cycle.
@@ -202,7 +200,7 @@ class HeartbeatConfigStore(
     fun lastUserMessageAt(): Long =
         preferences.getLong(scopedKey(LAST_USER_MESSAGE_AT_KEY), 0L)
 
-    fun setLastUserMessageAt(timestampMillis: Long) {
+    fun setLastUserMessageAt(timestampMillis: Long) = synchronized(sentinelLock) {
         if (timestampMillis > lastUserMessageAt()) updateSentinelState { it.invalidate() }
         val monotonicTimestamp = maxOf(lastUserMessageAt(), timestampMillis)
         preferences.edit()
@@ -213,7 +211,7 @@ class HeartbeatConfigStore(
     fun lastAssistantMessageAt(): Long =
         preferences.getLong(scopedKey(LAST_ASSISTANT_MESSAGE_AT_KEY), 0L)
 
-    fun setLastAssistantMessageAt(timestampMillis: Long) {
+    fun setLastAssistantMessageAt(timestampMillis: Long) = synchronized(sentinelLock) {
         val monotonicTimestamp = maxOf(lastAssistantMessageAt(), timestampMillis)
         preferences.edit()
             .putLong(scopedKey(LAST_ASSISTANT_MESSAGE_AT_KEY), monotonicTimestamp)

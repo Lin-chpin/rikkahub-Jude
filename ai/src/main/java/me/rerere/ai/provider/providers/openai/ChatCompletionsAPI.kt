@@ -3,6 +3,7 @@ package me.rerere.ai.provider.providers.openai
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
@@ -173,7 +174,7 @@ class ChatCompletionsAPI(
         fun finishToolCalls() {
             val tools = toolCalls.finish()
             if (tools.isNotEmpty()) {
-                trySend(MessageChunk("", "", listOf(UIMessageChoice(
+                trySendBlocking(MessageChunk("", "", listOf(UIMessageChoice(
                     index = 0,
                     delta = UIMessage(role = MessageRole.ASSISTANT, parts = tools),
                     message = null,
@@ -253,9 +254,8 @@ class ChatCompletionsAPI(
                         }
                         receivedCharacters += textCharacters
                         timing.firstText("sse_text_received", messageChunk.id, textCharacters)
-                        if (trySend(messageChunk).isFailure) {
-                            timing.firstText("sse_text_delivery_failed", messageChunk.id, textCharacters)
-                        }
+                        // SSE callbacks run on OkHttp threads; wait for the collector instead of losing deltas.
+                        trySendBlocking(messageChunk).getOrThrow()
                         if (choiceList.any { it.finishReason in listOf("tool_calls", "stop", "length", "content_filter") }) {
                             finishToolCalls()
                         }

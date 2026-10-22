@@ -37,7 +37,6 @@ import me.rerere.rikkahub.data.repository.MomentAuthor
 import me.rerere.rikkahub.data.repository.MomentComment
 import me.rerere.rikkahub.data.repository.MomentEntry
 import me.rerere.rikkahub.data.repository.MomentProfile
-import me.rerere.rikkahub.data.repository.MomentReplyStatus
 import me.rerere.rikkahub.data.repository.MomentRepository
 import me.rerere.rikkahub.utils.JsonInstant
 import kotlin.uuid.Uuid
@@ -181,21 +180,13 @@ class MomentsVM(
                 is MomentReactionGeneration.Ready -> result.reaction
             }
             val parsed = parseImageDescriptionOutput(reaction.comment)
-            val updated = moment.copy(
-                aiLiked = reaction.liked,
-                aiReplyContent = parsed.visibleText,
-                imageDescription = parsed.imageDescription ?: moment.imageDescription,
-                repliedAt = System.currentTimeMillis(),
-                replyStatus = MomentReplyStatus.DONE,
-            )
-            momentRepository.updateMoment(updated)
-            val persisted = momentRepository.getMoment(moment.id)
-            if (persisted == null ||
-                persisted.replyStatus != MomentReplyStatus.DONE ||
-                persisted.aiLiked != updated.aiLiked ||
-                persisted.aiReplyContent != updated.aiReplyContent
-            ) {
-                return MomentsProcessOutcome(MomentsProcessIssue.PERSISTENCE_FAILED)
+            if (!momentRepository.completeReaction(
+                    momentId = moment.id,
+                    liked = reaction.liked,
+                    content = parsed.visibleText,
+                    imageDescription = parsed.imageDescription,
+                )) {
+                return MomentsProcessOutcome(MomentsProcessIssue.ALREADY_PROCESSING)
             }
             return MomentsProcessOutcome(
                 issue = parsed.visibleText.takeIf { it.isBlank() }?.let {
@@ -231,24 +222,10 @@ class MomentsVM(
                     MomentsProcessOutcome(MomentsProcessIssue.MODEL_UNAVAILABLE)
 
                 is CommentGenerationResult.Ready -> {
-                    val assistantCommentId = momentRepository.addAssistantComment(moment.id, result.text)
-                    val assistantCommentPersisted = momentRepository.getComments(moment.id).any {
-                        it.id == assistantCommentId &&
-                            it.author == MomentAuthor.ASSISTANT &&
-                            it.content == result.text
-                    }
-                    if (!assistantCommentPersisted) {
-                        MomentsProcessOutcome(MomentsProcessIssue.PERSISTENCE_FAILED)
+                    if (momentRepository.completeCommentReply(comment, result.text)) {
+                        MomentsProcessOutcome()
                     } else {
-                        momentRepository.updateComment(comment.copy(replyStatus = MomentReplyStatus.DONE))
-                        val userCommentPersisted = momentRepository.getComments(moment.id).any {
-                            it.id == comment.id && it.replyStatus == MomentReplyStatus.DONE
-                        }
-                        if (!userCommentPersisted) {
-                            MomentsProcessOutcome(MomentsProcessIssue.PERSISTENCE_FAILED)
-                        } else {
-                            MomentsProcessOutcome()
-                        }
+                        MomentsProcessOutcome(MomentsProcessIssue.ALREADY_PROCESSING)
                     }
                 }
             }

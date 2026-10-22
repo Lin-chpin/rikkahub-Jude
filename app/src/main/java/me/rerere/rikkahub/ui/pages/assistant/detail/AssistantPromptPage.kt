@@ -123,7 +123,7 @@ fun AssistantPromptPage(id: String) {
                     savedPrompt = assistant.systemPrompt,
                     onCancel = { promptToEdit = null },
                     onSave = { prompt ->
-                        vm.update(assistant.copy(systemPrompt = prompt))
+                        vm.update(assistant.copy(systemPrompt = prompt), assistant)
                         promptToEdit = null
                     },
                 )
@@ -149,7 +149,7 @@ fun AssistantPromptPage(id: String) {
                         modifier = Modifier.padding(innerPadding),
                         assistant = assistant,
                         settings = settings,
-                        onUpdate = { vm.update(it) },
+                        onUpdate = { vm.update(it, assistant) },
                         onEditFullPrompt = { promptToEdit = it },
                     )
                 }

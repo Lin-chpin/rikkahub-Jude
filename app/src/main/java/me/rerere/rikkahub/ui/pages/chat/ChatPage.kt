@@ -363,8 +363,7 @@ private fun ChatPageContent(
                             showCompressedMessages = !showCompressedMessages
                         },
                         onCompressedSummaryChange = { newSummary ->
-                            vm.updateConversation(conversation.copy(compressedSummary = newSummary))
-                            vm.saveConversationAsync()
+                            vm.updateConversation { it.copy(compressedSummary = newSummary) }
                         },
                         onSummaryEditorVisibilityChange = {
                             summaryEditorVisible = it
@@ -459,9 +458,11 @@ private fun ChatPageContent(
                             )
                         )
                     },
-                    onUpdateConversation = {
-                        vm.updateConversation(it)
-                        vm.saveConversationAsync()
+                    onUpdateConversation = { edited ->
+                        vm.updateConversation { latest -> latest.copy(
+                            modeInjectionIds = if (edited.modeInjectionIds != conversation.modeInjectionIds) edited.modeInjectionIds else latest.modeInjectionIds,
+                            lorebookIds = if (edited.lorebookIds != conversation.lorebookIds) edited.lorebookIds else latest.lorebookIds,
+                        ) }
                     },
                     onUpdateSearchService = { index ->
                         vm.updateSettings(
@@ -542,17 +543,17 @@ private fun ChatPageContent(
                     }
                 },
                 onUpdateMessage = { newNode ->
-                    vm.updateConversation(
-                        conversation.copy(
-                            messageNodes = conversation.messageNodes.map { node ->
+                    vm.updateConversation { latest ->
+                        latest.copy(
+                            messageNodes = latest.messageNodes.map { node ->
                                 if (node.id == newNode.id) {
                                     newNode
                                 } else {
                                     node
                                 }
                             }
-                        ))
-                    vm.saveConversationAsync()
+                        )
+                    }
                 },
                 onUpdateTtsMessage = { messageId, transform ->
                     vm.updateMessage(messageId, transform)
@@ -590,8 +591,7 @@ private fun ChatPageContent(
                     voiceCallVisible = true
                 },
                 onConversationSystemPromptChange = { newPrompt ->
-                    vm.updateConversation(conversation.copy(customSystemPrompt = newPrompt))
-                    vm.saveConversationAsync()
+                    vm.updateConversation { it.copy(customSystemPrompt = newPrompt) }
                 },
             )
         }

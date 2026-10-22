@@ -103,7 +103,7 @@ public class StreamableHttpClientTransport(
         onResumptionToken: ((String) -> Unit)? = null,
     ) {
         check(initialized.load()) { "Transport is not started" }
-        Log.d(TAG, "Client sending message via POST to $url: ${McpJson.encodeToString(message)}")
+        Log.d(TAG, "Client sending message via POST")
 
         // If we have a resumption token, reconnect the SSE stream with it
         resumptionToken?.let { token ->
@@ -134,7 +134,7 @@ public class StreamableHttpClientTransport(
                     try {
                         startSseSession(onResumptionToken = onResumptionToken)
                     } catch (e: Exception) {
-                        Log.w(TAG, "Failed to start SSE session, falling back to JSON-only mode", e)
+                        Log.w(TAG, "Failed to start SSE session: ${e.javaClass.simpleName}")
                         _onError(e)
                     }
                 }
@@ -200,7 +200,7 @@ public class StreamableHttpClientTransport(
      */
     public suspend fun terminateSession() {
         if (sessionId == null) return
-        Log.d(TAG, "Terminating session: $sessionId")
+        Log.d(TAG, "Terminating session")
         val response = client.delete(url) {
             applyCommonHeaders(this)
             requestBuilder()
@@ -230,7 +230,7 @@ public class StreamableHttpClientTransport(
         sseSession?.cancel()
         sseJob?.cancelAndJoin()
 
-        Log.d(TAG, "Client attempting to start SSE session at url: $url")
+        Log.d(TAG, "Client attempting to start SSE session")
         try {
             sseSession = client.sseSession(
                 urlString = url,
@@ -288,7 +288,7 @@ public class StreamableHttpClientTransport(
                     lastEventId = it
                     onResumptionToken?.invoke(it)
                 }
-                Log.d(TAG, "Client received SSE event: event=${event.event}, data=${event.data}, id=${event.id}")
+                Log.d(TAG, "Client received SSE event")
                 when (event.event) {
                     null, "message" ->
                         event.data?.takeIf { it.isNotEmpty() }?.let { json ->

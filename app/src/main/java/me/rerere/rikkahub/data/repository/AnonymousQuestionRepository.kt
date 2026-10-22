@@ -106,13 +106,8 @@ class AnonymousQuestionRepository(private val dao: AnonymousQuestionDAO) {
     }
 
     suspend fun addUserAnswer(questionId: Uuid, content: String, now: Long = System.currentTimeMillis()): Uuid? {
-        val question = dao.getQuestion(questionId.toString()) ?: return null
-        if (question.author != AnonymousQuestionAuthor.ASSISTANT.value) return null
-        if (dao.getReplies(questionId.toString()).any {
-                it.author == AnonymousQuestionAuthor.USER.value && it.kind == AnonymousQuestionReplyKind.ANSWER.value
-            }) return null
         val id = Uuid.random()
-        dao.upsertReply(
+        val inserted = dao.insertUserAnswerIfAbsent(
             AnonymousQuestionReplyEntity(
                 id = id.toString(), questionId = questionId.toString(), author = AnonymousQuestionAuthor.USER.value,
                 kind = AnonymousQuestionReplyKind.ANSWER.value, content = content.trim(),
@@ -123,29 +118,21 @@ class AnonymousQuestionRepository(private val dao: AnonymousQuestionDAO) {
                 replyStatus = AnonymousQuestionReplyStatus.PENDING.value, createdAt = now,
             )
         )
-        return id
+        return id.takeIf { inserted }
     }
 
-    suspend fun addAssistantAnswer(questionId: Uuid, content: String, now: Long = System.currentTimeMillis()): Uuid =
-        addAssistantReply(questionId, AnonymousQuestionReplyKind.ANSWER, content, now)
+    suspend fun completeQuestionAnswer(questionId: Uuid, content: String, now: Long = System.currentTimeMillis()): Boolean =
+        dao.completeQuestionAnswer(assistantReply(questionId, AnonymousQuestionReplyKind.ANSWER, content, now))
 
-    suspend fun addAssistantComment(questionId: Uuid, content: String, now: Long = System.currentTimeMillis()): Uuid =
-        addAssistantReply(questionId, AnonymousQuestionReplyKind.COMMENT, content, now)
+    suspend fun completeAnswerComment(answer: AnonymousQuestionReply, content: String, now: Long = System.currentTimeMillis()): Boolean =
+        dao.completeAnswerComment(answer.id.toString(), assistantReply(answer.questionId, AnonymousQuestionReplyKind.COMMENT, content, now))
 
-    private suspend fun addAssistantReply(questionId: Uuid, kind: AnonymousQuestionReplyKind, content: String, now: Long): Uuid {
-        val id = Uuid.random()
-        dao.upsertReply(
+    private fun assistantReply(questionId: Uuid, kind: AnonymousQuestionReplyKind, content: String, now: Long) =
             AnonymousQuestionReplyEntity(
-                id = id.toString(), questionId = questionId.toString(), author = AnonymousQuestionAuthor.ASSISTANT.value,
+                id = Uuid.random().toString(), questionId = questionId.toString(), author = AnonymousQuestionAuthor.ASSISTANT.value,
                 kind = kind.value, content = content.trim(), replyDueAt = null,
                 replyStatus = AnonymousQuestionReplyStatus.DONE.value, createdAt = now,
             )
-        )
-        return id
-    }
-
-    suspend fun updateQuestion(question: AnonymousQuestion) = dao.updateQuestion(question.toEntity())
-    suspend fun updateReply(reply: AnonymousQuestionReply) = dao.updateReply(reply.toEntity())
 
     suspend fun getDueQuestions(scopeId: Uuid, now: Long, limit: Int): List<AnonymousQuestion> =
         dao.getDueQuestions(scopeId.toString(), AnonymousQuestionAuthor.USER.value, AnonymousQuestionReplyStatus.PENDING.value, now, limit)
@@ -192,20 +179,10 @@ private fun AnonymousQuestionEntity.toQuestion() = AnonymousQuestion(
     replyStatus = AnonymousQuestionReplyStatus.entries.first { it.value == replyStatus }, createdAt = createdAt,
 )
 
-private fun AnonymousQuestion.toEntity() = AnonymousQuestionEntity(
-    id = id.toString(), scopeId = scopeId.toString(), author = author.value, content = content,
-    replyDueAt = replyDueAt, replyStatus = replyStatus.value, createdAt = createdAt,
-)
-
 private fun AnonymousQuestionReplyEntity.toReply() = AnonymousQuestionReply(
     id = Uuid.parse(id), questionId = Uuid.parse(questionId), author = AnonymousQuestionAuthor.entries.first { it.value == author },
     kind = AnonymousQuestionReplyKind.entries.first { it.value == kind }, content = content, replyDueAt = replyDueAt,
     replyStatus = AnonymousQuestionReplyStatus.entries.first { it.value == replyStatus }, createdAt = createdAt,
-)
-
-private fun AnonymousQuestionReply.toEntity() = AnonymousQuestionReplyEntity(
-    id = id.toString(), questionId = questionId.toString(), author = author.value, kind = kind.value,
-    content = content, replyDueAt = replyDueAt, replyStatus = replyStatus.value, createdAt = createdAt,
 )
 
 private fun AnonymousQuestionProfileEntity.toProfile() = AnonymousQuestionProfile(Uuid.parse(scopeId), lastViewedAt)

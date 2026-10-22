@@ -229,14 +229,18 @@ fun ChatDrawerContent(
                 onRegenerateTitle = {
                     vm.generateTitle(it, true)
                 },
-                onDelete = {
-                    vm.deleteConversation(it)
-                    // Refresh the conversation list to immediately remove the deleted item
-                    // This fixes the issue where deleted conversations sometimes remain visible
-                    // until manually clicked (issue #747)
-                    conversations.refresh()
-                    if (it.id == current.id) {
-                        navigateToChatPage(navController)
+                onDelete = { conversation ->
+                    scope.launch {
+                        vm.deleteConversation(conversation)
+                        conversations.refresh()
+                        if (conversation.id == current.id) {
+                            val nextConversationId = repo
+                                .getConversationsOfAssistant(conversation.assistantId)
+                                .first()
+                                .firstOrNull()
+                                ?.id ?: Uuid.random()
+                            navigateToChatPage(navController, chatId = nextConversationId)
+                        }
                     }
                 },
                 onPin = {

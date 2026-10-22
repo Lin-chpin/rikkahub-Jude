@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
@@ -208,6 +209,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     usage = tokenUsage
                 )
 
+                if (type != "error") trySendBlocking(messageChunk).getOrThrow()
                 when (type) {
                     "message_stop" -> {
                         if (!params.suppressContentLogs) Log.d(TAG, "Stream ended")
@@ -221,7 +223,6 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     }
                 }
 
-                trySend(messageChunk)
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {

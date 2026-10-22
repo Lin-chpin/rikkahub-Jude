@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.datastore.core.IOException
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.SharedPreferencesMigration
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
@@ -167,14 +168,7 @@ class SettingsStore(
 
     private val dataStore = context.settingsStore
 
-    val settingsFlowRaw = dataStore.data
-        .catch { exception ->
-            if (exception is IOException) {
-                emit(emptyPreferences())
-            } else {
-                throw exception
-            }
-        }.map { preferences ->
+    private fun readSettings(preferences: Preferences): Settings =
             Settings(
                 enableWebSearch = preferences[ENABLE_WEB_SEARCH] == true,
                 favoriteModels = preferences[FAVORITE_MODELS]?.let {
@@ -273,9 +267,7 @@ class SettingsStore(
                     JsonInstant.decodeFromString(it)
                 } ?: UsageReminderState(),
                 sponsorAlertDismissedAt = preferences[SPONSOR_ALERT_DISMISSED_AT] ?: 0,
-            )
-        }
-        .map {
+            ).let {
             var providers = it.providers.ifEmpty { DEFAULT_PROVIDERS }.toMutableList()
             DEFAULT_PROVIDERS.forEach { defaultProvider ->
                 if (providers.none { it.id == defaultProvider.id }) {
@@ -315,7 +307,7 @@ class SettingsStore(
                 selectedTTSProviderId = ttsSelection.selectedProviderId ?: DEFAULT_SYSTEM_TTS_ID,
             )
         }
-        .map { settings ->
+        .let { settings ->
             // 去重并清理无效引用
             val validMcpServerIds = settings.mcpServers.map { it.id }.toSet()
             val validModeInjectionIds = settings.modeInjections.map { it.id }.toSet()
@@ -371,25 +363,39 @@ class SettingsStore(
                 quickMessages = settings.quickMessages.distinctBy { it.id },
             )
         }
+    val settingsFlowRaw = dataStore.data
+        .catch { exception ->
+            if (exception is IOException) {
+                emit(emptyPreferences())
+            } else {
+                throw exception
+            }
+        }
+        .map(::readSettings)
         .onEach {
             get<PebbleEngine>().templateCache.invalidateAll()
         }
+        .distinctUntilChanged()
+        .map { it.withUpdateBaseline() }
 
     val settingsFlow = settingsFlowRaw
         .distinctUntilChanged()
         .toMutableStateFlow(scope, Settings.dummy())
 
     suspend fun update(settings: Settings) {
-        if(settings.init) {
-            Log.w(TAG, "Cannot update dummy settings")
-            return
-        }
-        settingsFlow.value = settings
-        persistSettings(dataStore, settings)
+        update { settings }
     }
 
     suspend fun update(fn: (Settings) -> Settings) {
-        update(fn(settingsFlow.value))
+        dataStore.edit { preferences ->
+            val current = readSettings(preferences)
+            val requested = fn(current.withUpdateBaseline())
+            if (requested.init) {
+                Log.w(TAG, "Cannot update dummy settings")
+            } else {
+                persistSettings(preferences, mergeSettingsUpdate(current, requested))
+            }
+        }
     }
 
     suspend fun updateAssistant(assistantId: Uuid) {
@@ -466,6 +472,11 @@ class SettingsStore(
 
 private suspend fun persistSettings(dataStore: DataStore<Preferences>, settings: Settings) {
     dataStore.edit { preferences ->
+        persistSettings(preferences, settings)
+    }
+}
+
+private fun persistSettings(preferences: MutablePreferences, settings: Settings) {
         preferences[SettingsStore.DYNAMIC_COLOR] = settings.dynamicColor
         preferences[SettingsStore.THEME_ID] = settings.themeId
         preferences[SettingsStore.LIQUID_GLASS_ENABLED] = settings.liquidGlassEnabled
@@ -534,13 +545,14 @@ private suspend fun persistSettings(dataStore: DataStore<Preferences>, settings:
         preferences[SettingsStore.USAGE_REMINDER_CONFIG] = JsonInstant.encodeToString(settings.usageReminderConfig)
         preferences[SettingsStore.USAGE_REMINDER_STATE] = JsonInstant.encodeToString(settings.usageReminderState)
         preferences[SettingsStore.SPONSOR_ALERT_DISMISSED_AT] = settings.sponsorAlertDismissedAt
-    }
 }
 
 @Serializable
 data class Settings(
     @Transient
     val init: Boolean = false,
+    @kotlinx.serialization.Transient
+    internal val updateBaseline: SettingsUpdateBaseline? = null,
     val dynamicColor: Boolean = true,
     val themeId: String = PresetThemes[0].id,
     val liquidGlassEnabled: Boolean = false,

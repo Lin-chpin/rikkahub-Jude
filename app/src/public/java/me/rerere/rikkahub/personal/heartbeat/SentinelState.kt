@@ -1,6 +1,7 @@
 package me.rerere.rikkahub.personal.heartbeat
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 
 @Serializable
 data class SentinelConfig(
@@ -56,3 +57,8 @@ fun HeartbeatConfig.forCurrentCycle(state: SentinelState): HeartbeatConfig =
         maxIntervalMinutes = sentinel.maxIntervalMinutes,
         generationTimeoutSeconds = sentinel.generationTimeoutSeconds,
     ) else this
+
+internal fun Json.decodeSentinelState(raw: String): SentinelState =
+    decodeFromString<SentinelState>(raw).also {
+        require(it.consecutiveRounds >= 0 && (!it.active || it.consecutiveRounds > 0))
+    }

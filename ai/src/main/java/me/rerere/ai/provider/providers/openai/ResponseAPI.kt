@@ -2,6 +2,7 @@ package me.rerere.ai.provider.providers.openai
 
 import android.util.Log
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.collect
@@ -165,7 +166,7 @@ class ResponseAPI(
             ) {
                 if (completedNormally.get()) return
                 if (data == "[DONE]") {
-                    toolCalls.finish()?.let { trySend(it).getOrThrow() }
+                    toolCalls.finish()?.let { trySendBlocking(it).getOrThrow() }
                     completedNormally.set(true)
                     close()
                     return
@@ -178,10 +179,10 @@ class ResponseAPI(
                 toolCalls.accept(json)
                 val chunk = parseResponseDelta(json)
                 if (chunk != null) {
-                    trySend(chunk)
+                    trySendBlocking(chunk).getOrThrow()
                 }
                 if (json["type"]?.jsonPrimitive?.contentOrNull == "response.completed") {
-                    toolCalls.finish()?.let { trySend(it).getOrThrow() }
+                    toolCalls.finish()?.let { trySendBlocking(it).getOrThrow() }
                     completedNormally.set(true)
                     close()
                 }

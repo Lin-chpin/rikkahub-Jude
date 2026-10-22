@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import me.rerere.rikkahub.data.datastore.Settings
@@ -17,12 +18,14 @@ import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.model.Lorebook
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
+import me.rerere.rikkahub.service.ChatService
 
 class AssistantVM(
     private val settingsStore: SettingsStore,
     private val memoryRepository: MemoryRepository,
     private val conversationRepo: ConversationRepository,
     private val filesManager: FilesManager,
+    private val chatService: ChatService,
 ) : ViewModel() {
     val settings: StateFlow<Settings> = settingsStore.settingsFlow
         .stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
@@ -56,7 +59,9 @@ class AssistantVM(
                 )
             )
             memoryRepository.deleteMemories(MemoryScope.assistant(assistant.id))
-            conversationRepo.deleteConversationOfAssistant(assistant.id)
+            conversationRepo.getConversationsOfAssistant(assistant.id).first().forEach { conversation ->
+                chatService.deleteConversation(conversation)
+            }
         }
     }
 

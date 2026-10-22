@@ -16,10 +16,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.analytics.FirebaseAnalytics
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -30,6 +32,7 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.isEmptyInputMessage
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.Settings
+import me.rerere.rikkahub.data.datastore.mergeSettingsUpdate
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.getAssistantById
 import me.rerere.rikkahub.data.datastore.getCurrentChatModel
@@ -109,7 +112,13 @@ class ChatVM(
 
         // 初始化对话
         viewModelScope.launch {
-            chatService.initializeConversation(_conversationId)
+            try {
+                chatService.initializeConversation(_conversationId)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                chatService.addError(error, _conversationId)
+            }
         }
 
         // 记住对话ID, 方便下次启动恢复
@@ -167,20 +176,20 @@ class ChatVM(
     // 更新设置
     fun updateSettings(newSettings: Settings) {
         viewModelScope.launch {
-            val oldSettings = settings.value
-            // 检查用户头像是否有变化，如果有则删除旧头像
-            checkUserAvatarDelete(oldSettings, newSettings)
-            settingsStore.update(newSettings)
-        }
-    }
-
-    // 检查用户头像删除
-    private fun checkUserAvatarDelete(oldSettings: Settings, newSettings: Settings) {
-        val oldAvatar = oldSettings.displaySetting.userAvatar
-        val newAvatar = newSettings.displaySetting.userAvatar
-
-        if (oldAvatar is Avatar.Image && oldAvatar != newAvatar) {
-            filesManager.deleteChatFiles(listOf(oldAvatar.url.toUri()))
+            var retiredAvatar: Avatar.Image? = null
+            settingsStore.update { latest ->
+                val merged = mergeSettingsUpdate(latest, newSettings)
+                retiredAvatar = (latest.displaySetting.userAvatar as? Avatar.Image)
+                    ?.takeIf { it != merged.displaySetting.userAvatar }
+                merged
+            }
+            val current = settingsStore.settingsFlowRaw.first()
+            retiredAvatar?.takeIf { it != current.displaySetting.userAvatar }?.let { old ->
+                val referenced = current.assistants.any { assistant ->
+                    (assistant.avatar as? Avatar.Image)?.url == old.url || assistant.background == old.url || assistant.voiceCallBackground == old.url
+                }
+                if (!referenced) filesManager.deleteChatFiles(listOf(old.url.toUri()))
+            }
         }
     }
 
@@ -299,10 +308,7 @@ class ChatVM(
         val assistant = settings.value.getAssistantById(currentConversation.assistantId)
             ?: return
         if (assistant.allowConversationSystemPrompt) {
-            chatService.saveConversation(
-                _conversationId,
-                currentConversation.copy(autoCompressConfig = config)
-            )
+            chatService.mutateConversation(_conversationId) { it.copy(autoCompressConfig = config) }
         } else {
             settingsStore.update { currentSettings ->
                 currentSettings.copy(
@@ -382,41 +388,26 @@ class ChatVM(
         }
     }
 
-    fun saveConversationAsync() {
-        viewModelScope.launch {
-            chatService.saveConversation(_conversationId, conversation.value)
-        }
-    }
-
     fun updateTitle(title: String) {
         viewModelScope.launch {
-            val updatedConversation = conversation.value.copy(title = title)
-            chatService.saveConversation(_conversationId, updatedConversation)
+            chatService.mutateConversation(_conversationId) { it.copy(title = title) }
         }
     }
 
-    fun deleteConversation(conversation: Conversation) {
-        viewModelScope.launch {
-            conversationRepo.deleteConversation(conversation)
-        }
+    suspend fun deleteConversation(conversation: Conversation) {
+        chatService.deleteConversation(conversation)
     }
 
     fun updatePinnedStatus(conversation: Conversation) {
         viewModelScope.launch {
-            conversationRepo.togglePinStatus(conversation.id)
+            chatService.mutateConversation(conversation.id) { it.copy(isPinned = !it.isPinned) }
         }
     }
 
     fun moveConversationToAssistant(conversation: Conversation, targetAssistantId: Uuid) {
         viewModelScope.launch {
-            val conversationFull = conversationRepo.getConversationById(conversation.id) ?: return@launch
-            val updatedConversation = conversationFull.copy(assistantId = targetAssistantId)
-            if (conversation.id == _conversationId) {
-                chatService.saveConversation(_conversationId, updatedConversation)
-                settingsStore.updateAssistant(targetAssistantId)
-            } else {
-                conversationRepo.updateConversation(updatedConversation)
-            }
+            chatService.mutateConversation(conversation.id) { it.copy(assistantId = targetAssistantId) }
+            if (conversation.id == _conversationId) settingsStore.updateAssistant(targetAssistantId)
         }
     }
 
@@ -488,14 +479,12 @@ class ChatVM(
         )
     }
 
-    fun updateConversation(newConversation: Conversation) {
-        chatService.updateConversationState(_conversationId) {
-            newConversation
-        }
+    fun updateConversation(update: (Conversation) -> Conversation) {
+        viewModelScope.launch { chatService.mutateConversation(_conversationId, update) }
     }
 
     fun updateMessage(messageId: Uuid, transform: (UIMessage) -> UIMessage) {
-        chatService.updateConversationState(_conversationId) { currentConversation ->
+        updateConversation { currentConversation ->
             currentConversation.copy(
                 messageNodes = currentConversation.messageNodes.map { node ->
                     if (node.messages.any { it.id == messageId }) {
@@ -510,7 +499,6 @@ class ChatVM(
                 }
             )
         }
-        saveConversationAsync()
     }
 
     fun toggleMessageFavorite(node: MessageNode) {

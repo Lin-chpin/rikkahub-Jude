@@ -150,13 +150,16 @@ class MomentRepository(
         return id
     }
 
-    suspend fun updateMoment(moment: Moment) {
-        dao.updateMoment(moment.toEntity())
-    }
+    suspend fun completeReaction(
+        momentId: Uuid,
+        liked: Boolean,
+        content: String,
+        imageDescription: String?,
+        now: Long = System.currentTimeMillis(),
+    ): Boolean = dao.completeReaction(momentId.toString(), liked, content, imageDescription, now)
 
     suspend fun toggleUserLike(momentId: Uuid) {
-        val entity = dao.getMoment(momentId.toString()) ?: return
-        dao.updateMoment(entity.copy(userLiked = !entity.userLiked))
+        dao.toggleUserLike(momentId.toString())
     }
 
     suspend fun addUserComment(momentId: Uuid, content: String, now: Long = System.currentTimeMillis()): Uuid {
@@ -176,12 +179,12 @@ class MomentRepository(
         return id
     }
 
-    suspend fun addAssistantComment(momentId: Uuid, content: String, now: Long = System.currentTimeMillis()): Uuid {
-        val id = Uuid.random()
-        dao.upsertComment(
+    suspend fun completeCommentReply(comment: MomentComment, content: String, now: Long = System.currentTimeMillis()): Boolean =
+        dao.completeCommentReply(
+            comment.id.toString(),
             MomentCommentEntity(
-                id = id.toString(),
-                momentId = momentId.toString(),
+                id = Uuid.random().toString(),
+                momentId = comment.momentId.toString(),
                 author = MomentAuthor.ASSISTANT.value,
                 content = content.trim(),
                 replyDueAt = null,
@@ -190,12 +193,6 @@ class MomentRepository(
                 createdAt = now,
             )
         )
-        return id
-    }
-
-    suspend fun updateComment(comment: MomentComment) {
-        dao.updateComment(comment.toEntity())
-    }
 
     suspend fun markViewed(assistantId: Uuid, viewedAt: Long = System.currentTimeMillis()) {
         val current = dao.getProfile(assistantId.toString())
@@ -354,24 +351,6 @@ private fun MomentEntity.toMoment(): Moment = Moment(
     createdAt = createdAt,
 )
 
-private fun Moment.toEntity(): MomentEntity = MomentEntity(
-    id = id.toString(),
-    assistantId = assistantId.toString(),
-    author = author.value,
-    content = content,
-    contextNote = contextNote,
-    imageDescription = imageDescription,
-    images = JsonInstant.encodeToString(imageUris),
-    replyDueAt = replyDueAt,
-    replyStatus = replyStatus.value,
-    aiLiked = aiLiked,
-    aiReplyContent = aiReplyContent,
-    repliedAt = repliedAt,
-    aiReplySeenAt = aiReplySeenAt,
-    userLiked = userLiked,
-    createdAt = createdAt,
-)
-
 private fun MomentCommentEntity.toMomentComment(): MomentComment = MomentComment(
     id = Uuid.parse(id),
     momentId = Uuid.parse(momentId),
@@ -379,17 +358,6 @@ private fun MomentCommentEntity.toMomentComment(): MomentComment = MomentComment
     content = content,
     replyDueAt = replyDueAt,
     replyStatus = MomentReplyStatus.of(replyStatus),
-    seenAt = seenAt,
-    createdAt = createdAt,
-)
-
-private fun MomentComment.toEntity(): MomentCommentEntity = MomentCommentEntity(
-    id = id.toString(),
-    momentId = momentId.toString(),
-    author = author.value,
-    content = content,
-    replyDueAt = replyDueAt,
-    replyStatus = replyStatus.value,
     seenAt = seenAt,
     createdAt = createdAt,
 )

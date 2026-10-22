@@ -64,7 +64,7 @@ class UsageStatsReader(private val context: Context) {
         val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         val launchablePackages = packageManager.queryIntentActivities(
             launcherIntent,
-            PackageManager.MATCH_DEFAULT_ONLY,
+            0,
         ).mapTo(mutableSetOf()) { it.activityInfo.packageName }
         packageManager.loadInstalledApps().filterKeys { it in launchablePackages }
     }

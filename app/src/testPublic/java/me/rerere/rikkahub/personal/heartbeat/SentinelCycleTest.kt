@@ -3,6 +3,7 @@ package me.rerere.rikkahub.personal.heartbeat
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
 import me.rerere.ai.ui.UIMessagePart
 import org.junit.Assert.*
 import org.junit.Test
@@ -14,7 +15,7 @@ class SentinelCycleTest {
         assertEquals(60, config.forCurrentCycle(state).minIntervalMinutes)
         repeat(4) { index ->
             assertTrue(state.canObserve(100L + index))
-            state = state.enter(100L + index)
+            state = Json.decodeSentinelState(Json.encodeToString(state.enter(100L + index)))
             assertEquals(index + 1, state.consecutiveRounds)
             assertEquals(5, config.forCurrentCycle(state).minIntervalMinutes)
         }
@@ -50,5 +51,13 @@ class SentinelCycleTest {
         assertEquals(60, config.forCurrentCycle(paused).minIntervalMinutes)
         assertFalse(paused.canObserve(50))
         assertFalse(config.copy(enabled = false).normalized().sentinel.enabled)
+    }
+
+    @Test fun persistedInvalidCountersAreStillRejectedAndPauseStateSurvives() {
+        listOf(SentinelState(consecutiveRounds = -1), SentinelState(active = true)).forEach { invalid ->
+            assertTrue(runCatching { Json.decodeSentinelState(Json.encodeToString(invalid)) }.isFailure)
+        }
+        val paused = SentinelState(revision = 9, pauseReason = "accessibility_disconnected")
+        assertEquals(paused, Json.decodeSentinelState(Json.encodeToString(paused)))
     }
 }

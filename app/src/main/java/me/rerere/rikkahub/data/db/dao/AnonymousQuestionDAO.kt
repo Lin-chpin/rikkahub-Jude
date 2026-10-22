@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 import me.rerere.rikkahub.data.db.entity.AnonymousQuestionEntity
@@ -37,6 +38,9 @@ interface AnonymousQuestionDAO {
     @Query("SELECT * FROM anonymous_question_replies WHERE question_id = :questionId ORDER BY created_at ASC")
     suspend fun getReplies(questionId: String): List<AnonymousQuestionReplyEntity>
 
+    @Query("SELECT * FROM anonymous_question_replies WHERE id = :id")
+    suspend fun getReply(id: String): AnonymousQuestionReplyEntity?
+
     @Query(
         """
         SELECT * FROM anonymous_questions
@@ -69,6 +73,36 @@ interface AnonymousQuestionDAO {
 
     @Update
     suspend fun updateReply(reply: AnonymousQuestionReplyEntity)
+
+    @Transaction
+    suspend fun insertUserAnswerIfAbsent(reply: AnonymousQuestionReplyEntity): Boolean {
+        val question = getQuestion(reply.questionId) ?: return false
+        if (question.author != "assistant" || getReplies(question.id).any {
+                it.author == "user" && it.kind == "answer"
+            }) return false
+        upsertReply(reply)
+        return true
+    }
+
+    @Transaction
+    suspend fun completeQuestionAnswer(reply: AnonymousQuestionReplyEntity): Boolean {
+        val current = getQuestion(reply.questionId) ?: return false
+        if (current.author != "user" || current.replyStatus != "pending") return false
+        upsertReply(reply)
+        updateQuestion(current.copy(replyStatus = "done"))
+        return true
+    }
+
+    @Transaction
+    suspend fun completeAnswerComment(answerId: String, reply: AnonymousQuestionReplyEntity): Boolean {
+        val current = getReply(answerId) ?: return false
+        if (current.author != "user" || current.kind != "answer" ||
+            current.replyStatus != "pending" || current.questionId != reply.questionId
+        ) return false
+        upsertReply(reply)
+        updateReply(current.copy(replyStatus = "done"))
+        return true
+    }
 
     @Query("SELECT * FROM anonymous_question_profiles WHERE scope_id = :scopeId")
     fun observeProfile(scopeId: String): Flow<AnonymousQuestionProfileEntity?>

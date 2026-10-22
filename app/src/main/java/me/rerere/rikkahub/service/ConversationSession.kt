@@ -26,6 +26,20 @@ class ConversationSession(
     private val onIdle: (Uuid) -> Unit,
 ) {
     private val initializationMutex = Mutex()
+    private val persistenceMutex = Mutex()
+    private val stateLock = Any()
+
+    @Volatile
+    var deleted: Boolean = false
+        private set
+
+    fun markDeleted() = synchronized(stateLock) { deleted = true }
+
+    internal fun restoreState(conversation: Conversation) = synchronized(stateLock) {
+        deleted = false
+        state.value = conversation
+        stateInitialized = true
+    }
 
     @Volatile
     private var stateInitialized = false
@@ -35,18 +49,43 @@ class ConversationSession(
             if (!stateInitialized) {
                 val loaded = load()
                 // A live update may win while Room is loading. Never replace that newer state.
-                if (!stateInitialized) {
-                    state.value = loaded
-                    stateInitialized = true
+                synchronized(stateLock) {
+                    if (!stateInitialized) {
+                        state.value = loaded
+                        stateInitialized = true
+                    }
                 }
             }
             state.value
         }
 
     fun replaceState(conversation: Conversation) {
-        stateInitialized = true
-        state.value = conversation
+        updateState { conversation }
     }
+
+    fun updateState(update: (Conversation) -> Conversation): Conversation = synchronized(stateLock) {
+        check(!deleted) { "Conversation has been deleted" }
+        update(state.value).also {
+            stateInitialized = true
+            state.value = it
+        }
+    }
+
+    // A late callback cannot turn an unloaded placeholder into authoritative persisted state.
+    fun updateInitializedState(update: (Conversation) -> Conversation): Conversation = synchronized(stateLock) {
+        if (!stateInitialized || deleted) state.value else updateState(update)
+    }
+
+    fun updateGenerationState(
+        expectedJob: Job,
+        allowCancelled: Boolean = false,
+        update: (Conversation) -> Conversation,
+    ): Conversation = updateState { current ->
+        if (getJob() !== expectedJob || (!allowCancelled && !expectedJob.isActive)) current else update(current)
+    }
+
+    // Read/transform/commit share this boundary; locking only a prebuilt snapshot is too late.
+    suspend fun <T> withPersistence(block: suspend () -> T): T = persistenceMutex.withLock { block() }
     // 会话状态
     val state = MutableStateFlow(initial)
 
@@ -96,7 +135,7 @@ class ConversationSession(
         }
     }
 
-    fun setJob(job: Job?) {
+    fun setJob(job: Job?) = synchronized(stateLock) {
         _generationJob.getAndUpdate { job }?.cancel()
         job?.invokeOnCompletion {
             // A cancelled previous job can complete after a replacement job

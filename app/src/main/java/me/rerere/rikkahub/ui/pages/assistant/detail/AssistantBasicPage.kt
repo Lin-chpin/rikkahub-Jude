@@ -84,7 +84,7 @@ fun AssistantBasicPage(id: String) {
             assistant = assistant,
             providers = providers,
             tags = tags,
-            onUpdate = { vm.update(it) },
+            onUpdate = { vm.update(it, assistant) },
             vm = vm
         )
     }

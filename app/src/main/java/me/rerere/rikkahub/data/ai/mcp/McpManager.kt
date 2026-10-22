@@ -34,10 +34,11 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.ai.mcp.transport.SseClientTransport
 import me.rerere.rikkahub.data.ai.mcp.transport.StreamableHttpClientTransport
+import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
-import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.files.saveUploadFromBytes
+import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.utils.JsonInstant
 import me.rerere.rikkahub.utils.checkDifferent
 import okhttp3.OkHttpClient
@@ -88,15 +89,13 @@ class McpManager(
                 .map { settings -> settings.mcpServers }
                 .collect { mcpServerConfigs ->
                     runCatching {
-                        Log.i(TAG, "update configs: $mcpServerConfigs")
                         val newConfigs = mcpServerConfigs.filter { it.commonOptions.enable }
                         val currentConfigs = clients.keys.toList()
                         val (toAdd, toRemove) = currentConfigs.checkDifferent(
                             other = newConfigs,
                             eq = { a, b -> a.id == b.id }
                         )
-                        Log.i(TAG, "to_add: $toAdd")
-                        Log.i(TAG, "to_remove: $toRemove")
+                        Log.i(TAG, "update configs: add=${toAdd.size} remove=${toRemove.size}")
                         toAdd.forEach { cfg ->
                             appScope.launch {
                                 runCatching { addClient(cfg) }
@@ -117,26 +116,20 @@ class McpManager(
         return clients.entries.find { it.key.id == config.id }?.value
     }
 
-    fun getAllAvailableTools(): List<Pair<Uuid, McpTool>> {
-        val settings = settingsStore.settingsFlow.value
-        val assistant = settings.getCurrentAssistant()
-        return settings.mcpServers
-            .filter {
-                it.commonOptions.enable && it.id in assistant.mcpServers
-            }
-            .flatMap { server ->
-                server.commonOptions.tools
-                    .filter { tool -> tool.enable }
-                    .map { tool -> server.id to tool }
-            }
-    }
+    fun getAllAvailableTools(settings: Settings, assistant: Assistant): List<Pair<Uuid, McpTool>> =
+        availableMcpTools(settings, assistant)
 
-    suspend fun callTool(serverId: Uuid, toolName: String, args: JsonObject): List<UIMessagePart> {
+    suspend fun callTool(
+        serverId: Uuid,
+        toolName: String,
+        args: JsonObject,
+        suppressContentLogs: Boolean = false,
+    ): List<UIMessagePart> {
         val entry = clients.entries.find { it.key.id == serverId }
         val client = entry?.value
             ?: return listOf(UIMessagePart.Text("Failed to execute tool, because no such mcp client for the tool"))
         val config = entry.key
-        Log.i(TAG, "callTool: $toolName / $args (server: ${config.commonOptions.name})")
+        if (!suppressContentLogs) Log.i(TAG, "callTool: $toolName / $args (server: ${config.commonOptions.name})")
 
         if (client.transport == null) client.connect(getTransport(config))
         val result = client.callTool(
@@ -225,7 +218,7 @@ class McpManager(
         }
 
         transport.onError { error ->
-            Log.e(TAG, "Transport error for ${config.commonOptions.name}: ${error.message}")
+            Log.e(TAG, "Transport error for ${config.id}: ${error.javaClass.simpleName}")
             val currentStatus = syncingStatus.value[config.id]
             // 只有在已连接状态下才触发重连
             if (currentStatus == McpStatus.Connected) {
@@ -257,7 +250,7 @@ class McpManager(
             client.connect(getTransport(config))
         }
         val serverTools = client.listTools()?.tools ?: emptyList()
-        Log.i(TAG, "sync: tools: $serverTools")
+        Log.i(TAG, "sync: ${serverTools.size} tools")
         settingsStore.update { old ->
             old.copy(
                 mcpServers = old.mcpServers.map { serverConfig ->
@@ -333,7 +326,7 @@ class McpManager(
             }
             clients.remove(entry.key)
             syncingStatus.emit(syncingStatus.value.toMutableMap().apply { remove(entry.key.id) })
-            Log.i(TAG, "removeClient: ${entry.key} / ${entry.key.commonOptions.name}")
+            Log.i(TAG, "removeClient: ${entry.key.id}")
         }
         reconnectAttempts.remove(config.id)
     }
@@ -423,7 +416,7 @@ class McpManager(
         }
 
         transport.onError { error ->
-            Log.e(TAG, "Transport error for ${config.commonOptions.name}: ${error.message}")
+            Log.e(TAG, "Transport error for ${config.id}: ${error.javaClass.simpleName}")
             val currentStatus = syncingStatus.value[config.id]
             if (currentStatus == McpStatus.Connected) {
                 scheduleReconnect(config)

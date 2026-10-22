@@ -84,7 +84,7 @@ fun AssistantMemoryPage(id: String) {
             modifier = Modifier.padding(innerPadding),
             assistant = assistant,
             memories = memories,
-            onUpdateAssistant = { vm.update(it) },
+            onUpdateAssistant = { vm.update(it, assistant) },
             onDeleteMemory = { vm.deleteMemory(it) },
             onAddMemory = { vm.addMemory(it) },
             onUpdateMemory = { vm.updateMemory(it) }

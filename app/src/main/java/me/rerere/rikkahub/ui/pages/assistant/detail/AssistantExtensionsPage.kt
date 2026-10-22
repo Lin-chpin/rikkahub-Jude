@@ -112,7 +112,7 @@ fun AssistantExtensionsPage(id: String) {
                                     onToggle = { quickMessageId, checked ->
                                         val newIds = if (checked) assistant.quickMessageIds + quickMessageId
                                         else assistant.quickMessageIds - quickMessageId
-                                        vm.update(assistant.copy(quickMessageIds = newIds))
+                                        vm.update(assistant.copy(quickMessageIds = newIds), assistant)
                                     },
                                 )
                                 TextButton(
@@ -141,7 +141,7 @@ fun AssistantExtensionsPage(id: String) {
                                     onToggle = { injId, checked ->
                                         val newIds = if (checked) assistant.modeInjectionIds + injId
                                         else assistant.modeInjectionIds - injId
-                                        vm.update(assistant.copy(modeInjectionIds = newIds))
+                                        vm.update(assistant.copy(modeInjectionIds = newIds), assistant)
                                     },
                                 )
                                 TextButton(
@@ -170,7 +170,7 @@ fun AssistantExtensionsPage(id: String) {
                                     onToggle = { injId, checked ->
                                         val newIds = if (checked) assistant.lorebookIds + injId
                                         else assistant.lorebookIds - injId
-                                        vm.update(assistant.copy(lorebookIds = newIds))
+                                        vm.update(assistant.copy(lorebookIds = newIds), assistant)
                                     },
                                 )
                                 TextButton(
@@ -199,7 +199,7 @@ fun AssistantExtensionsPage(id: String) {
                                     onToggle = { name, checked ->
                                         val newSkills = if (checked) assistant.enabledSkills + name
                                         else assistant.enabledSkills - name
-                                        vm.update(assistant.copy(enabledSkills = newSkills))
+                                        vm.update(assistant.copy(enabledSkills = newSkills), assistant)
                                     },
                                 )
                                 TextButton(

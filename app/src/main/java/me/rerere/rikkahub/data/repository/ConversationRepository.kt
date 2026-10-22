@@ -1,6 +1,5 @@
 package me.rerere.rikkahub.data.repository
 
-import android.database.sqlite.SQLiteBlobTooBigException
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
@@ -238,7 +237,7 @@ class ConversationRepository(
         messageFtsManager.indexConversation(conversation)
     }
 
-    suspend fun deleteConversation(conversation: Conversation) {
+    suspend fun deleteConversation(conversation: Conversation, deleteFiles: Boolean = true) {
         // 获取完整的 Conversation（包含 messageNodes）以正确清理文件
         val fullConversation = if (conversation.messageNodes.isEmpty()) {
             getConversationById(conversation.id) ?: conversation
@@ -252,7 +251,7 @@ class ConversationRepository(
                 conversationToConversationEntity(conversation)
             )
         }
-        filesManager.deleteChatFiles(fullConversation.files)
+        if (deleteFiles) filesManager.deleteChatFiles(fullConversation.files)
     }
 
     suspend fun searchMessages(keyword: String) = messageFtsManager.search(keyword)
@@ -360,17 +359,8 @@ class ConversationRepository(
             var offset = 0
             val pageSize = 64
             while (true) {
-                val page = try {
-                    messageNodeDAO.getNodesOfConversationPaged(conversationId, pageSize, offset)
-                } catch (e: SQLiteBlobTooBigException) {
-                    e.printStackTrace()
-                    offset += pageSize
-                    continue
-                } catch (e: IllegalStateException) {
-                    e.printStackTrace()
-                    offset += pageSize
-                    continue
-                }
+                // A partial conversation must never reach the full-replacement save path.
+                val page = messageNodeDAO.getNodesOfConversationPaged(conversationId, pageSize, offset)
                 if (page.isEmpty()) break
                 page.forEach { entity ->
                     val messages = JsonInstant.decodeFromString<List<UIMessage>>(entity.messages)

@@ -46,7 +46,7 @@ fun AssistantMcpPage(id: String) {
                 .padding(16.dp),
             assistant = assistant,
             servers = mcpServerConfigs,
-            onUpdateAssistant = { vm.update(it) }
+            onUpdateAssistant = { vm.update(it, assistant) }
         )
     }
 }

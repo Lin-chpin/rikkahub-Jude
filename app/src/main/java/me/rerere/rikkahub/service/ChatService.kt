@@ -19,6 +19,8 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -90,6 +92,7 @@ import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.data.datastore.getSelectedTTSProvider
 import me.rerere.rikkahub.local.LocalBuildIntegration
 import me.rerere.rikkahub.data.files.FilesManager
+import me.rerere.rikkahub.data.files.copyWithForkedFiles
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.voice.VOICE_CALL_UNAVAILABLE_MESSAGE
@@ -254,6 +257,7 @@ class ChatService(
     // 统一会话管理
     private val sessions = ConcurrentHashMap<Uuid, ConversationSession>()
     private val _sessionsVersion = MutableStateFlow(0L)
+    private val conversationPersistence = ConversationPersistence(conversationRepo, filesManager, ::getOrCreateSession)
     private val compressionDiagnostics = ConversationCompressionDiagnosticsRecorder()
 
     // 错误状态
@@ -357,11 +361,18 @@ class ChatService(
         conversationId: Uuid,
         block: suspend () -> Unit
     ): Job = appScope.launch(Dispatchers.IO) {
-        addConversationReference(conversationId)
-        try {
-            block()
-        } finally {
-            removeConversationReference(conversationId)
+        val session = getOrCreateSession(conversationId)
+        session.withRefSuspend {
+            try {
+                session.initializeState {
+                    conversationRepo.getConversationById(conversationId) ?: session.state.value
+                }
+                if (!session.deleted) block()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                addError(error, conversationId)
+            }
         }
     }
 
@@ -473,14 +484,8 @@ class ChatService(
                 timing?.mark("conversation_initialize_finished")
                 timing?.mark("send_state_started")
                 val currentConversation = session.state.value
-                val endedEventConsumption = if (
-                    answer && requestMode == ChatRequestMode.Normal
-                ) {
-                    currentConversation.consumePendingVoiceCallEndedEvent()
-                } else {
-                    null
-                }
-                val conversationBeforeSend = endedEventConsumption?.conversation ?: currentConversation
+                var notifyEndedEvent = false
+                val conversationBeforeSend = currentConversation
                 compressionDiagnostics.record(
                     conversationId = conversationId,
                     stage = "send.before",
@@ -502,12 +507,13 @@ class ChatService(
                     role = MessageRole.USER,
                     parts = processedContent,
                 )
-                val newConversation = conversationBeforeSend.copy(
-                    messageNodes = conversationBeforeSend.messageNodes + userMessage.toMessageNode(),
-                    updateAt = Instant.now(),
-                )
                 timing?.mark("user_message_save_started", userMessage.id.toString())
-                saveConversation(conversationId, newConversation, timing)
+                mutateConversation(conversationId) { latest ->
+                    val consumption = if (answer && requestMode == ChatRequestMode.Normal) latest.consumePendingVoiceCallEndedEvent() else null
+                    notifyEndedEvent = consumption?.shouldNotifyModel == true
+                    val base = consumption?.conversation ?: latest
+                    base.copy(messageNodes = base.messageNodes + userMessage.toMessageNode(), updateAt = Instant.now())
+                }
                 timing?.mark("user_message_save_finished", userMessage.id.toString())
                 timing?.mark("user_message_hook_started")
                 LocalBuildIntegration.onUserMessageSent(
@@ -530,13 +536,13 @@ class ChatService(
                         conversation = getConversationFlow(conversationId).value
                     )
                     timing?.mark("auto_compression_finished")
-                    val voiceCallRuntimeState = if (endedEventConsumption?.shouldNotifyModel == true) {
+                    val voiceCallRuntimeState = if (notifyEndedEvent) {
                         VoiceCallRuntimeState.ENDED
                     } else {
                         requestMode.defaultVoiceCallRuntimeState()
                     }
                     val voiceCallUserEventState = when {
-                        endedEventConsumption?.shouldNotifyModel == true -> VoiceCallRuntimeState.ENDED
+                        notifyEndedEvent -> VoiceCallRuntimeState.ENDED
                         includeVoiceCallConnectedEvent && requestMode == ChatRequestMode.VoiceCall ->
                             VoiceCallRuntimeState.ACTIVE
 
@@ -604,12 +610,11 @@ class ChatService(
 
                 if (message.role == MessageRole.USER) {
                     // 如果是用户消息，则截止到当前消息
-                    val node = conversation.getMessageNodeByMessage(message)
-                    val indexAt = conversation.messageNodes.indexOf(node)
-                    val newConversation = conversation.copy(
-                        messageNodes = conversation.messageNodes.subList(0, indexAt + 1)
-                    )
-                    saveConversation(conversationId, newConversation)
+                    mutateConversation(conversationId) { latest ->
+                        val index = latest.messageNodes.indexOfFirst { it.messages.any { it.id == message.id } }
+                        require(index >= 0) { "Message not found" }
+                        latest.copy(messageNodes = latest.messageNodes.take(index + 1))
+                    }
                     handleMessageComplete(conversationId)
                 } else {
                     if (regenerateAssistantMsg) {
@@ -617,7 +622,7 @@ class ChatService(
                         val nodeIndex = conversation.messageNodes.indexOf(node)
                         handleMessageComplete(conversationId, messageRange = 0..<nodeIndex)
                     } else {
-                        saveConversation(conversationId, conversation)
+                        persistConversation(conversationId)
                     }
                 }
 
@@ -700,28 +705,30 @@ class ChatService(
                 }
 
                 // Update the tool approval state
-                val updatedNodes = conversation.messageNodes.map { node ->
-                    node.copy(
-                        messages = node.messages.map { msg ->
-                            msg.copy(
-                                parts = msg.parts.map { part ->
-                                    when {
-                                        part is UIMessagePart.Tool && part.toolCallId == toolCallId -> {
-                                            part.copy(
-                                                approvalState = newApprovalState,
-                                                output = connectedVoiceCallOutput ?: part.output,
-                                            )
-                                        }
+                val updatedConversation = mutateConversation(conversationId) { latest ->
+                    val updatedNodes = latest.messageNodes.map { node ->
+                        node.copy(
+                            messages = node.messages.map { msg ->
+                                msg.copy(
+                                    parts = msg.parts.map { part ->
+                                        when {
+                                            part is UIMessagePart.Tool && part.toolCallId == toolCallId -> {
+                                                part.copy(
+                                                    approvalState = newApprovalState,
+                                                    output = connectedVoiceCallOutput ?: part.output,
+                                                )
+                                            }
 
-                                        else -> part
+                                            else -> part
+                                        }
                                     }
-                                }
-                            )
-                        }
-                    )
+                                )
+                            }
+                        )
+                    }
+                    latest.copy(messageNodes = updatedNodes)
                 }
-                val updatedConversation = conversation.copy(messageNodes = updatedNodes)
-                saveConversation(conversationId, updatedConversation)
+                val updatedNodes = updatedConversation.messageNodes
                 if (isVoiceCallTool) {
                     VoiceCallNotifications.cancel(context, conversationId.toString())
                 }
@@ -773,94 +780,96 @@ class ChatService(
 
                 // Audio tags are call-only speech metadata. Preserve the primary text while
                 // removing the selected branch's tags before it returns to normal chat.
-                var conversation = session.state.value.let { current ->
-                    current.updateCurrentMessages(
-                        current.currentMessages.map(UIMessage::withoutVoiceCallAudioTagsForNormalContext)
-                    )
-                }
-                val completedCallMessages = voiceCallCompletion?.let { completion ->
-                    conversation.currentMessages.filter { message ->
-                        message.id.toString() in completion.messageIds &&
-                            (message.role == MessageRole.USER || message.role == MessageRole.ASSISTANT)
-                    }
-                }.orEmpty()
-                val hasVoiceCallConversation = completedCallMessages.any { it.toText().isNotBlank() }
-                voiceCallCompletion?.let { completion ->
-                    val hasAiContent = completedCallMessages.any { message ->
-                        message.role == MessageRole.ASSISTANT && message.toText().isNotBlank()
-                    }
-                    if (hasVoiceCallConversation) {
-                        val recordNode = UIMessage(
-                            role = MessageRole.ASSISTANT,
-                            parts = emptyList(),
-                            annotations = listOf(
-                                UIMessageAnnotation.VoiceCallRecord(
-                                    callId = completion.callId,
-                                    durationSeconds = completion.durationSeconds,
-                                    cardAnchor = hasAiContent,
-                                    standalone = true,
-                                    messageIds = if (hasAiContent) completion.messageIds else emptySet(),
-                                    audioSegmentsByMessageId = completion.audioSegmentsByMessageId,
-                                    pendingEndedEvent = true,
-                                )
-                            ),
-                        ).toMessageNode()
-                        conversation = conversation.copy(
-                            messageNodes = conversation.messageNodes + recordNode
+                mutateConversation(conversationId) { latest ->
+                    var conversation = latest.let { current ->
+                        current.updateCurrentMessages(
+                            current.currentMessages.map(UIMessage::withoutVoiceCallAudioTagsForNormalContext)
                         )
                     }
-                }
-                if (toolCallId != null) {
-                    val target = conversation.messageNodes.mapIndexedNotNull { nodeIndex, node ->
-                        node.messages.mapIndexedNotNull { messageIndex, message ->
-                            messageIndex.takeIf {
-                                message.parts.any { part ->
-                                    part is UIMessagePart.Tool &&
-                                        part.toolCallId == toolCallId &&
-                                        part.toolName == REQUEST_VOICE_CALL_TOOL_NAME
-                                }
-                            }?.let { messageIndex -> nodeIndex to messageIndex }
-                        }.firstOrNull()
-                    }.firstOrNull()
-
-                    if (target != null) {
-                        val (targetNodeIndex, targetMessageIndex) = target
-                        val result = buildJsonObject {
-                            put("success", failureMessage == null)
-                            put("status", if (failureMessage == null) "ended" else "failed")
-                            put("message", VOICE_CALL_ENDED_TOOL_STATUS)
-                            if (failureMessage != null) {
-                                put("error", failureMessage)
-                            }
-                        }.toString()
-                        val updatedNodes = conversation.messageNodes.mapIndexed { nodeIndex, node ->
-                            if (nodeIndex != targetNodeIndex) {
-                                node
-                            } else {
-                                node.copy(
-                                    messages = node.messages.mapIndexed { messageIndex, message ->
-                                        if (messageIndex != targetMessageIndex) {
-                                            message
-                                        } else {
-                                            message.copy(
-                                                parts = message.parts.map { part ->
-                                                    if (part is UIMessagePart.Tool && part.toolCallId == toolCallId) {
-                                                        part.copy(output = listOf(UIMessagePart.Text(result)))
-                                                    } else {
-                                                        part
-                                                    }
-                                                }
-                                            )
-                                        }
-                                    },
-                                    selectIndex = targetMessageIndex,
-                                )
-                            }
+                    val completedCallMessages = voiceCallCompletion?.let { completion ->
+                        conversation.currentMessages.filter { message ->
+                            message.id.toString() in completion.messageIds &&
+                                (message.role == MessageRole.USER || message.role == MessageRole.ASSISTANT)
                         }
-                        conversation = conversation.copy(messageNodes = updatedNodes)
+                    }.orEmpty()
+                    val hasVoiceCallConversation = completedCallMessages.any { it.toText().isNotBlank() }
+                    voiceCallCompletion?.let { completion ->
+                        val hasAiContent = completedCallMessages.any { message ->
+                            message.role == MessageRole.ASSISTANT && message.toText().isNotBlank()
+                        }
+                        if (hasVoiceCallConversation) {
+                            val recordNode = UIMessage(
+                                role = MessageRole.ASSISTANT,
+                                parts = emptyList(),
+                                annotations = listOf(
+                                    UIMessageAnnotation.VoiceCallRecord(
+                                        callId = completion.callId,
+                                        durationSeconds = completion.durationSeconds,
+                                        cardAnchor = hasAiContent,
+                                        standalone = true,
+                                        messageIds = if (hasAiContent) completion.messageIds else emptySet(),
+                                        audioSegmentsByMessageId = completion.audioSegmentsByMessageId,
+                                        pendingEndedEvent = true,
+                                    )
+                                ),
+                            ).toMessageNode()
+                            conversation = conversation.copy(
+                                messageNodes = conversation.messageNodes + recordNode
+                            )
+                        }
                     }
+                    if (toolCallId != null) {
+                        val target = conversation.messageNodes.mapIndexedNotNull { nodeIndex, node ->
+                            node.messages.mapIndexedNotNull { messageIndex, message ->
+                                messageIndex.takeIf {
+                                    message.parts.any { part ->
+                                        part is UIMessagePart.Tool &&
+                                            part.toolCallId == toolCallId &&
+                                            part.toolName == REQUEST_VOICE_CALL_TOOL_NAME
+                                    }
+                                }?.let { messageIndex -> nodeIndex to messageIndex }
+                            }.firstOrNull()
+                        }.firstOrNull()
+
+                        if (target != null) {
+                            val (targetNodeIndex, targetMessageIndex) = target
+                            val result = buildJsonObject {
+                                put("success", failureMessage == null)
+                                put("status", if (failureMessage == null) "ended" else "failed")
+                                put("message", VOICE_CALL_ENDED_TOOL_STATUS)
+                                if (failureMessage != null) {
+                                    put("error", failureMessage)
+                                }
+                            }.toString()
+                            val updatedNodes = conversation.messageNodes.mapIndexed { nodeIndex, node ->
+                                if (nodeIndex != targetNodeIndex) {
+                                    node
+                                } else {
+                                    node.copy(
+                                        messages = node.messages.mapIndexed { messageIndex, message ->
+                                            if (messageIndex != targetMessageIndex) {
+                                                message
+                                            } else {
+                                                message.copy(
+                                                    parts = message.parts.map { part ->
+                                                        if (part is UIMessagePart.Tool && part.toolCallId == toolCallId) {
+                                                            part.copy(output = listOf(UIMessagePart.Text(result)))
+                                                        } else {
+                                                            part
+                                                        }
+                                                    }
+                                                )
+                                            }
+                                        },
+                                        selectIndex = targetMessageIndex,
+                                    )
+                                }
+                            }
+                            conversation = conversation.copy(messageNodes = updatedNodes)
+                        }
+                    }
+                    conversation
                 }
-                saveConversation(conversationId, conversation)
             } catch (e: Exception) {
                 addError(e, conversationId, title = context.getString(R.string.error_title_voice_call))
             }
@@ -902,7 +911,7 @@ class ChatService(
         runCatching {
 
             // reset suggestions
-            updateConversation(conversationId, initialConversation.copy(chatSuggestions = emptyList()))
+            updateConversationState(conversationId) { it.copy(chatSuggestions = emptyList()) }
 
 
             // check invalid messages
@@ -1013,7 +1022,10 @@ class ChatService(
                 outputTransformers = outputTransformers,
                 tools = chatToolFactory.createTools(
                     settings = settings,
+                    assistant = assistant,
                     model = model,
+                    legacyToolNames = conversation.currentMessages.lastOrNull()?.getTools()
+                        ?.filterNot { it.isExecuted }?.mapTo(mutableSetOf()) { it.toolName }.orEmpty(),
                     localToolOptions = localToolOptions,
                     usageLockEnabled = settings.usageReminderConfig.lockEnabled,
                     voiceCallConfigured = voiceCallConfigured,
@@ -1088,25 +1100,22 @@ class ChatService(
                                 if (!generationJob.isActive || session.getJob() !== generationJob) return@synchronized
                                 tagAssignmentsByMessageId
                                     .getOrPut(primaryReply.id) { mutableMapOf() }[index] = assignmentResult.getOrNull()
-                                val currentConversation = getConversationFlow(conversationId).value
-                                val currentReply = currentConversation.currentMessages
-                                    .firstOrNull { it.id == primaryReply.id }
-                                if (currentReply != null) {
-                                    val projectedReply = currentReply.withIncrementalVoiceCallAudioTagAssignments(
-                                        assignments = tagAssignmentsByMessageId.getValue(primaryReply.id),
-                                        format = voiceCallAudioTagFormat,
-                                    )
-                                    speechReply?.publishTagged(projectedReply)
-                                    updateConversation(
-                                        conversationId,
+                                session.updateGenerationState(generationJob) { currentConversation ->
+                                    val currentReply = currentConversation.currentMessages
+                                        .firstOrNull { it.id == primaryReply.id }
+                                    if (currentReply != null) {
+                                        val projectedReply = currentReply.withIncrementalVoiceCallAudioTagAssignments(
+                                            assignments = tagAssignmentsByMessageId.getValue(primaryReply.id),
+                                            format = voiceCallAudioTagFormat,
+                                        )
+                                        speechReply?.publishTagged(projectedReply)
                                         currentConversation.updateMessageAtNodeIndex(
-                                            nodeIndex = currentConversation.messageNodes.indexOfFirst { node ->
-                                                node.messages.any { it.id == projectedReply.id }
-                                            }.takeIf { it >= 0 },
-                                            message = projectedReply,
-                                        ),
-                                        checkFiles = false,
-                                    )
+                                                nodeIndex = currentConversation.messageNodes.indexOfFirst { node ->
+                                                    node.messages.any { it.id == projectedReply.id }
+                                                }.takeIf { it >= 0 },
+                                                message = projectedReply,
+                                            )
+                                    } else currentConversation
                                 }
                             }
                         }
@@ -1120,7 +1129,6 @@ class ChatService(
                     cancelLiveUpdateNotification(conversationId)
 
                     // 可能被取消了，或者意外结束，兜底更新
-                    val currentConversation = getConversationFlow(conversationId).value
                     val finalStreamMessage = latestPrimaryMessages?.lastOrNull()?.let { message ->
                         synchronized(tagProjectionLock) {
                             tagAssignmentsByMessageId[message.id]?.let { assignments ->
@@ -1131,28 +1139,31 @@ class ChatService(
                             } ?: message
                         }
                     }
-                    val conversationBeforeFinish = if (finalStreamMessage != null) {
-                        val nodeIndex = if (streamingMessageId == finalStreamMessage.id) {
-                            streamingNodeIndex
-                        } else {
-                            currentConversation.visibleMessageNodeIndexAt(
-                                latestPrimaryMessages!!.lastIndex,
+                    session.updateGenerationState(generationJob, allowCancelled = true) { currentConversation ->
+                        if (session.getJob() !== generationJob) return@updateGenerationState currentConversation
+                        val conversationBeforeFinish = if (finalStreamMessage != null) {
+                            val nodeIndex = if (streamingMessageId == finalStreamMessage.id) {
+                                streamingNodeIndex
+                            } else {
+                                currentConversation.visibleMessageNodeIndexAt(
+                                    latestPrimaryMessages!!.lastIndex,
+                                )
+                            }
+                            currentConversation.updateMessageAtNodeIndex(
+                                nodeIndex = nodeIndex,
+                                message = finalStreamMessage,
                             )
+                        } else {
+                            currentConversation
                         }
-                        currentConversation.updateMessageAtNodeIndex(
-                            nodeIndex = nodeIndex,
-                            message = finalStreamMessage,
+                        val updatedConversation = conversationBeforeFinish.copy(
+                            messageNodes = conversationBeforeFinish.messageNodes.map { node ->
+                                node.copy(messages = node.messages.map { it.finishReasoning() })
+                            },
+                            updateAt = Instant.now()
                         )
-                    } else {
-                        currentConversation
+                        updatedConversation
                     }
-                    val updatedConversation = conversationBeforeFinish.copy(
-                        messageNodes = conversationBeforeFinish.messageNodes.map { node ->
-                            node.copy(messages = node.messages.map { it.finishReasoning() })
-                        },
-                        updateAt = Instant.now()
-                    )
-                    updateConversation(conversationId, updatedConversation)
                     timing?.mark("final_state_published")
 
                     // Show notification if app is not in foreground
@@ -1203,32 +1214,29 @@ class ChatService(
                             }
                             synchronized(tagProjectionLock) {
                                 speechReply?.publish(projectedMessages)
-                                val currentConversation = getConversationFlow(conversationId).value
-                                val streamedMessage = projectedMessages.lastOrNull()
-                                val now = System.nanoTime()
-                                val shouldUpdateUi = streamedMessage != null && (
-                                    streamingMessageId != streamedMessage.id ||
-                                        now - lastStreamingUiUpdateNanos >= STREAMING_UI_UPDATE_INTERVAL_NANOS
-                                    )
-                                if (shouldUpdateUi) {
-                                    val nodeIndex = if (streamingMessageId == streamedMessage.id) {
-                                        streamingNodeIndex
-                                    } else {
-                                        currentConversation.visibleMessageNodeIndexAt(projectedMessages.lastIndex)
-                                    }
-                                    val updatedConversation = currentConversation.updateMessageAtNodeIndex(
-                                        nodeIndex = nodeIndex,
-                                        message = streamedMessage,
-                                    )
-                                    streamingMessageId = streamedMessage.id
-                                    streamingNodeIndex = nodeIndex ?: updatedConversation.messageNodes.lastIndex
-                                    lastStreamingUiUpdateNanos = now
-                                    updateConversation(
-                                        conversationId,
-                                        updatedConversation,
-                                        checkFiles = false,
-                                    )
-                                    timing?.firstText("text_state_published", streamedMessage)
+                                session.updateGenerationState(generationJob) { currentConversation ->
+                                    val streamedMessage = projectedMessages.lastOrNull()
+                                    val now = System.nanoTime()
+                                    val shouldUpdateUi = streamedMessage != null && (
+                                        streamingMessageId != streamedMessage.id ||
+                                            now - lastStreamingUiUpdateNanos >= STREAMING_UI_UPDATE_INTERVAL_NANOS
+                                        )
+                                    if (shouldUpdateUi) {
+                                        val nodeIndex = if (streamingMessageId == streamedMessage.id) {
+                                            streamingNodeIndex
+                                        } else {
+                                            currentConversation.visibleMessageNodeIndexAt(projectedMessages.lastIndex)
+                                        }
+                                        val updatedConversation = currentConversation.updateMessageAtNodeIndex(
+                                            nodeIndex = nodeIndex,
+                                            message = streamedMessage,
+                                        )
+                                        streamingMessageId = streamedMessage.id
+                                        streamingNodeIndex = nodeIndex ?: updatedConversation.messageNodes.lastIndex
+                                        lastStreamingUiUpdateNanos = now
+                                        timing?.firstText("text_state_published", streamedMessage)
+                                        updatedConversation
+                                    } else currentConversation
                                 }
                             }
                             enqueueVoiceCallTagging(chunkMessages, includeUnfinishedTail = false)
@@ -1268,19 +1276,17 @@ class ChatService(
                 tagJobs.forEach { it.join() }
                 if (incrementalVoiceCallTagging) {
                     synchronized(tagProjectionLock) {
-                        val currentConversation = getConversationFlow(conversationId).value
-                        val projectedMessages = currentConversation.currentMessages.map { message ->
-                            tagAssignmentsByMessageId[message.id]?.let { assignments ->
-                                message.withIncrementalVoiceCallAudioTagAssignments(
-                                    assignments = assignments,
-                                    format = voiceCallAudioTagFormat!!,
-                                )
-                            } ?: message
+                        session.updateGenerationState(generationJob) { currentConversation ->
+                            val projectedMessages = currentConversation.currentMessages.map { message ->
+                                tagAssignmentsByMessageId[message.id]?.let { assignments ->
+                                    message.withIncrementalVoiceCallAudioTagAssignments(
+                                        assignments = assignments,
+                                        format = voiceCallAudioTagFormat!!,
+                                    )
+                                } ?: message
+                            }
+                            currentConversation.updateCurrentMessages(projectedMessages)
                         }
-                        updateConversation(
-                            conversationId,
-                            currentConversation.updateCurrentMessages(projectedMessages),
-                        )
                     }
                 }
             }
@@ -1296,9 +1302,7 @@ class ChatService(
                     primaryMessages = primaryMessages,
                     format = voiceCallAudioTagFormat,
                 )
-                val taggedConversation = getConversationFlow(conversationId).value
-                    .updateCurrentMessages(taggedMessages)
-                updateConversation(conversationId, taggedConversation)
+                session.updateGenerationState(generationJob) { it.updateCurrentMessages(taggedMessages) }
             }
 
             if (requestMode == ChatRequestMode.Normal) {
@@ -1319,11 +1323,27 @@ class ChatService(
                     details = materializationInspection.toDiagnosticDetails(),
                 )
                 try {
+                    val materializationBase = getConversationFlow(conversationId).value
                     chatVoiceReplyMaterializer.materialize(
-                        conversation = getConversationFlow(conversationId).value,
+                        conversation = materializationBase,
                         generationBaseMessageIds = generationBaseMessageIds,
                         settings = settings,
-                        onUpdate = { updateConversation(conversationId, it) },
+                        onUpdate = { result ->
+                            if (generationJob.isActive && session.getJob() === generationJob) {
+                                val originalMessages = materializationBase.messageNodes.flatMap { it.messages }.associateBy { it.id }
+                                val changedMessages = result.messageNodes.flatMap { it.messages }
+                                    .filter { originalMessages[it.id] != it }.associateBy { it.id }
+                                session.updateGenerationState(generationJob) { latest ->
+                                    latest.copy(messageNodes = latest.messageNodes.map { node ->
+                                        node.copy(messages = node.messages.map { message ->
+                                            changedMessages[message.id]?.let { changed ->
+                                                message.copy(parts = changed.parts, annotations = changed.annotations)
+                                            } ?: message
+                                        })
+                                    })
+                                }
+                            }
+                        },
                     )
                 } catch (error: Throwable) {
                     if (error !is CancellationException) {
@@ -1347,6 +1367,10 @@ class ChatService(
             // 取消 Live Update 通知
             cancelLiveUpdateNotification(conversationId)
 
+            withContext(NonCancellable) {
+                conversationPersistence.persistGeneration(conversationId, generationJob)
+            }
+
             if (it is CancellationException) {
                 return@onFailure
             }
@@ -1362,7 +1386,7 @@ class ChatService(
             speechReply?.finish()
             timing?.mark("speech_input_finished")
             timing?.mark("conversation_save_started")
-            saveConversation(conversationId, finalConversation)
+            persistConversation(conversationId)
             timing?.mark("conversation_save_finished")
 
             finalConversation.currentMessages
@@ -1761,51 +1785,52 @@ class ChatService(
     }
 
     private fun checkInvalidMessages(conversationId: Uuid) {
-        val conversation = getConversationFlow(conversationId).value
-        var messagesNodes = conversation.messageNodes
+        updateConversationState(conversationId) { conversation ->
+            var messagesNodes = conversation.messageNodes
 
-        // 移除无效 tool (未执行的 Tool)
-        messagesNodes = messagesNodes.mapIndexed { _, node ->
-            // Check for Tool type with non-executed tools
-            val hasPendingTools = node.currentMessage.getTools().any { !it.isExecuted }
+            // 移除无效 tool (未执行的 Tool)
+            messagesNodes = messagesNodes.mapIndexed { _, node ->
+                // Check for Tool type with non-executed tools
+                val hasPendingTools = node.currentMessage.getTools().any { !it.isExecuted }
 
-            if (hasPendingTools) {
-                // Keep messages that are ready to resume, such as approved/denied/answered tools.
-                val hasResumableTool = node.currentMessage.getTools().any {
-                    !it.isExecuted && it.approvalState.canResumeToolExecution()
+                if (hasPendingTools) {
+                    // Keep messages that are ready to resume, such as approved/denied/answered tools.
+                    val hasResumableTool = node.currentMessage.getTools().any {
+                        !it.isExecuted && it.approvalState.canResumeToolExecution()
+                    }
+                    if (hasResumableTool) {
+                        return@mapIndexed node
+                    }
+
+                    // If all tools are executed, it's valid
+                    val allToolsExecuted = node.currentMessage.getTools().all { it.isExecuted }
+                    if (allToolsExecuted && node.currentMessage.getTools().isNotEmpty()) {
+                        return@mapIndexed node
+                    }
+
+                    // Remove messages that still have unresolved tool approvals.
+                    return@mapIndexed node.copy(
+                        messages = node.messages.filter { it.id != node.currentMessage.id },
+                        selectIndex = node.selectIndex - 1
+                    )
                 }
-                if (hasResumableTool) {
-                    return@mapIndexed node
-                }
-
-                // If all tools are executed, it's valid
-                val allToolsExecuted = node.currentMessage.getTools().all { it.isExecuted }
-                if (allToolsExecuted && node.currentMessage.getTools().isNotEmpty()) {
-                    return@mapIndexed node
-                }
-
-                // Remove messages that still have unresolved tool approvals.
-                return@mapIndexed node.copy(
-                    messages = node.messages.filter { it.id != node.currentMessage.id },
-                    selectIndex = node.selectIndex - 1
-                )
-            }
-            node
-        }
-
-        // 更新index
-        messagesNodes = messagesNodes.map { node ->
-            if (node.messages.isNotEmpty() && node.selectIndex !in node.messages.indices) {
-                node.copy(selectIndex = 0)
-            } else {
                 node
             }
+
+            // 更新index
+            messagesNodes = messagesNodes.map { node ->
+                if (node.messages.isNotEmpty() && node.selectIndex !in node.messages.indices) {
+                    node.copy(selectIndex = 0)
+                } else {
+                    node
+                }
+            }
+
+            // 移除无效消息
+            messagesNodes = messagesNodes.filter { it.messages.isNotEmpty() }
+
+            conversation.copy(messageNodes = messagesNodes)
         }
-
-        // 移除无效消息
-        messagesNodes = messagesNodes.filter { it.messages.isNotEmpty() }
-
-        updateConversation(conversationId, conversation.copy(messageNodes = messagesNodes))
     }
 
     private fun cancelToolByUser(tool: UIMessagePart.Tool): UIMessagePart.Tool {
@@ -1856,10 +1881,9 @@ class ChatService(
             )
 
             // 生成完，conversation可能不是最新了，因此需要重新获取
-            conversationRepo.getConversationById(conversation.id)?.let {
-                saveConversation(
-                    conversationId,
-                    it.copy(title = result.choices[0].message?.toText()?.trim() ?: "")
+            updateStoredConversation(conversationId) { current ->
+                if (!force && current.title.isNotBlank()) current else current.copy(
+                    title = result.choices[0].message?.toText()?.trim() ?: "",
                 )
             }
         }.onFailure {
@@ -1882,10 +1906,7 @@ class ChatService(
             val provider = model.findProvider(settings.providers) ?: return
 
             sessions[conversationId]?.let { session ->
-                updateConversation(
-                    conversationId,
-                    session.state.value.copy(chatSuggestions = emptyList())
-                )
+                updateConversationState(conversationId) { it.copy(chatSuggestions = emptyList()) }
             }
 
             val providerHandler = providerManager.getProviderByType(provider)
@@ -1908,17 +1929,9 @@ class ChatService(
                 result.choices[0].message?.toText()?.split("\n")?.map { it.trim() }
                     ?.filter { it.isNotBlank() } ?: emptyList()
 
-            val latestConversation = conversationRepo.getConversationById(conversationId)
-                ?: sessions[conversationId]?.state?.value
-                ?: conversation
-            saveConversation(
-                conversationId,
-                latestConversation.copy(
-                    chatSuggestions = suggestions.take(
-                        10
-                    )
-                )
-            )
+            updateStoredConversation(conversationId) { current ->
+                current.copy(chatSuggestions = suggestions.take(10))
+            }
         }.onFailure {
             it.printStackTrace()
         }
@@ -2086,35 +2099,20 @@ class ChatService(
         val voiceCallRecordNodeIdsToCompress =
             compressionBase.voiceCallRecordNodeIdsFullyCoveredBy(coveredNodeIds)
         val nodeIdsToCompress = selectedNodeIds + voiceCallRecordNodeIdsToCompress
-        val latestConversation = getConversationFlow(conversationId).value
-        val newConversation = latestConversation
-            .withCompressionResultIfBaseUnchanged(
+        var accepted = false
+        mutateConversation(conversationId) { latest ->
+            latest.withCompressionResultIfBaseUnchanged(
                 expectedSummary = expectedSummary,
                 expectedCompressedNodeIds = expectedCompressedNodeIds,
                 newSummary = summaryForPrompt,
                 nodeIdsToCompress = nodeIdsToCompress,
-                newAutoCompressConfig = autoCompressConfig?.copy(
-                    keepRecentMessages = effectiveKeepRecentMessages
-                ),
-            )
-            ?.copy(chatSuggestions = emptyList())
-        if (newConversation == null) {
-            compressionDiagnostics.record(
-                conversationId = conversationId,
-                stage = "compress.rejected",
-                conversation = latestConversation,
-                details = "expectedSummaryChars=${expectedSummary?.length ?: 0} expectedCompressed=${expectedCompressedNodeIds.size}",
-            )
+                newAutoCompressConfig = autoCompressConfig?.copy(keepRecentMessages = effectiveKeepRecentMessages),
+            )?.copy(chatSuggestions = emptyList())?.also { accepted = true } ?: latest
+        }
+        if (!accepted) {
+            compressionDiagnostics.record(conversationId, "compress.rejected", getConversationFlow(conversationId).value)
             return@runCatching
         }
-
-        compressionDiagnostics.record(
-            conversationId = conversationId,
-            stage = "compress.accepted",
-            conversation = newConversation,
-            details = "newlyCompressed=${nodeIdsToCompress.size}",
-        )
-        saveConversation(conversationId, newConversation)
         compressionDiagnostics.record(
             conversationId = conversationId,
             stage = "compress.saved",
@@ -2295,74 +2293,36 @@ class ChatService(
 
     // ---- 对话状态更新 ----
 
-    private fun updateConversation(
-        conversationId: Uuid,
-        conversation: Conversation,
-        checkFiles: Boolean = true,
-    ) {
-        if (conversation.id != conversationId) return
-        val normalizedConversation = conversation.normalizeCompressionState()
-        if (normalizedConversation.compressedMessageNodeIds != conversation.compressedMessageNodeIds) {
-            compressionDiagnostics.record(
-                conversationId = conversationId,
-                stage = "normalize.changed",
-                conversation = normalizedConversation,
-                details = "beforeStored=" + conversation.compressedMessageNodeIds.size +
-                    " beforeActive=" + conversation.activeCompressedMessageNodeIds.size,
-            )
-        }
-        val session = getOrCreateSession(conversationId)
-        if (checkFiles) {
-            checkFilesDelete(normalizedConversation, session.state.value)
-        }
-        session.replaceState(normalizedConversation)
-    }
-
     fun updateConversationState(conversationId: Uuid, update: (Conversation) -> Conversation) {
-        val current = getConversationFlow(conversationId).value
-        updateConversation(conversationId, update(current))
-    }
-
-    private fun checkFilesDelete(newConversation: Conversation, oldConversation: Conversation) {
-        if (newConversation.messageNodes === oldConversation.messageNodes) return
-        val newFiles = newConversation.files
-        val oldFiles = oldConversation.files
-        val deletedFiles = oldFiles.filter { file ->
-            newFiles.none { it == file }
-        }
-        if (deletedFiles.isNotEmpty()) {
-            filesManager.deleteChatFiles(deletedFiles)
-            Log.w(TAG, "checkFilesDelete: $deletedFiles")
+        sessions[conversationId]?.updateInitializedState { current ->
+            update(current).normalizeCompressionState()
         }
     }
 
-    suspend fun saveConversation(
+    suspend fun mutateConversation(conversationId: Uuid, update: (Conversation) -> Conversation): Conversation =
+        conversationPersistence.mutateConversation(conversationId, update)
+
+    suspend fun persistConversation(conversationId: Uuid) = conversationPersistence.persistConversation(conversationId)
+
+    private suspend fun updateStoredConversation(conversationId: Uuid, update: (Conversation) -> Conversation) =
+        conversationPersistence.updateStoredConversation(conversationId, update)
+
+    suspend fun appendExternalMessage(
         conversationId: Uuid,
-        conversation: Conversation,
-        timing: GenerationTimingTrace? = null,
-    ) {
-        timing?.mark("save_exists_started")
-        val exists = conversationRepo.existsConversationById(conversation.id)
-        timing?.mark("save_exists_finished")
-        if (!exists && conversation.title.isBlank() && conversation.messageNodes.isEmpty()) {
-            return // 新会话且为空时不保存
-        }
+        assistant: Assistant,
+        message: UIMessage,
+        createIfMissing: Boolean = false,
+        canAppend: suspend () -> Boolean,
+    ): Boolean = conversationPersistence.appendExternalMessage(conversationId, assistant, message, createIfMissing, canAppend)
 
-        timing?.mark("save_normalize_started")
-        val updatedConversation = conversation.normalizeCompressionState()
-        timing?.mark("save_normalize_finished")
-        timing?.mark("save_state_publish_started")
-        updateConversation(conversationId, updatedConversation)
-        timing?.mark("save_state_publish_finished")
-
-        timing?.mark("save_repository_write_started")
-        if (!exists) {
-            conversationRepo.insertConversation(updatedConversation)
-        } else {
-            conversationRepo.updateConversation(updatedConversation)
-        }
-        timing?.mark("save_repository_write_finished")
+    suspend fun deleteConversation(conversation: Conversation, deleteFiles: Boolean = true): Conversation {
+        stopGeneration(conversation.id)
+        return conversationPersistence.deleteConversation(conversation, deleteFiles)
     }
+
+    suspend fun restoreConversation(conversation: Conversation) = conversationPersistence.restoreConversation(conversation)
+
+    suspend fun finishConversationDeletion(conversation: Conversation) = conversationPersistence.finishConversationDeletion(conversation)
 
     // ---- 翻译消息 ----
 
@@ -2371,7 +2331,7 @@ class ChatService(
         message: UIMessage,
         targetLanguage: Locale
     ) {
-        appScope.launch(Dispatchers.IO) {
+        launchWithConversationReference(conversationId) {
             try {
                 val settings = settingsStore.settingsFlow.first()
                 val loadingText = context.getString(R.string.translating)
@@ -2386,7 +2346,7 @@ class ChatService(
                         it.isNotBlank() && it != loadingText
                     } == true
                 ) {
-                    return@launch
+                    return@launchWithConversationReference
                 }
 
                 val sourceMessage = currentMessage ?: message
@@ -2394,7 +2354,7 @@ class ChatService(
                     .joinToString("\n\n") { it.text }
                     .trim()
 
-                if (messageText.isBlank()) return@launch
+                if (messageText.isBlank()) return@launchWithConversationReference
 
                 // Set loading state for translation
                 updateTranslationField(conversationId, message.id, loadingText)
@@ -2409,7 +2369,7 @@ class ChatService(
                 }.collect { /* Final translation already handled in onStreamUpdate */ }
 
                 // Save the conversation after translation is complete
-                saveConversation(conversationId, getConversationFlow(conversationId).value)
+                persistConversation(conversationId)
             } catch (e: Exception) {
                 // Clear translation field on error
                 clearTranslationField(conversationId, message.id)
@@ -2425,7 +2385,7 @@ class ChatService(
         sourceText: String,
         targetLanguage: Locale,
     ) {
-        appScope.launch(Dispatchers.IO) {
+        launchWithConversationReference(conversationId) {
             try {
                 val settings = settingsStore.settingsFlow.first()
                 val loadingText = context.getString(R.string.translating)
@@ -2435,9 +2395,9 @@ class ChatService(
                     .firstOrNull { it.id == message.id }
                 val cachedTranslation = currentMessage?.voiceCallTranslations?.get(bubbleKey)
                 if (cachedTranslation?.isNotBlank() == true) {
-                    return@launch
+                    return@launchWithConversationReference
                 }
-                if (sourceText.isBlank()) return@launch
+                if (sourceText.isBlank()) return@launchWithConversationReference
 
                 updateVoiceCallTranslationField(conversationId, message.id, bubbleKey, loadingText)
                 var translationEmitted = false
@@ -2463,7 +2423,7 @@ class ChatService(
                         translationText = null,
                     )
                 }
-                saveConversation(conversationId, getConversationFlow(conversationId).value)
+                persistConversation(conversationId)
             } catch (e: Exception) {
                 updateVoiceCallTranslationField(
                     conversationId = conversationId,
@@ -2483,7 +2443,7 @@ class ChatService(
         sourceText: String,
         targetLanguage: Locale,
     ) {
-        appScope.launch(Dispatchers.IO) {
+        launchWithConversationReference(conversationId) {
             try {
                 val settings = settingsStore.settingsFlow.first()
                 val loadingText = context.getString(R.string.translating)
@@ -2497,9 +2457,9 @@ class ChatService(
                     ?.getOrNull(segmentIndex)
                     ?.translation
                 if (cachedTranslation?.isNotBlank() == true && cachedTranslation != loadingText) {
-                    return@launch
+                    return@launchWithConversationReference
                 }
-                if (sourceText.isBlank()) return@launch
+                if (sourceText.isBlank()) return@launchWithConversationReference
 
                 updateChatVoiceSegmentTranslation(
                     conversationId = conversationId,
@@ -2519,7 +2479,7 @@ class ChatService(
                         translationText = translatedText,
                     )
                 }.collect { }
-                saveConversation(conversationId, getConversationFlow(conversationId).value)
+                persistConversation(conversationId)
             } catch (e: Exception) {
                 updateChatVoiceSegmentTranslation(
                     conversationId = conversationId,
@@ -2535,25 +2495,26 @@ class ChatService(
     private fun updateTranslationField(
         conversationId: Uuid,
         messageId: Uuid,
-        translationText: String
+        translationText: String?
     ) {
-        val currentConversation = getConversationFlow(conversationId).value
-        val updatedNodes = currentConversation.messageNodes.map { node ->
-            if (node.messages.any { it.id == messageId }) {
-                val updatedMessages = node.messages.map { msg ->
-                    if (msg.id == messageId) {
-                        msg.copy(translation = translationText)
-                    } else {
-                        msg
+        updateConversationState(conversationId) { currentConversation ->
+            val updatedNodes = currentConversation.messageNodes.map { node ->
+                if (node.messages.any { it.id == messageId }) {
+                    val updatedMessages = node.messages.map { msg ->
+                        if (msg.id == messageId) {
+                            msg.copy(translation = translationText)
+                        } else {
+                            msg
+                        }
                     }
+                    node.copy(messages = updatedMessages)
+                } else {
+                    node
                 }
-                node.copy(messages = updatedMessages)
-            } else {
-                node
             }
-        }
 
-        updateConversation(conversationId, currentConversation.copy(messageNodes = updatedNodes))
+            currentConversation.copy(messageNodes = updatedNodes)
+        }
     }
 
     private fun updateVoiceCallTranslationField(
@@ -2564,33 +2525,34 @@ class ChatService(
         clearLegacyTranslation: Boolean = false,
         clearAllTranslations: Boolean = false,
     ) {
-        val currentConversation = getConversationFlow(conversationId).value
-        val updatedNodes = currentConversation.messageNodes.map { node ->
-            if (node.messages.any { it.id == messageId }) {
-                node.copy(
-                    messages = node.messages.map { msg ->
-                        if (msg.id == messageId) {
-                            val translations = msg.voiceCallTranslations.toMutableMap().apply {
-                                if (translationText.isNullOrBlank()) {
-                                    if (clearAllTranslations) clear() else remove(bubbleKey)
-                                } else {
-                                    put(bubbleKey, translationText)
+        updateConversationState(conversationId) { currentConversation ->
+            val updatedNodes = currentConversation.messageNodes.map { node ->
+                if (node.messages.any { it.id == messageId }) {
+                    node.copy(
+                        messages = node.messages.map { msg ->
+                            if (msg.id == messageId) {
+                                val translations = msg.voiceCallTranslations.toMutableMap().apply {
+                                    if (translationText.isNullOrBlank()) {
+                                        if (clearAllTranslations) clear() else remove(bubbleKey)
+                                    } else {
+                                        put(bubbleKey, translationText)
+                                    }
                                 }
+                                msg.copy(
+                                    translation = if (clearLegacyTranslation) null else msg.translation,
+                                    voiceCallTranslations = translations,
+                                )
+                            } else {
+                                msg
                             }
-                            msg.copy(
-                                translation = if (clearLegacyTranslation) null else msg.translation,
-                                voiceCallTranslations = translations,
-                            )
-                        } else {
-                            msg
                         }
-                    }
-                )
-            } else {
-                node
+                    )
+                } else {
+                    node
+                }
             }
+            currentConversation.copy(messageNodes = updatedNodes)
         }
-        updateConversation(conversationId, currentConversation.copy(messageNodes = updatedNodes))
     }
 
     private fun updateChatVoiceSegmentTranslation(
@@ -2599,25 +2561,26 @@ class ChatService(
         segmentIndex: Int,
         translationText: String?,
     ) {
-        val currentConversation = getConversationFlow(conversationId).value
-        val updatedNodes = currentConversation.messageNodes.map { node ->
-            if (node.messages.none { it.id == messageId }) {
-                node
-            } else {
-                node.copy(
-                    messages = node.messages.map { message ->
-                        if (message.id == messageId) {
-                            message.updateChatVoiceReplySegment(segmentIndex) { segment ->
-                                segment.copy(translation = translationText?.takeIf { it.isNotBlank() })
+        updateConversationState(conversationId) { currentConversation ->
+            val updatedNodes = currentConversation.messageNodes.map { node ->
+                if (node.messages.none { it.id == messageId }) {
+                    node
+                } else {
+                    node.copy(
+                        messages = node.messages.map { message ->
+                            if (message.id == messageId) {
+                                message.updateChatVoiceReplySegment(segmentIndex) { segment ->
+                                    segment.copy(translation = translationText?.takeIf { it.isNotBlank() })
+                                }
+                            } else {
+                                message
                             }
-                        } else {
-                            message
                         }
-                    }
-                )
+                    )
+                }
             }
+            currentConversation.copy(messageNodes = updatedNodes)
         }
-        updateConversation(conversationId, currentConversation.copy(messageNodes = updatedNodes))
     }
 
     // ---- 消息操作 ----
@@ -2634,28 +2597,24 @@ class ChatService(
         val assistant = settings.getAssistantById(currentConversation.assistantId)
             ?: settings.getCurrentAssistant()
         val processedParts = preprocessUserInputParts(parts, assistant)
-        var edited = false
+        mutateConversation(conversationId) { latest ->
+            val updatedNodes = latest.messageNodes.map { node ->
+                if (!node.messages.any { it.id == messageId }) {
+                    return@map node
+                }
+                val original = node.messages.first { it.id == messageId }
+                val editedMessage = if (original.chatVoiceReply() != null) {
+                    original.withEditedChatVoiceReplyText(processedParts).copy(id = Uuid.random())
+                } else UIMessage(role = node.role, parts = processedParts)
 
-        val updatedNodes = currentConversation.messageNodes.map { node ->
-            if (!node.messages.any { it.id == messageId }) {
-                return@map node
+                node.copy(
+                    messages = node.messages + editedMessage,
+                    selectIndex = node.messages.size
+                )
             }
-            edited = true
 
-            val original = node.messages.first { it.id == messageId }
-            val editedMessage = if (original.chatVoiceReply() != null) {
-                original.withEditedChatVoiceReplyText(processedParts).copy(id = Uuid.random())
-            } else UIMessage(role = node.role, parts = processedParts)
-
-            node.copy(
-                messages = node.messages + editedMessage,
-                selectIndex = node.messages.size
-            )
+            latest.copy(messageNodes = updatedNodes)
         }
-
-        if (!edited) return
-
-        saveConversation(conversationId, currentConversation.copy(messageNodes = updatedNodes))
     }
 
     suspend fun forkConversationAtMessage(
@@ -2676,20 +2635,30 @@ class ChatService(
             details = "targetIndex=" + targetNodeIndex,
         )
 
-        val copiedNodePairs = currentConversation.messageNodes
+        val copiedFiles = mutableMapOf<String, String>()
+        fun copyForkFile(url: String): String {
+            if (!url.startsWith("file:")) return url
+            return copiedFiles.getOrPut(url) {
+                requireNotNull(filesManager.createChatFilesByContents(listOf(url.toUri())).singleOrNull()) {
+                    "Cannot copy attachment for the new conversation"
+                }.toString()
+            }
+        }
+        val copiedNodePairs = try {
+            currentConversation.messageNodes
             .subList(0, targetNodeIndex + 1)
             .map { sourceNode ->
                 sourceNode.id to sourceNode.copy(
                     id = Uuid.random(),
                     messages = sourceNode.messages.map { message ->
-                        message.copy(
-                            parts = message.parts.map { part ->
-                                part.copyWithForkedFileUrl()
-                            }
-                        )
+                        message.copyWithForkedFiles(::copyForkFile)
                     }
                 )
             }
+        } catch (error: Throwable) {
+            filesManager.deleteChatFiles(copiedFiles.values.map { it.toUri() })
+            throw error
+        }
         val copiedNodeIdsBySourceId = copiedNodePairs.associate { (sourceNodeId, copiedNode) ->
             sourceNodeId to copiedNode.id
         }
@@ -2712,7 +2681,7 @@ class ChatService(
             autoCompressConfig = currentConversation.autoCompressConfig,
         )
 
-        saveConversation(forkConversation.id, forkConversation)
+        mutateConversation(forkConversation.id) { forkConversation }
         compressionDiagnostics.record(
             conversationId = conversationId,
             stage = "fork.completed",
@@ -2735,67 +2704,66 @@ class ChatService(
         nodeId: Uuid,
         selectIndex: Int
     ) {
-        val currentConversation = getConversationFlow(conversationId).value
-        val targetNode = currentConversation.messageNodes.firstOrNull { it.id == nodeId }
-            ?: throw NoSuchElementException("Message node not found")
+        mutateConversation(conversationId) { currentConversation ->
+            val targetNode = currentConversation.messageNodes.firstOrNull { it.id == nodeId }
+                ?: throw NoSuchElementException("Message node not found")
 
-        if (selectIndex !in targetNode.messages.indices) {
-            throw IllegalArgumentException("Invalid selectIndex")
-        }
-
-        if (targetNode.selectIndex == selectIndex) {
-            return
-        }
-
-        val updatedNodes = currentConversation.messageNodes.map { node ->
-            if (node.id == nodeId) {
-                node.copy(selectIndex = selectIndex)
-            } else {
-                node
+            if (selectIndex !in targetNode.messages.indices) {
+                throw IllegalArgumentException("Invalid selectIndex")
             }
-        }
 
-        saveConversation(conversationId, currentConversation.copy(messageNodes = updatedNodes))
+            if (targetNode.selectIndex == selectIndex) {
+                return@mutateConversation currentConversation
+            }
+
+            val updatedNodes = currentConversation.messageNodes.map { node ->
+                if (node.id == nodeId) {
+                    node.copy(selectIndex = selectIndex)
+                } else {
+                    node
+                }
+            }
+
+            currentConversation.copy(messageNodes = updatedNodes)
+        }
     }
 
     suspend fun deleteVoiceCallRecord(
         conversationId: Uuid,
         callId: String,
     ) {
-        val conversation = getConversationFlow(conversationId).value
-        val recordMessages = conversation.messageNodes
-            .flatMap { it.messages }
-            .mapNotNull { message ->
-                message.voiceCallRecord()
-                    ?.takeIf { it.callId == callId }
-                    ?.let { record -> message to record }
-            }
-        if (recordMessages.isEmpty()) return
+        mutateConversation(conversationId) { conversation ->
+            val recordMessages = conversation.messageNodes
+                .flatMap { it.messages }
+                .mapNotNull { message ->
+                    message.voiceCallRecord()
+                        ?.takeIf { it.callId == callId }
+                        ?.let { record -> message to record }
+                }
+            if (recordMessages.isEmpty()) return@mutateConversation conversation
 
-        val linkedMessageIds = buildSet {
-            recordMessages.forEach { (message, record) ->
-                addAll(record.messageIds)
-                if (!record.standalone) add(message.id.toString())
+            val linkedMessageIds = buildSet {
+                recordMessages.forEach { (message, record) ->
+                    addAll(record.messageIds)
+                    if (!record.standalone) add(message.id.toString())
+                }
             }
+            val updatedNodes = conversation.messageNodes.mapNotNull { node ->
+                val remainingMessages = node.messages.filterNot { message ->
+                    message.id.toString() in linkedMessageIds ||
+                        message.voiceCallRecord()?.callId == callId
+                }
+                if (remainingMessages.isEmpty()) {
+                    null
+                } else {
+                    node.copy(
+                        messages = remainingMessages,
+                        selectIndex = node.selectIndex.coerceAtMost(remainingMessages.lastIndex),
+                    )
+                }
+            }
+            conversation.copy(messageNodes = updatedNodes)
         }
-        val updatedNodes = conversation.messageNodes.mapNotNull { node ->
-            val remainingMessages = node.messages.filterNot { message ->
-                message.id.toString() in linkedMessageIds ||
-                    message.voiceCallRecord()?.callId == callId
-            }
-            if (remainingMessages.isEmpty()) {
-                null
-            } else {
-                node.copy(
-                    messages = remainingMessages,
-                    selectIndex = node.selectIndex.coerceAtMost(remainingMessages.lastIndex),
-                )
-            }
-        }
-        saveConversation(
-            conversationId,
-            conversation.copy(messageNodes = updatedNodes),
-        )
     }
 
     suspend fun deleteMessage(
@@ -2803,17 +2771,11 @@ class ChatService(
         messageId: Uuid,
         failIfMissing: Boolean = true,
     ) {
-        val currentConversation = getConversationFlow(conversationId).value
-        val updatedConversation = currentConversation.deleteMessageFromNode(messageId)
-
-        if (updatedConversation == null) {
-            if (failIfMissing) {
+        mutateConversation(conversationId) { latest ->
+            latest.deleteMessageFromNode(messageId) ?: if (failIfMissing) {
                 throw NoSuchElementException("Message not found")
-            }
-            return
+            } else latest
         }
-
-        saveConversation(conversationId, updatedConversation)
     }
 
     suspend fun deleteMessage(
@@ -2823,41 +2785,10 @@ class ChatService(
         deleteMessage(conversationId, message.id, failIfMissing = false)
     }
 
-    private fun UIMessagePart.copyWithForkedFileUrl(): UIMessagePart {
-        fun copyLocalFileIfNeeded(url: String): String {
-            if (!url.startsWith("file:")) return url
-            val copied = filesManager.createChatFilesByContents(listOf(url.toUri())).firstOrNull()
-            return copied?.toString() ?: url
-        }
-
-        return when (this) {
-            is UIMessagePart.Image -> copy(url = copyLocalFileIfNeeded(url))
-            is UIMessagePart.Document -> copy(url = copyLocalFileIfNeeded(url))
-            is UIMessagePart.Video -> copy(url = copyLocalFileIfNeeded(url))
-            is UIMessagePart.Audio -> copy(url = copyLocalFileIfNeeded(url))
-            else -> this
-        }
-    }
-
     fun clearTranslationField(conversationId: Uuid, messageId: Uuid) {
-        appScope.launch(Dispatchers.IO) {
-            val currentConversation = getConversationFlow(conversationId).value
-            val updatedNodes = currentConversation.messageNodes.map { node ->
-                if (node.messages.any { it.id == messageId }) {
-                    val updatedMessages = node.messages.map { msg ->
-                        if (msg.id == messageId) {
-                            msg.copy(translation = null)
-                        } else {
-                            msg
-                        }
-                    }
-                    node.copy(messages = updatedMessages)
-                } else {
-                    node
-                }
-            }
-
-            saveConversation(conversationId, currentConversation.copy(messageNodes = updatedNodes))
+        launchWithConversationReference(conversationId) {
+            updateTranslationField(conversationId, messageId, null)
+            persistConversation(conversationId)
         }
     }
 
@@ -2867,7 +2798,7 @@ class ChatService(
         bubbleKey: String,
         clearLegacyTranslation: Boolean,
     ) {
-        appScope.launch(Dispatchers.IO) {
+        launchWithConversationReference(conversationId) {
             updateVoiceCallTranslationField(
                 conversationId = conversationId,
                 messageId = messageId,
@@ -2876,7 +2807,7 @@ class ChatService(
                 clearLegacyTranslation = clearLegacyTranslation,
                 clearAllTranslations = true,
             )
-            saveConversation(conversationId, getConversationFlow(conversationId).value)
+            persistConversation(conversationId)
         }
     }
 
@@ -2885,14 +2816,14 @@ class ChatService(
         messageId: Uuid,
         segmentIndex: Int,
     ) {
-        appScope.launch(Dispatchers.IO) {
+        launchWithConversationReference(conversationId) {
             updateChatVoiceSegmentTranslation(
                 conversationId = conversationId,
                 messageId = messageId,
                 segmentIndex = segmentIndex,
                 translationText = null,
             )
-            saveConversation(conversationId, getConversationFlow(conversationId).value)
+            persistConversation(conversationId)
         }
     }
 
@@ -2917,19 +2848,15 @@ class ChatService(
         val lastNode = currentConversation.messageNodes.lastOrNull() ?: return
         val lastMessage = lastNode.currentMessage
         if (lastMessage.id != stoppedMessageId) return
-        val updatedMessage = lastMessage.finishPendingTools(::cancelToolByUser)
-        if (updatedMessage == lastMessage) {
-            return
+        mutateConversation(conversationId) { latest ->
+            if (sessions[conversationId]?.getJob()?.let { it !== job } == true) return@mutateConversation latest
+            val latestNode = latest.messageNodes.lastOrNull() ?: return@mutateConversation latest
+            if (latestNode.currentMessage.id != stoppedMessageId) return@mutateConversation latest
+            val updated = latestNode.currentMessage.finishPendingTools(::cancelToolByUser)
+            latest.copy(messageNodes = latest.messageNodes.dropLast(1) + latestNode.copy(
+                messages = latestNode.messages.map { if (it.id == updated.id) updated else it },
+            ))
         }
-
-        val updatedConversation = currentConversation.copy(
-            messageNodes = currentConversation.messageNodes.dropLast(1) + lastNode.copy(
-                messages = lastNode.messages.map { message ->
-                    if (message.id == lastMessage.id) updatedMessage else message
-                }
-            )
-        )
-        saveConversation(conversationId, updatedConversation)
     }
 }
 

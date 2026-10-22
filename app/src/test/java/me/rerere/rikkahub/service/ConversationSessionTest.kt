@@ -12,13 +12,97 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.Dispatchers
 import me.rerere.rikkahub.data.model.Conversation
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import kotlin.uuid.Uuid
 
 class ConversationSessionTest {
+    @Test fun lateCallbacksCannotInitializeOrReviveASessionAndFailedLoadsCanRetry() = runBlocking {
+        val session = session(conversation("placeholder"))
+        val loaded = conversation("stored")
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking { session.initializeState { error("read failure") } }
+        }
+        session.updateInitializedState { it.copy(title = "late callback") }
+        assertEquals("placeholder", session.state.value.title)
+        assertEquals(loaded, session.initializeState { loaded })
+        session.markDeleted()
+        session.updateInitializedState { it.copy(title = "deleted callback") }
+        assertEquals(loaded, session.state.value)
+        session.restoreState(loaded)
+        session.updateInitializedState { it.copy(title = "restored") }
+        assertEquals("restored", session.state.value.title)
+    }
+
+    @Test fun concurrentFieldMutationsPreserveBothWriters() = runBlocking {
+        val session = session(conversation("0"))
+        val title = async(Dispatchers.Default) {
+            repeat(100) { session.updateState { it.copy(title = (it.title.toInt() + 1).toString()) } }
+        }
+        val suggestions = async(Dispatchers.Default) {
+            repeat(100) { index -> session.updateState { it.copy(chatSuggestions = it.chatSuggestions + "$index") } }
+        }
+        title.await()
+        suggestions.await()
+        assertEquals("100", session.state.value.title)
+        assertEquals(100, session.state.value.chatSuggestions.size)
+    }
+
+    @Test fun queuedPersistenceReadsLatestAndAnOlderCommitDoesNotPublishBackwards() = runBlocking {
+        val session = session(conversation("original"))
+        val writing = CompletableDeferred<Unit>()
+        val finishWrite = CompletableDeferred<Unit>()
+        val snapshots = mutableListOf<Conversation>()
+        val first = async {
+            session.withPersistence {
+                val snapshot = session.updateState { it.copy(title = "title") }
+                writing.complete(Unit)
+                finishWrite.await()
+                snapshots += snapshot
+            }
+        }
+        writing.await()
+        session.updateState { it.copy(chatSuggestions = listOf("new stream state")) }
+        val second = async {
+            session.withPersistence { snapshots += session.state.value }
+        }
+        yield()
+        finishWrite.complete(Unit)
+        first.await()
+        second.await()
+        assertEquals(listOf("new stream state"), snapshots.last().chatSuggestions)
+        assertEquals("title", session.state.value.title)
+        assertEquals(snapshots.last(), session.state.value)
+    }
+
+    @Test fun deletionRejectsLateUpdates() {
+        val session = session(conversation("kept"))
+        session.markDeleted()
+        assertThrows(IllegalStateException::class.java) { session.updateState { it.copy(title = "late") } }
+        assertEquals("kept", session.state.value.title)
+    }
+
+    @Test fun aReplacedOrCancelledGenerationCannotPublishLateFrames() = runBlocking {
+        val session = session(conversation("kept"))
+        val old = launch(start = CoroutineStart.LAZY) { awaitCancellation() }
+        session.setJob(old)
+        yield()
+        val replacement = launch(start = CoroutineStart.LAZY) { awaitCancellation() }
+        session.setJob(replacement)
+        session.updateGenerationState(old, allowCancelled = true) { it.copy(title = "old frame") }
+        assertEquals("kept", session.state.value.title)
+        replacement.cancel()
+        session.updateGenerationState(replacement) { it.copy(title = "cancelled frame") }
+        assertEquals("kept", session.state.value.title)
+        replacement.join()
+        old.join()
+        session.cleanup()
+    }
+
     @Test fun replacementIsInstalledBeforeStartingAndOldCompletionCannotClearIt() = runBlocking {
         val session = session(conversation("call"))
         val releaseOld = CompletableDeferred<Unit>()

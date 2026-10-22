@@ -21,7 +21,6 @@ import me.rerere.rikkahub.data.repository.AnonymousQuestion
 import me.rerere.rikkahub.data.repository.AnonymousQuestionAuthor
 import me.rerere.rikkahub.data.repository.AnonymousQuestionEntry
 import me.rerere.rikkahub.data.repository.AnonymousQuestionReply
-import me.rerere.rikkahub.data.repository.AnonymousQuestionReplyStatus
 import me.rerere.rikkahub.data.repository.AnonymousQuestionRepository
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
@@ -100,8 +99,7 @@ class AnonymousQuestionBoxVM(
         if (!processingIds.add(key)) return
         try {
             val answer = generateAnonymousAnswer(question.content, assistant, conversation, conversationSystemPrompt) ?: return
-            repository.addAssistantAnswer(question.id, answer)
-            repository.updateQuestion(question.copy(replyStatus = AnonymousQuestionReplyStatus.DONE))
+            repository.completeQuestionAnswer(question.id, answer)
         } finally {
             processingIds.remove(key)
         }
@@ -118,8 +116,7 @@ class AnonymousQuestionBoxVM(
         try {
             val question = repository.getQuestion(reply.questionId) ?: return
             val comment = generateAnonymousComment(question.content, reply.content, assistant, conversation, conversationSystemPrompt) ?: return
-            repository.addAssistantComment(question.id, comment)
-            repository.updateReply(reply.copy(replyStatus = AnonymousQuestionReplyStatus.DONE))
+            repository.completeAnswerComment(reply, comment)
         } finally {
             processingIds.remove(key)
         }

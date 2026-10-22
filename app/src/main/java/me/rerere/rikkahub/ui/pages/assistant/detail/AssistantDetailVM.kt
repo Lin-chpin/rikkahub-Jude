@@ -11,10 +11,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.data.datastore.withAssistantUpdate
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.files.SkillManager
 import me.rerere.rikkahub.data.files.SkillMetadata
@@ -96,11 +98,8 @@ class AssistantDetailVM(
                     assistantTags = tags
                 )
             )
-            update(
-                assistant.value.copy(
-                    tags = tagIds.toList()
-                )
-            )
+            val baseline = assistant.value
+            update(baseline.copy(tags = tagIds.toList()), baseline)
             Log.d(TAG, "updateTags: ${tagIds.joinToString(",")}")
             cleanupUnusedTags()
         }
@@ -146,21 +145,26 @@ class AssistantDetailVM(
         }
     }
 
-    fun update(assistant: Assistant) {
+    fun update(assistant: Assistant, baseline: Assistant) {
         viewModelScope.launch {
-            val settings = settings.value
-            settingsStore.update(
-                settings = settings.copy(
-                    assistants = settings.assistants.map {
-                        if (it.id == assistant.id) {
-                            checkAvatarDelete(old = it, new = assistant) // 删除旧头像
-                            checkBackgroundDelete(old = it, new = assistant) // 删除旧背景
-                            assistant
-                        } else {
-                            it
-                        }
-                    })
-            )
+            var previous: Assistant? = null
+            settingsStore.update { latest ->
+                previous = latest.assistants.firstOrNull { it.id == assistant.id }
+                latest.withAssistantUpdate(assistant, baseline)
+            }
+            val committed = settingsStore.settingsFlowRaw.first()
+            val referenced = buildSet {
+                (committed.displaySetting.userAvatar as? Avatar.Image)?.let { add(it.url) }
+                committed.assistants.forEach { item ->
+                    (item.avatar as? Avatar.Image)?.let { add(it.url) }
+                    item.background?.let(::add)
+                    item.voiceCallBackground?.let(::add)
+                }
+            }
+            previous?.let { old ->
+                val files = setOfNotNull((old.avatar as? Avatar.Image)?.url, old.background, old.voiceCallBackground)
+                filesManager.deleteChatFiles(files.filterNot { it in referenced }.map { it.toUri() })
+            }
         }
     }
 
@@ -189,26 +193,4 @@ class AssistantDetailVM(
         }
     }
 
-    fun checkAvatarDelete(old: Assistant, new: Assistant) {
-        if (old.avatar is Avatar.Image && old.avatar != new.avatar) {
-            filesManager.deleteChatFiles(listOf(old.avatar.url.toUri()))
-        }
-    }
-
-    fun checkBackgroundDelete(old: Assistant, new: Assistant) {
-        val oldBackgrounds = setOfNotNull(old.background, old.voiceCallBackground)
-        val newBackgrounds = setOfNotNull(new.background, new.voiceCallBackground)
-        oldBackgrounds
-            .filterNot { it in newBackgrounds }
-            .forEach { oldBackground ->
-                try {
-                    val oldUri = oldBackground.toUri()
-                    if (oldUri.scheme == "content" || oldUri.scheme == "file") {
-                        filesManager.deleteChatFiles(listOf(oldUri))
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to delete background file: $oldBackground", e)
-                }
-            }
-    }
 }
