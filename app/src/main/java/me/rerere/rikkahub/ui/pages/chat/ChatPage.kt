@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListState
@@ -40,6 +41,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.adaptive.currentWindowDpSize
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import me.rerere.rikkahub.ui.theme.LocalLiquidGlass
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -80,6 +82,7 @@ import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.datastore.getAssistantById
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.datastore.getCurrentChatModel
+import me.rerere.rikkahub.data.datastore.withDisplayedAssistant
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.momentPersonaName
@@ -116,23 +119,30 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
     val navController = LocalNavController.current
     val scope = rememberCoroutineScope()
 
-    val setting by vm.settings.collectAsStateWithLifecycle()
+    val storedSetting by vm.settings.collectAsStateWithLifecycle()
     val conversation by vm.conversation.collectAsStateWithLifecycle()
+    val conversationAssistantId = vm.conversationAssistantId
+    val conversationReady = vm.conversationInitialization is UiState.Success
+    val displayedAssistantId = resolveChatPageAssistantId(
+        conversationReady = conversationReady,
+        requestedAssistantId = conversationAssistantId,
+        conversationAssistantId = conversation.assistantId,
+    )
+    val displayedConversation = remember(conversation, displayedAssistantId, conversationReady) {
+        if (conversationReady) conversation else conversation.copy(assistantId = displayedAssistantId)
+    }
+    val setting = remember(storedSetting, displayedAssistantId) {
+        storedSetting.withDisplayedAssistant(displayedAssistantId)
+    }
     val loadingJob by vm.conversationJob.collectAsStateWithLifecycle()
     val processingStatus by vm.processingStatus.collectAsStateWithLifecycle()
-    val currentChatModel by vm.currentChatModel.collectAsStateWithLifecycle()
+    val currentChatModel = remember(setting) { setting.getCurrentChatModel() }
     val enableWebSearch by vm.enableWebSearch.collectAsStateWithLifecycle()
     val errors by vm.errors.collectAsStateWithLifecycle()
     val initialization = vm.conversationInitialization
     val appSettings = LocalSettings.current
     val initializationError = (initialization as? UiState.Error)?.error
-    val sessionAssistantExists = setting.getAssistantById(conversation.assistantId) != null
-    val assistantSelectionReady = !sessionAssistantExists || (
-        setting.getCurrentAssistant().id == conversation.assistantId &&
-            appSettings.getCurrentAssistant().id == conversation.assistantId
-        )
-
-    if (setting.init || appSettings.init || initialization !is UiState.Success || !assistantSelectionReady) {
+    if (setting.init || appSettings.init || conversationAssistantId == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             if (initializationError == null) {
                 CircularProgressIndicator()
@@ -176,7 +186,8 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
     val inputState = vm.inputState
 
     // 初始化输入状态（处理传入的 files 和 text 参数）
-    LaunchedEffect(files, text) {
+    LaunchedEffect(files, text, conversationReady) {
+        if (!conversationReady) return@LaunchedEffect
         if (files.isNotEmpty()) {
             val localFiles = filesManager.createChatFilesByContents(files)
             val contentTypes = files.mapNotNull { file ->
@@ -204,7 +215,8 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
     }
 
     val chatListState = rememberLazyListState()
-    LaunchedEffect(nodeId, conversation.messageNodes.size) {
+    LaunchedEffect(nodeId, conversation.messageNodes.size, conversationReady) {
+        if (!conversationReady) return@LaunchedEffect
         if (!vm.chatListInitialized && conversation.messageNodes.isNotEmpty()) {
             if (nodeId != null) {
                 val index = conversation.messageNodes.indexOfFirst { it.id == nodeId }
@@ -218,70 +230,98 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
         }
     }
 
-    when {
-        isBigScreen -> {
-            PermanentNavigationDrawer(
-                drawerContent = {
-                    ChatDrawerContent(
-                        navController = navController,
-                        current = conversation,
-                        vm = vm,
-                        settings = setting
-                    )
-                }
-            ) {
+    CompositionLocalProvider(LocalSettings provides setting) {
+        when {
+            !conversationReady -> {
                 ChatPageContent(
                     inputState = inputState,
                     loadingJob = loadingJob,
                     processingStatus = processingStatus,
                     setting = setting,
-                    conversation = conversation,
+                    conversation = displayedConversation,
+                    conversationReady = false,
+                    initializationError = initializationError,
                     drawerState = drawerState,
                     navController = navController,
                     vm = vm,
                     chatListState = chatListState,
                     enableWebSearch = enableWebSearch,
                     currentChatModel = currentChatModel,
-                    bigScreen = true,
+                    bigScreen = isBigScreen,
                     errors = errors,
                     onDismissError = { vm.dismissError(it) },
                     onClearAllErrors = { vm.clearAllErrors() },
                 )
             }
-        }
 
-        else -> {
-            ModalNavigationDrawer(
-                drawerState = drawerState,
-                drawerContent = {
-                    ChatDrawerContent(
+            isBigScreen -> {
+                PermanentNavigationDrawer(
+                    drawerContent = {
+                        ChatDrawerContent(
+                            navController = navController,
+                            current = conversation,
+                            vm = vm,
+                            settings = setting
+                        )
+                    }
+                ) {
+                    ChatPageContent(
+                        inputState = inputState,
+                        loadingJob = loadingJob,
+                        processingStatus = processingStatus,
+                        setting = setting,
+                        conversation = displayedConversation,
+                        conversationReady = true,
+                        initializationError = null,
+                        drawerState = drawerState,
                         navController = navController,
-                        current = conversation,
                         vm = vm,
-                        settings = setting
+                        chatListState = chatListState,
+                        enableWebSearch = enableWebSearch,
+                        currentChatModel = currentChatModel,
+                        bigScreen = true,
+                        errors = errors,
+                        onDismissError = { vm.dismissError(it) },
+                        onClearAllErrors = { vm.clearAllErrors() },
                     )
                 }
-            ) {
-                ChatPageContent(
-                    inputState = inputState,
-                    loadingJob = loadingJob,
-                    processingStatus = processingStatus,
-                    setting = setting,
-                    conversation = conversation,
-                    drawerState = drawerState,
-                    navController = navController,
-                    vm = vm,
-                    chatListState = chatListState,
-                    enableWebSearch = enableWebSearch,
-                    currentChatModel = currentChatModel,
-                    bigScreen = false,
-                    errors = errors,
-                    onDismissError = { vm.dismissError(it) },
-                    onClearAllErrors = { vm.clearAllErrors() },
-                )
             }
-            BackHandler(drawerState.isOpen) {
-                scope.launch { drawerState.close() }
+
+            else -> {
+                ModalNavigationDrawer(
+                    drawerState = drawerState,
+                    drawerContent = {
+                        ChatDrawerContent(
+                            navController = navController,
+                            current = conversation,
+                            vm = vm,
+                            settings = setting
+                        )
+                    }
+                ) {
+                    ChatPageContent(
+                        inputState = inputState,
+                        loadingJob = loadingJob,
+                        processingStatus = processingStatus,
+                        setting = setting,
+                        conversation = displayedConversation,
+                        conversationReady = true,
+                        initializationError = null,
+                        drawerState = drawerState,
+                        navController = navController,
+                        vm = vm,
+                        chatListState = chatListState,
+                        enableWebSearch = enableWebSearch,
+                        currentChatModel = currentChatModel,
+                        bigScreen = false,
+                        errors = errors,
+                        onDismissError = { vm.dismissError(it) },
+                        onClearAllErrors = { vm.clearAllErrors() },
+                    )
+                }
+                BackHandler(drawerState.isOpen) {
+                    scope.launch { drawerState.close() }
+                }
             }
         }
     }
@@ -295,6 +335,8 @@ private fun ChatPageContent(
     setting: Settings,
     bigScreen: Boolean,
     conversation: Conversation,
+    conversationReady: Boolean,
+    initializationError: Throwable?,
     drawerState: DrawerState,
     navController: Navigator,
     vm: ChatVM,
@@ -350,14 +392,16 @@ private fun ChatPageContent(
     val hazeState = rememberHazeState()
     val glassBackdropState = rememberHazeState()
 
-    TTSAutoPlay(
-        vm = vm,
-        setting = setting,
-        conversation = conversation,
-        onUpdateTtsMessage = { messageId, transform ->
-            vm.updateMessage(messageId, transform)
-        },
-    )
+    if (conversationReady) {
+        TTSAutoPlay(
+            vm = vm,
+            setting = setting,
+            conversation = conversation,
+            onUpdateTtsMessage = { messageId, transform ->
+                vm.updateMessage(messageId, transform)
+            },
+        )
+    }
     LaunchedEffect(momentsEnabled) {
         if (!momentsEnabled) {
             momentsVisible = false
@@ -381,6 +425,7 @@ private fun ChatPageContent(
                 TopBar(
                         settings = setting,
                         conversation = conversation,
+                        interactionEnabled = conversationReady,
                         bigScreen = bigScreen,
                         drawerState = drawerState,
                         previewMode = previewMode,
@@ -430,19 +475,22 @@ private fun ChatPageContent(
             bottomBar = {
                 ChatInput(
                     state = inputState,
-                    loading = loadingJob != null,
+                    loading = !conversationReady || loadingJob != null,
                     settings = setting,
                     conversation = conversation,
                     mcpManager = vm.mcpManager,
                     hazeState = if (LocalLiquidGlass.current.enabled) glassBackdropState else hazeState,
                     onCancelClick = {
-                        vm.stopGeneration()
+                        if (conversationReady) vm.stopGeneration()
                     },
                     enableSearch = enableWebSearch,
                     onToggleSearch = {
-                        vm.updateSettings(setting.copy(enableWebSearch = !enableWebSearch))
+                        if (conversationReady) {
+                            vm.updateSettings(setting.copy(enableWebSearch = !enableWebSearch))
+                        }
                     },
                     onSendClick = {
+                        if (!conversationReady) return@ChatInput
                         if (currentChatModel == null) {
                             toaster.show("请先选择模型", type = ToastType.Error)
                             return@ChatInput
@@ -461,6 +509,7 @@ private fun ChatPageContent(
                         inputState.clearInput()
                     },
                     onLongSendClick = {
+                        if (!conversationReady) return@ChatInput
                         if (inputState.isEditing()) {
                             vm.handleMessageEdit(
                                 parts = inputState.getContents(),
@@ -475,160 +524,185 @@ private fun ChatPageContent(
                         inputState.clearInput()
                     },
                     onUpdateChatModel = {
-                        vm.setChatModel(assistant = setting.getCurrentAssistant(), model = it)
+                        if (conversationReady) {
+                            vm.setChatModel(assistant = setting.getCurrentAssistant(), model = it)
+                        }
                     },
                     onUpdateAssistant = {
-                        vm.updateSettings(
-                            setting.copy(
-                                assistants = setting.assistants.map { assistant ->
-                                    if (assistant.id == it.id) {
-                                        it
-                                    } else {
-                                        assistant
+                        if (conversationReady) {
+                            vm.updateSettings(
+                                setting.copy(
+                                    assistants = setting.assistants.map { assistant ->
+                                        if (assistant.id == it.id) {
+                                            it
+                                        } else {
+                                            assistant
+                                        }
                                     }
-                                }
+                                )
                             )
-                        )
+                        }
                     },
                     onUpdateConversation = { edited ->
-                        vm.updateConversation { latest -> latest.copy(
-                            modeInjectionIds = if (edited.modeInjectionIds != conversation.modeInjectionIds) edited.modeInjectionIds else latest.modeInjectionIds,
-                            lorebookIds = if (edited.lorebookIds != conversation.lorebookIds) edited.lorebookIds else latest.lorebookIds,
-                        ) }
+                        if (conversationReady) {
+                            vm.updateConversation { latest -> latest.copy(
+                                modeInjectionIds = if (edited.modeInjectionIds != conversation.modeInjectionIds) edited.modeInjectionIds else latest.modeInjectionIds,
+                                lorebookIds = if (edited.lorebookIds != conversation.lorebookIds) edited.lorebookIds else latest.lorebookIds,
+                            ) }
+                        }
                     },
                     onUpdateSearchService = { index ->
-                        vm.updateSettings(
-                            setting.copy(
-                                searchServiceSelected = index
+                        if (conversationReady) {
+                            vm.updateSettings(
+                                setting.copy(
+                                    searchServiceSelected = index
+                                )
                             )
-                        )
+                        }
                     },
                     onCompressContext = { additionalPrompt, targetTokens, keepRecentMessages, autoCompress ->
-                        vm.handleCompressContext(
-                            additionalPrompt,
-                            targetTokens,
-                            keepRecentMessages,
-                            autoCompress,
-                        ).also { job ->
-                            scope.launch {
-                                job.join()
-                                if (!job.isCancelled) {
-                                    val editingMessage = inputState.editingMessage
-                                    val editingMessageStillVisible = editingMessage != null &&
-                                        vm.conversation.value.visibleMessageNodes.any { node ->
-                                            node.messages.any { message -> message.id == editingMessage }
+                        if (conversationReady) {
+                            vm.handleCompressContext(
+                                additionalPrompt,
+                                targetTokens,
+                                keepRecentMessages,
+                                autoCompress,
+                            ).also { job ->
+                                scope.launch {
+                                    job.join()
+                                    if (!job.isCancelled) {
+                                        val editingMessage = inputState.editingMessage
+                                        val editingMessageStillVisible = editingMessage != null &&
+                                            vm.conversation.value.visibleMessageNodes.any { node ->
+                                                node.messages.any { message -> message.id == editingMessage }
+                                            }
+                                        if (editingMessage != null && !editingMessageStillVisible) {
+                                            inputState.clearInput()
+                                        } else {
+                                            inputState.exitEditingMode()
                                         }
-                                    if (editingMessage != null && !editingMessageStillVisible) {
-                                        inputState.clearInput()
-                                    } else {
-                                        inputState.exitEditingMode()
                                     }
                                 }
                             }
+                        } else {
+                            Job().apply { cancel() }
                         }
                     },
                     onSaveAutoCompressConfig = {
-                        vm.saveAutoCompressConfig(it)
+                        if (conversationReady) vm.saveAutoCompressConfig(it)
                     },
                 )
             },
             containerColor = Color.Transparent,
         ) { innerPadding ->
-            ChatList(
-                innerPadding = innerPadding,
-                conversation = conversation.forNormalChatDisplay(),
-                state = chatListState,
-                loading = loadingJob != null,
-                processingStatus = processingStatus,
-                previewMode = previewMode,
-                showCompressedMessages = showCompressedMessages,
-                externalEditorVisible = summaryEditorVisible,
-                settings = setting,
-                hazeState = hazeState,
-                glassHazeState = glassBackdropState,
-                errors = errors,
-                onDismissError = onDismissError,
-                onClearAllErrors = onClearAllErrors,
-                onRegenerate = {
-                    vm.regenerateAtMessage(it)
-                },
-                onEdit = {
-                    inputState.editingMessage = it.id
-                    inputState.setContents(it.parts)
-                },
-                onForkMessage = {
-                    scope.launch {
-                        val fork = vm.forkMessage(message = it)
-                        navigateToChatPage(navController, chatId = fork.id)
-                    }
-                },
-                onDelete = {
-                    if (loadingJob != null) {
-                        vm.showDeleteBlockedWhileGeneratingError()
-                    } else {
-                        val record = it.voiceCallRecord()
-                        if (record?.standalone == true) {
-                            pendingVoiceCallDeleteId = record.callId
-                        } else {
-                            vm.deleteMessage(it)
+            if (conversationReady) {
+                ChatList(
+                    innerPadding = innerPadding,
+                    conversation = conversation.forNormalChatDisplay(),
+                    state = chatListState,
+                    loading = loadingJob != null,
+                    processingStatus = processingStatus,
+                    previewMode = previewMode,
+                    showCompressedMessages = showCompressedMessages,
+                    externalEditorVisible = summaryEditorVisible,
+                    settings = setting,
+                    hazeState = hazeState,
+                    glassHazeState = glassBackdropState,
+                    errors = errors,
+                    onDismissError = onDismissError,
+                    onClearAllErrors = onClearAllErrors,
+                    onRegenerate = {
+                        vm.regenerateAtMessage(it)
+                    },
+                    onEdit = {
+                        inputState.editingMessage = it.id
+                        inputState.setContents(it.parts)
+                    },
+                    onForkMessage = {
+                        scope.launch {
+                            val fork = vm.forkMessage(message = it)
+                            navigateToChatPage(navController, chatId = fork.id)
                         }
-                    }
-                },
-                onUpdateMessage = { newNode ->
-                    vm.updateConversation { latest ->
-                        latest.copy(
-                            messageNodes = latest.messageNodes.map { node ->
-                                if (node.id == newNode.id) {
-                                    newNode
-                                } else {
-                                    node
-                                }
+                    },
+                    onDelete = {
+                        if (loadingJob != null) {
+                            vm.showDeleteBlockedWhileGeneratingError()
+                        } else {
+                            val record = it.voiceCallRecord()
+                            if (record?.standalone == true) {
+                                pendingVoiceCallDeleteId = record.callId
+                            } else {
+                                vm.deleteMessage(it)
                             }
-                        )
+                        }
+                    },
+                    onUpdateMessage = { newNode ->
+                        vm.updateConversation { latest ->
+                            latest.copy(
+                                messageNodes = latest.messageNodes.map { node ->
+                                    if (node.id == newNode.id) {
+                                        newNode
+                                    } else {
+                                        node
+                                    }
+                                }
+                            )
+                        }
+                    },
+                    onUpdateTtsMessage = { messageId, transform ->
+                        vm.updateMessage(messageId, transform)
+                    },
+                    onClickSuggestion = { suggestion ->
+                        inputState.editingMessage = null
+                        inputState.setMessageText(suggestion)
+                    },
+                    onTranslate = { message, locale ->
+                        vm.translateMessage(message, locale)
+                    },
+                    onClearTranslation = { message ->
+                        vm.clearTranslationField(message.id)
+                    },
+                    onTranslateChatVoiceSegment = { message, segmentIndex, sourceText, locale ->
+                        vm.translateChatVoiceSegment(message, segmentIndex, sourceText, locale)
+                    },
+                    onClearChatVoiceSegmentTranslation = { message, segmentIndex ->
+                        vm.clearChatVoiceSegmentTranslation(message.id, segmentIndex)
+                    },
+                    onExitPreview = {
+                        previewMode = false
+                    },
+                    onToolApproval = { toolCallId, approved, reason ->
+                        vm.handleToolApproval(toolCallId, approved, reason)
+                    },
+                    onToolAnswer = { toolCallId, answer ->
+                        vm.handleToolAnswer(toolCallId, answer)
+                    },
+                    onToggleFavorite = { node ->
+                        vm.toggleMessageFavorite(node)
+                    },
+                    onOpenVoiceCallRecord = { callId ->
+                        voiceCallHistoryId = callId
+                        voiceCallVisible = true
+                    },
+                    onConversationSystemPromptChange = { newPrompt ->
+                        vm.updateConversation { it.copy(customSystemPrompt = newPrompt) }
+                    },
+                )
+            } else {
+                Box(
+                    modifier = Modifier.fillMaxSize().padding(innerPadding),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (initializationError != null) {
+                        Text(initializationError.localizedMessage ?: initializationError.toString())
+                    } else {
+                        CircularProgressIndicator()
                     }
-                },
-                onUpdateTtsMessage = { messageId, transform ->
-                    vm.updateMessage(messageId, transform)
-                },
-                onClickSuggestion = { suggestion ->
-                    inputState.editingMessage = null
-                    inputState.setMessageText(suggestion)
-                },
-                onTranslate = { message, locale ->
-                    vm.translateMessage(message, locale)
-                },
-                onClearTranslation = { message ->
-                    vm.clearTranslationField(message.id)
-                },
-                onTranslateChatVoiceSegment = { message, segmentIndex, sourceText, locale ->
-                    vm.translateChatVoiceSegment(message, segmentIndex, sourceText, locale)
-                },
-                onClearChatVoiceSegmentTranslation = { message, segmentIndex ->
-                    vm.clearChatVoiceSegmentTranslation(message.id, segmentIndex)
-                },
-                onExitPreview = {
-                    previewMode = false
-                },
-                onToolApproval = { toolCallId, approved, reason ->
-                    vm.handleToolApproval(toolCallId, approved, reason)
-                },
-                onToolAnswer = { toolCallId, answer ->
-                    vm.handleToolAnswer(toolCallId, answer)
-                },
-                onToggleFavorite = { node ->
-                    vm.toggleMessageFavorite(node)
-                },
-                onOpenVoiceCallRecord = { callId ->
-                    voiceCallHistoryId = callId
-                    voiceCallVisible = true
-                },
-                onConversationSystemPromptChange = { newPrompt ->
-                    vm.updateConversation { it.copy(customSystemPrompt = newPrompt) }
-                },
-            )
+                }
+            }
         }
         VoiceCallOverlay(
-            visible = voiceCallVisible,
+            visible = voiceCallVisible && conversationReady,
             historyCallId = voiceCallHistoryId,
             awaitInitialAssistantReply = awaitInitialVoiceCallReply,
             initialAssistantMessageId = initialVoiceCallAssistantMessageId,
@@ -658,6 +732,7 @@ private fun ChatPageContent(
             }
         )
         incomingVoiceCall?.let { request ->
+            if (!conversationReady) return@let
             IncomingVoiceCallOverlay(
                 request = request,
                 setting = setting,
@@ -688,7 +763,7 @@ private fun ChatPageContent(
             )
         }
         MomentsOverlay(
-            visible = momentsVisible && momentsEnabled,
+            visible = momentsVisible && momentsEnabled && conversationReady,
             assistantId = momentScopeId,
             assistant = assistant,
             conversation = conversation,
@@ -702,7 +777,7 @@ private fun ChatPageContent(
             },
         )
         AnonymousQuestionBoxOverlay(
-            visible = anonymousQuestionBoxVisible && anonymousQuestionBoxEnabled,
+            visible = anonymousQuestionBoxVisible && anonymousQuestionBoxEnabled && conversationReady,
             scopeId = anonymousQuestionScopeId,
             assistant = assistant,
             conversation = conversation,
@@ -714,7 +789,7 @@ private fun ChatPageContent(
         )
     }
     ConversationCompressionDiagnosticsDialog(
-        visible = showCompressionDiagnostics,
+        visible = showCompressionDiagnostics && conversationReady,
         steps = compressionDiagnostics,
         onCopy = {
             val report = buildString {
@@ -731,12 +806,12 @@ private fun ChatPageContent(
         onDismiss = { showCompressionDiagnostics = false },
     )
     RikkaConfirmDialog(
-        show = pendingVoiceCallDeleteId != null,
+        show = pendingVoiceCallDeleteId != null && conversationReady,
         title = "是否删除",
         confirmText = stringResource(R.string.delete),
         dismissText = stringResource(R.string.cancel),
         onConfirm = {
-            pendingVoiceCallDeleteId?.let(vm::deleteVoiceCallRecord)
+            if (conversationReady) pendingVoiceCallDeleteId?.let(vm::deleteVoiceCallRecord)
             pendingVoiceCallDeleteId = null
         },
         onDismiss = { pendingVoiceCallDeleteId = null },
@@ -748,6 +823,7 @@ private fun ChatPageContent(
 private fun TopBar(
     settings: Settings,
     conversation: Conversation,
+    interactionEnabled: Boolean,
     drawerState: DrawerState,
     bigScreen: Boolean,
     previewMode: Boolean,
@@ -871,7 +947,7 @@ private fun TopBar(
     TopAppBar(
         colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
         navigationIcon = {
-            if (!bigScreen) {
+            if (!bigScreen && interactionEnabled) {
                 IconButton(
                     onClick = {
                         scope.launch { drawerState.open() }
@@ -885,6 +961,7 @@ private fun TopBar(
             val editTitleWarning = stringResource(R.string.chat_page_edit_title_warning)
             Surface(
                 onClick = {
+                    if (!interactionEnabled) return@Surface
                     if (conversation.messageNodes.isNotEmpty()) {
                         titleState.open(conversation.title)
                     } else {
@@ -918,44 +995,46 @@ private fun TopBar(
             }
         },
         actions = {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                HorizontalPager(
-                    state = pagerState,
-                    modifier = Modifier
-                        .width(144.dp)
-                        .height(48.dp),
-                ) { page ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Center,
-                    ) {
-                        actionPages[page].forEach { action ->
-                            action()
+            if (interactionEnabled) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    HorizontalPager(
+                        state = pagerState,
+                        modifier = Modifier
+                            .width(144.dp)
+                            .height(48.dp),
+                    ) { page ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                        ) {
+                            actionPages[page].forEach { action ->
+                                action()
+                            }
                         }
                     }
-                }
 
-                if (actionPages.size > 1) {
-                    Row(
-                        modifier = Modifier.height(8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        repeat(actionPages.size) { page ->
-                            Box(
-                                modifier = Modifier
-                                    .size(if (page == pagerState.currentPage) 6.dp else 4.dp)
-                                    .background(
-                                        color = if (page == pagerState.currentPage) {
-                                            MaterialTheme.colorScheme.primary
-                                        } else {
-                                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
-                                        },
-                                        shape = CircleShape,
-                                    )
-                            )
+                    if (actionPages.size > 1) {
+                        Row(
+                            modifier = Modifier.height(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            repeat(actionPages.size) { page ->
+                                Box(
+                                    modifier = Modifier
+                                        .size(if (page == pagerState.currentPage) 6.dp else 4.dp)
+                                        .background(
+                                            color = if (page == pagerState.currentPage) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                                            },
+                                            shape = CircleShape,
+                                        )
+                                )
+                            }
                         }
                     }
                 }

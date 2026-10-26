@@ -14,8 +14,10 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import io.pebbletemplates.pebble.PebbleEngine
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.serialization.SerialName
@@ -167,6 +169,7 @@ class SettingsStore(
     }
 
     private val dataStore = context.settingsStore
+    private val snapshotCache = SettingsSnapshotCache(::readSettings)
 
     private fun readSettings(preferences: Preferences): Settings =
             Settings(
@@ -371,14 +374,16 @@ class SettingsStore(
                 throw exception
             }
         }
-        .map(::readSettings)
+        .map(snapshotCache::read)
         .onEach {
             get<PebbleEngine>().templateCache.invalidateAll()
         }
         .distinctUntilChanged()
-        .map { it.withUpdateBaseline() }
+        .flowOn(Dispatchers.Default)
 
     val settingsFlow = settingsFlowRaw
+        .map { it.withUpdateBaseline() }
+        .flowOn(Dispatchers.Default)
         .distinctUntilChanged()
         .toMutableStateFlow(scope, Settings.dummy())
 
@@ -388,7 +393,7 @@ class SettingsStore(
 
     suspend fun update(fn: (Settings) -> Settings) {
         dataStore.edit { preferences ->
-            val current = readSettings(preferences)
+            val current = snapshotCache.read(preferences)
             val requested = fn(current.withUpdateBaseline())
             if (requested.init) {
                 Log.w(TAG, "Cannot update dummy settings")
@@ -403,6 +408,10 @@ class SettingsStore(
             preferences[SELECT_ASSISTANT] = assistantId.toString()
         }
     }
+
+    suspend fun incrementLaunchCount(): Int = dataStore.edit { preferences ->
+        preferences[LAUNCH_COUNT] = (preferences[LAUNCH_COUNT] ?: 0) + 1
+    }[LAUNCH_COUNT] ?: 0
 
     suspend fun updateAssistantModel(assistantId: Uuid, modelId: Uuid) {
         update { settings ->

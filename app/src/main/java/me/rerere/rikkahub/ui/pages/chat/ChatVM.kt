@@ -35,7 +35,7 @@ import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.mergeSettingsUpdate
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.getAssistantById
-import me.rerere.rikkahub.data.datastore.getCurrentChatModel
+import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.voice.VoiceCallCompletion
 import me.rerere.rikkahub.data.model.Assistant
@@ -60,6 +60,21 @@ import kotlin.uuid.Uuid
 
 private const val TAG = "ChatVM"
 
+internal fun resolveChatPageAssistantId(
+    conversationReady: Boolean,
+    requestedAssistantId: Uuid?,
+    conversationAssistantId: Uuid,
+): Uuid = if (conversationReady) {
+    conversationAssistantId
+} else {
+    requestedAssistantId ?: conversationAssistantId
+}
+
+internal fun resolveLoadingAssistantId(
+    metadataAssistantId: Uuid?,
+    latestSettingsAssistantId: Uuid,
+): Uuid = metadataAssistantId ?: latestSettingsAssistantId
+
 class ChatVM(
     id: String,
     private val context: Application,
@@ -72,6 +87,8 @@ class ChatVM(
     private val favoriteRepository: FavoriteRepository,
 ) : ViewModel() {
     private val _conversationId: Uuid = Uuid.parse(id)
+    var conversationAssistantId by mutableStateOf<Uuid?>(null)
+        private set
     var conversationInitialization by mutableStateOf<UiState<Unit>>(UiState.Loading)
         private set
     private val updateCheckRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
@@ -115,7 +132,12 @@ class ChatVM(
         // 初始化对话
         viewModelScope.launch {
             try {
+                conversationAssistantId = resolveLoadingAssistantId(
+                    metadataAssistantId = conversationRepo.getConversationAssistantId(_conversationId),
+                    latestSettingsAssistantId = settingsStore.settingsFlowRaw.first().getCurrentAssistant().id,
+                )
                 chatService.initializeConversation(_conversationId)
+                conversationAssistantId = conversation.value.assistantId
                 context.writeStringPreference("lastConversationId", _conversationId.toString())
                 conversationInitialization = UiState.Success(Unit)
             } catch (error: CancellationException) {
@@ -130,6 +152,7 @@ class ChatVM(
         ProcessLifecycleOwner.get().lifecycle.addObserver(updateLifecycleObserver)
 
         viewModelScope.launch {
+            if (settingsStore.settingsFlow.first { !it.init }.displaySetting.showUpdates) return@launch
             settingsStore.update { settings ->
                 if (settings.displaySetting.showUpdates) {
                     settings
@@ -158,11 +181,6 @@ class ChatVM(
         it.enableWebSearch
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    // 当前模型
-    val currentChatModel = settings.map { settings ->
-        settings.getCurrentChatModel()
-    }.stateIn(viewModelScope, SharingStarted.Lazily, null)
-
     // 错误状态
     val errors: StateFlow<List<ChatError>> = chatService.errors
 
@@ -177,6 +195,10 @@ class ChatVM(
     val mcpManager = chatService.mcpManager
 
     // 更新设置
+    internal suspend fun selectAssistant(assistantId: Uuid) {
+        settingsStore.updateAssistant(assistantId)
+    }
+
     fun updateSettings(newSettings: Settings) {
         viewModelScope.launch {
             var retiredAvatar: Avatar.Image? = null

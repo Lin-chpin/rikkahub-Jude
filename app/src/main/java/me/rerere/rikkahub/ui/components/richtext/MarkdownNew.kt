@@ -1235,7 +1235,7 @@ private fun parseInlineSpanStyle(
     return spanStyle.takeIf { hasStyle }
 }
 
-private fun parseBlockTextStyle(
+internal fun parseBlockTextStyle(
     style: String,
     density: Density,
     baseTextStyle: TextStyle,
@@ -1256,7 +1256,8 @@ private fun parseBlockTextStyle(
         fontStyle = inlineStyle?.fontStyle,
         fontFamily = inlineStyle?.fontFamily,
         letterSpacing = inlineStyle?.letterSpacing ?: TextUnit.Unspecified,
-        lineHeight = inlineStyle?.fontSize?.times(1.2f) ?: TextUnit.Unspecified,
+        lineHeight = inlineStyle?.fontSize?.takeIf { it.isSpecified }?.times(1.2f)
+            ?: TextUnit.Unspecified,
         background = inlineStyle?.background ?: Color.Unspecified,
         textDecoration = inlineStyle?.textDecoration,
     )

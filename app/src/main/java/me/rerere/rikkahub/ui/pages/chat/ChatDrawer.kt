@@ -255,13 +255,13 @@ fun ChatDrawerContent(
             // 助手选择器
             AssistantPicker(
                 settings = settings,
-                onUpdateSettings = {
-                    vm.updateSettings(it)
+                onUpdateSettings = { selectedSettings ->
                     scope.launch {
+                        vm.selectAssistant(selectedSettings.assistantId)
                         val id = if (context.readBooleanPreference("create_new_conversation_on_start", true)) {
                             Uuid.random()
                         } else {
-                            repo.getConversationsOfAssistant(it.assistantId)
+                            repo.getConversationsOfAssistant(selectedSettings.assistantId)
                                 .first()
                                 .firstOrNull()
                                 ?.id ?: Uuid.random()

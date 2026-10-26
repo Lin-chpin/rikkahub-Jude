@@ -9,6 +9,7 @@ import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import me.rerere.rikkahub.utils.JsonInstant
 import me.rerere.rikkahub.data.model.Assistant
+import kotlin.uuid.Uuid
 
 // Identity equality keeps Settings equality from comparing an additional serialized settings tree.
 class SettingsUpdateBaseline internal constructor(internal val value: JsonObject)
@@ -16,6 +17,17 @@ class SettingsUpdateBaseline internal constructor(internal val value: JsonObject
 internal fun Settings.withUpdateBaseline(): Settings = copy(
     updateBaseline = SettingsUpdateBaseline(JsonInstant.encodeToJsonElement(this).jsonObject),
 )
+
+internal fun Settings.withDisplayedAssistant(assistantId: Uuid): Settings {
+    if (this.assistantId == assistantId || getAssistantById(assistantId) == null) return this
+    return copy(
+        assistantId = assistantId,
+        // Display-only selection must not become a persisted edit; retain every other stale-edit baseline.
+        updateBaseline = updateBaseline?.let {
+            SettingsUpdateBaseline(JsonObject(it.value + ("assistantId" to JsonPrimitive(assistantId.toString()))))
+        },
+    )
+}
 
 internal fun Settings.withAssistantUpdate(updated: Assistant, baseline: Assistant): Settings {
     require(updated.id == baseline.id) { "Assistant editing baseline must have the same ID" }
