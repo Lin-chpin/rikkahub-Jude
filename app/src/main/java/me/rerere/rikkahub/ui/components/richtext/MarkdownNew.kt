@@ -3,6 +3,7 @@ package me.rerere.rikkahub.ui.components.richtext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -38,6 +39,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.Color
@@ -57,6 +60,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.TextUnitType
 import androidx.compose.ui.unit.dp
@@ -183,9 +187,13 @@ private fun HtmlStyledElement(
 }
 
 @Composable
-private fun HtmlBodyNode(node: Node, onClickCitation: (String) -> Unit) {
+private fun HtmlBodyNode(
+    node: Node,
+    onClickCitation: (String) -> Unit,
+    isFlexItem: Boolean = false,
+) {
     when (node) {
-        is Element -> HtmlBlockElement(element = node, onClickCitation = onClickCitation)
+        is Element -> HtmlBlockElement(element = node, onClickCitation = onClickCitation, isFlexItem = isFlexItem)
         is TextNode -> {
             val text = node.text().trim()
             if (text.isNotEmpty()) Text(text = text)
@@ -198,6 +206,7 @@ private fun HtmlBlockElement(
     element: Element,
     onClickCitation: (String) -> Unit,
     listLevel: Int = 0,
+    isFlexItem: Boolean = false,
 ) {
     when (element.tagName().lowercase()) {
         "p" -> HtmlParagraph(
@@ -275,17 +284,106 @@ private fun HtmlBlockElement(
 
         "progress" -> HtmlProgress(element = element)
 
-        "div" -> HtmlStyledElement(element = element) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                element.childNodes().fastForEach { HtmlBodyNode(it, onClickCitation) }
-            }
-        }
+        "div" -> HtmlDiv(element, onClickCitation, isFlexItem)
 
         else -> HtmlStyledElement(element = element) {
             // Generic fallback: recurse into children
             element.childNodes().forEach { HtmlBodyNode(it, onClickCitation) }
         }
     }
+}
+
+@Composable
+private fun HtmlDiv(
+    element: Element,
+    onClickCitation: (String) -> Unit,
+    isFlexItem: Boolean,
+) {
+    val style = element.attr("style")
+    val properties = remember(style) { parseCssDeclarations(style) }
+    val baseTextStyle = LocalTextStyle.current
+    val density = LocalDensity.current
+    val textStyle = remember(style, density, baseTextStyle) {
+        style.takeIf { it.isNotBlank() }?.let {
+            parseBlockTextStyle(it, density, baseTextStyle)?.copy(background = Color.Unspecified)
+        }
+    }
+    val (paddingVertical, paddingHorizontal) = parseCssPadding(properties["padding"])
+    val maxWidth = parseCssLength(properties["max-width"])
+    val radius = parseCssLength(properties["border-radius"]) ?: 0.dp
+    val shape = remember(radius) { RoundedCornerShape(radius) }
+    val marginRight = parseCssLength(properties["margin-right"]) ?: 0.dp
+    val marginTop = parseCssLength(properties["margin-top"]) ?: 0.dp
+    val opacity = properties["opacity"]?.toFloatOrNull()?.takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 1f
+    val background = remember(style) {
+        (properties["background-color"] ?: properties["background"])?.let(::parseColor)
+    }
+    val shadow = remember(style) { parseCssBoxShadow(properties["box-shadow"]) }
+    val modifier = Modifier
+        .absolutePadding(top = marginTop, right = marginRight)
+        .then(if (opacity < 1f) Modifier.alpha(opacity) else Modifier)
+        .then(maxWidth?.let { Modifier.widthIn(max = it) } ?: Modifier)
+        .then(if (isFlexItem) Modifier else Modifier.fillMaxWidth())
+        .then(
+            shadow?.let {
+                Modifier.shadow(
+                    elevation = it.first,
+                    shape = shape,
+                    clip = false,
+                    ambientColor = it.second,
+                    spotColor = it.second,
+                )
+            } ?: Modifier,
+        )
+        .clip(shape)
+        .then(background?.let { Modifier.background(it, shape) } ?: Modifier)
+        .padding(vertical = paddingVertical, horizontal = paddingHorizontal)
+
+    ProvideTextStyle(baseTextStyle.merge(textStyle ?: TextStyle())) {
+        if (properties["display"].equals("flex", ignoreCase = true)) {
+            Row(
+                modifier = modifier,
+                verticalAlignment = if (properties["align-items"].equals("center", ignoreCase = true)) {
+                    Alignment.CenterVertically
+                } else {
+                    Alignment.Top
+                },
+            ) {
+                element.childNodes().fastForEach { HtmlBodyNode(it, onClickCitation, isFlexItem = true) }
+            }
+        } else {
+            Column(modifier = modifier) {
+                element.childNodes().fastForEach { HtmlBodyNode(it, onClickCitation) }
+            }
+        }
+    }
+}
+
+private fun parseCssPadding(value: String?): Pair<Dp, Dp> {
+    val values = value?.trim()?.split(Regex("\\s+"))?.takeIf { it.size in 1..2 } ?: return (0.dp to 0.dp)
+    val vertical = parseCssLength(values[0]) ?: return (0.dp to 0.dp)
+    if (values.size == 1) return vertical to vertical
+    val horizontal = parseCssLength(values[1]) ?: return (0.dp to 0.dp)
+    return vertical to horizontal
+}
+
+private fun parseCssLength(value: String?): Dp? {
+    val normalized = value?.trim()?.lowercase() ?: return null
+    val number = when {
+        normalized.endsWith("px") -> normalized.removeSuffix("px").trim().toFloatOrNull()
+        normalized.endsWith("dp") -> normalized.removeSuffix("dp").trim().toFloatOrNull()
+        normalized == "0" -> 0f
+        else -> null
+    }?.takeIf { it.isFinite() && it >= 0f } ?: return null
+    return number.dp
+}
+
+private fun parseCssBoxShadow(value: String?): Pair<Dp, Color>? {
+    val match = Regex("""^[-+\d.]+(?:px|dp)?\s+[-+\d.]+(?:px|dp)?\s+([\d.]+(?:px|dp)?)(?:\s+(.+))?$""")
+        .matchEntire(value?.trim() ?: return null) ?: return null
+    val elevation = parseCssLength(match.groupValues[1]) ?: return null
+    val color = match.groupValues.getOrNull(2)?.takeIf { it.isNotBlank() }?.let(::parseColor) ?: return null
+    return elevation to color
 }
 
 // ---- Block renderers ----
@@ -1158,6 +1256,7 @@ private fun parseBlockTextStyle(
         fontStyle = inlineStyle?.fontStyle,
         fontFamily = inlineStyle?.fontFamily,
         letterSpacing = inlineStyle?.letterSpacing ?: TextUnit.Unspecified,
+        lineHeight = inlineStyle?.fontSize?.times(1.2f) ?: TextUnit.Unspecified,
         background = inlineStyle?.background ?: Color.Unspecified,
         textDecoration = inlineStyle?.textDecoration,
     )
@@ -1229,7 +1328,7 @@ private fun parseFontSize(
     return when {
         normalized.endsWith("sp") -> normalized.removeSuffix("sp").trim().toFloatOrNull()?.sp
         normalized.endsWith("px") -> normalized.removeSuffix("px").trim().toFloatOrNull()?.let {
-            with(density) { it.toSp() }
+            with(density) { it.dp.toSp() }
         }
 
         normalized.endsWith("em") -> normalized.removeSuffix("em").trim().toFloatOrNull()?.em
@@ -1246,7 +1345,7 @@ private fun parseFontSize(
         }
 
         else -> normalized.toFloatOrNull()?.let {
-            with(density) { it.toSp() }
+            with(density) { it.dp.toSp() }
         }
     }
 }
@@ -1262,7 +1361,7 @@ private fun parseSpacing(
     return when {
         normalized.endsWith("sp") -> normalized.removeSuffix("sp").trim().toFloatOrNull()?.sp
         normalized.endsWith("px") -> normalized.removeSuffix("px").trim().toFloatOrNull()?.let {
-            with(density) { it.toSp() }
+            with(density) { it.dp.toSp() }
         }
 
         normalized.endsWith("em") -> normalized.removeSuffix("em").trim().toFloatOrNull()?.em
@@ -1284,7 +1383,7 @@ private fun parseSpacing(
         }
 
         else -> normalized.toFloatOrNull()?.let {
-            with(density) { it.toSp() }
+            with(density) { it.dp.toSp() }
         }
     }
 }

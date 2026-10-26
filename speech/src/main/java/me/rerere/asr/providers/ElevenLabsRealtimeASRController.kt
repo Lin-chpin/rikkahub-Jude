@@ -44,6 +44,11 @@ private const val FRAME_SIZE_BYTES = SAMPLE_RATE / 10 * 2
 private const val MAX_WEBSOCKET_QUEUE_BYTES = 100_000L
 private const val REALTIME_URL = "https://api.elevenlabs.io/v1/speech-to-text/realtime"
 
+fun normalizeElevenLabsScribeLanguageCode(language: String): String = when (language.trim().lowercase()) {
+    "zn", "zho" -> "zh"
+    else -> language.trim()
+}
+
 class ElevenLabsRealtimeASRController(
     private val context: Context,
     private val httpClient: OkHttpClient,
@@ -294,7 +299,11 @@ internal fun ASRProviderSetting.ElevenLabsRealtime.websocketEndpoint(): String {
         .addQueryParameter("commit_strategy", "vad")
         .addQueryParameter("vad_silence_threshold_secs", "1.5")
         .addQueryParameter("keepalive_interval_ms", "1000")
-        .apply { if (language.isNotBlank()) addQueryParameter("language_code", language.trim()) }
+        .apply {
+            normalizeElevenLabsScribeLanguageCode(language)
+                .takeIf(String::isNotBlank)
+                ?.let { addQueryParameter("language_code", it) }
+        }
         .build()
         .toString()
         .replaceFirst("https://", "wss://")

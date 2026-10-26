@@ -15,4 +15,11 @@ class ElevenLabsRealtimeASRProtocolTest {
         assertTrue(endpoint.contains("commit_strategy=vad"))
         assertTrue(endpoint.contains("language_code=zh-CN"))
     }
+
+    @Test
+    fun websocketEndpointCorrectsCommonChineseLanguageCodeTypos() {
+        val endpoint = ASRProviderSetting.ElevenLabsRealtime(language = "zn").websocketEndpoint()
+
+        assertTrue(endpoint.contains("language_code=zh"))
+    }
 }

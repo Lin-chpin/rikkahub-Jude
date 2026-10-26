@@ -72,6 +72,8 @@ class ChatVM(
     private val favoriteRepository: FavoriteRepository,
 ) : ViewModel() {
     private val _conversationId: Uuid = Uuid.parse(id)
+    var conversationInitialization by mutableStateOf<UiState<Unit>>(UiState.Loading)
+        private set
     private val updateCheckRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     private val updateLifecycleObserver = LifecycleEventObserver { _, event ->
         if (event == Lifecycle.Event.ON_START) {
@@ -114,15 +116,16 @@ class ChatVM(
         viewModelScope.launch {
             try {
                 chatService.initializeConversation(_conversationId)
+                context.writeStringPreference("lastConversationId", _conversationId.toString())
+                conversationInitialization = UiState.Success(Unit)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
                 chatService.addError(error, _conversationId)
+                conversationInitialization = UiState.Error(error)
             }
         }
 
-        // 记住对话ID, 方便下次启动恢复
-        context.writeStringPreference("lastConversationId", _conversationId.toString())
         updateChecker.restoreDownloadState(context)
         ProcessLifecycleOwner.get().lifecycle.addObserver(updateLifecycleObserver)
 
@@ -237,6 +240,7 @@ class ChatVM(
         answer: Boolean = true,
         requestMode: ChatRequestMode = ChatRequestMode.Normal,
         includeVoiceCallConnectedEvent: Boolean = false,
+        requestMessagePartsProvider: (suspend () -> List<UIMessagePart>)? = null,
     ) {
         if (content.isEmptyInputMessage()) return
         analytics.logEvent("ai_send_message", null)
@@ -247,6 +251,7 @@ class ChatVM(
             answer = answer,
             requestMode = requestMode,
             includeVoiceCallConnectedEvent = includeVoiceCallConnectedEvent,
+            requestMessagePartsProvider = requestMessagePartsProvider,
         )
     }
 

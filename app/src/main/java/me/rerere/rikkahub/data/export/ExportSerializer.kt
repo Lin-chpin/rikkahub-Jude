@@ -374,7 +374,8 @@ object LorebookSerializer : ExportSerializer<Lorebook> {
                 description = "酒馆预设兼容导入：保留提示词顺序、角色、注入深度和助手输出正则。",
                 enabled = true,
                 entries = entries,
-                responseRegexes = parseSillyTavernResponseRegexes(preset),
+                responseRegexes = parseSillyTavernResponseRegexes(preset) +
+                    parseSillyTavernScriptDisplayFilters(preset),
             )
         }.getOrNull()
     }
@@ -392,6 +393,32 @@ object LorebookSerializer : ExportSerializer<Lorebook> {
                 enabled = !rule.disabled,
                 findRegex = parsed.pattern,
                 replaceString = replacement,
+                affectingScope = setOf(AssistantAffectScope.ASSISTANT),
+                visualOnly = true,
+                replaceFirstOnly = !parsed.global,
+            )
+        }
+
+    private fun parseSillyTavernScriptDisplayFilters(preset: SillyTavernPreset): List<AssistantRegex> =
+        preset.extensions.regexScripts.mapNotNull { rule ->
+            if (rule.disabled || rule.markdownOnly || 2 !in rule.placement || !rule.replaceString.isBlank()) {
+                return@mapNotNull null
+            }
+            val hideDreamPlotEnd = rule.scriptName == "[🥷隐藏]删除额外标签"
+            val hideDreamSelfCheck = rule.scriptName == "[🥷隐藏]梦境自修复" && rule.promptOnly
+            val hideStructureTags = !rule.promptOnly &&
+                rule.scriptName in setOf("[🥷隐藏]隐藏多余格式内容", "[🥷隐藏]删除额外标签")
+            if (!hideDreamSelfCheck && !hideStructureTags) return@mapNotNull null
+
+            val parsed = parseSillyTavernRegex(rule.findRegex) ?: return@mapNotNull null
+            val pattern = if (hideDreamPlotEnd) "${parsed.pattern}|</dream_plot>" else parsed.pattern
+            if (runCatching { Regex(pattern) }.isFailure) return@mapNotNull null
+            AssistantRegex(
+                id = Uuid.random(),
+                name = rule.scriptName,
+                enabled = true,
+                findRegex = pattern,
+                replaceString = "",
                 affectingScope = setOf(AssistantAffectScope.ASSISTANT),
                 visualOnly = true,
                 replaceFirstOnly = !parsed.global,
@@ -457,6 +484,7 @@ private data class SillyTavernPreset(
 @Serializable
 private data class SillyTavernPresetExtensions(
     @SerialName("SPreset") val sPreset: SillyTavernSPreset? = null,
+    @SerialName("regex_scripts") val regexScripts: List<SillyTavernScriptDisplayFilter> = emptyList(),
 )
 
 @Serializable
@@ -476,6 +504,17 @@ private data class SillyTavernResponseRegex(
     val replaceString: String = "",
     val disabled: Boolean = false,
     val placement: List<Int> = emptyList(),
+    val promptOnly: Boolean = false,
+)
+
+@Serializable
+private data class SillyTavernScriptDisplayFilter(
+    val scriptName: String = "",
+    val findRegex: String = "",
+    val replaceString: String = "",
+    val disabled: Boolean = false,
+    val placement: List<Int> = emptyList(),
+    val markdownOnly: Boolean = false,
     val promptOnly: Boolean = false,
 )
 

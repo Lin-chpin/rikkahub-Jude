@@ -2,7 +2,6 @@ package me.rerere.rikkahub.ui.components.ai
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -21,6 +20,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -31,7 +31,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MotionScheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -59,36 +58,6 @@ internal fun AsrButton(
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
-    val isIdle = muted || state.status == ASRStatus.Idle
-    val targetContainerColor = if (muted) {
-        MaterialTheme.colorScheme.surfaceVariant
-    } else when (state.status) {
-        ASRStatus.Idle -> Color.Transparent
-        ASRStatus.Connecting -> MaterialTheme.colorScheme.secondaryContainer
-        ASRStatus.Listening -> MaterialTheme.colorScheme.primaryContainer
-        ASRStatus.Stopping -> MaterialTheme.colorScheme.tertiaryContainer
-        ASRStatus.Error -> MaterialTheme.colorScheme.errorContainer
-    }
-    val targetContentColor = if (muted) {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    } else when (state.status) {
-        ASRStatus.Idle -> LocalContentColor.current
-        ASRStatus.Connecting -> MaterialTheme.colorScheme.onSecondaryContainer
-        ASRStatus.Listening -> MaterialTheme.colorScheme.onPrimaryContainer
-        ASRStatus.Stopping -> MaterialTheme.colorScheme.onTertiaryContainer
-        ASRStatus.Error -> MaterialTheme.colorScheme.onErrorContainer
-    }
-    val containerColor by animateColorAsState(
-        targetValue = targetContainerColor,
-        animationSpec = tween(300),
-        label = "asr_container"
-    )
-    val contentColor by animateColorAsState(
-        targetValue = targetContentColor,
-        animationSpec = tween(300),
-        label = "asr_content"
-    )
-
     val displayState = when {
         muted -> AsrDisplayState.Muted
         state.status == ASRStatus.Connecting -> AsrDisplayState.Connecting
@@ -96,16 +65,13 @@ internal fun AsrButton(
         else -> AsrDisplayState.Idle
     }
 
-    Surface(
-        onClick = onClick,
+    VoiceCallActionBubble(
         enabled = enabled,
+        onClick = onClick,
         modifier = Modifier
-            .height(36.dp)
+            .heightIn(min = 36.dp)
             .widthIn(min = 36.dp)
             .animateContentSize(animationSpec = MotionScheme.expressive().defaultSpatialSpec()),
-        shape = CircleShape,
-        tonalElevation = if (isIdle) 0.dp else 2.dp,
-        color = containerColor,
     ) {
         AnimatedContent(
             targetState = displayState,
@@ -125,11 +91,11 @@ internal fun AsrButton(
                         Icon(
                             imageVector = HugeIcons.Voice,
                             contentDescription = stringResource(R.string.asr_auto_mute),
-                            tint = contentColor
+                            tint = LocalContentColor.current
                         )
                         Text(
                             text = stringResource(R.string.asr_auto_mute),
-                            color = contentColor,
+                            color = LocalContentColor.current,
                             style = MaterialTheme.typography.labelLarge,
                             maxLines = 1,
                         )
@@ -156,7 +122,7 @@ internal fun AsrButton(
                                 .size(8.dp)
                                 .scale(scale)
                                 .clip(CircleShape)
-                                .background(contentColor)
+                                .background(LocalContentColor.current)
                         )
                     }
                 }
@@ -171,11 +137,11 @@ internal fun AsrButton(
                     ) {
                         AudioLevelDots(
                             amplitudes = state.amplitudes,
-                            color = contentColor,
+                            color = LocalContentColor.current,
                         )
                         Text(
                             text = stringResource(R.string.asr_auto_mute),
-                            color = contentColor,
+                            color = LocalContentColor.current,
                             style = MaterialTheme.typography.labelLarge,
                             maxLines = 1
                         )
@@ -191,11 +157,11 @@ internal fun AsrButton(
                         Icon(
                             imageVector = HugeIcons.Voice,
                             contentDescription = stringResource(R.string.asr_auto_resume),
-                            tint = contentColor,
+                            tint = LocalContentColor.current,
                         )
                         Text(
                             text = stringResource(R.string.asr_auto_resume),
-                            color = contentColor,
+                            color = LocalContentColor.current,
                             style = MaterialTheme.typography.labelLarge,
                             maxLines = 1,
                         )

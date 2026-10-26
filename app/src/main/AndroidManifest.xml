@@ -11,6 +11,8 @@
   <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
   <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
   <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
@@ -109,6 +111,11 @@
         android:value="background AI chat generation and tool execution" />
     </service>
     <receiver android:name=".service.VoiceCallInviteTimeoutReceiver" android:exported="false" />
+
+    <service
+      android:name=".service.VoiceCallScreenCaptureService"
+      android:exported="false"
+      android:foregroundServiceType="mediaProjection|microphone" />
 
     <service
       android:name=".service.UsageReminderService"

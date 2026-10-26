@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
@@ -87,8 +88,10 @@ import me.rerere.rikkahub.data.model.personaScopeId
 import me.rerere.rikkahub.service.ChatError
 import me.rerere.rikkahub.data.voice.voiceCallRecord
 import me.rerere.rikkahub.ui.components.ai.ChatInput
+import me.rerere.rikkahub.ui.components.ui.ErrorCardsDisplay
 import me.rerere.rikkahub.ui.components.ui.RikkaConfirmDialog
 import me.rerere.rikkahub.ui.context.LocalNavController
+import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.context.Navigator
 import me.rerere.rikkahub.ui.hooks.ChatInputState
@@ -96,6 +99,7 @@ import me.rerere.rikkahub.ui.hooks.EditStateContent
 import me.rerere.rikkahub.ui.hooks.useEditState
 import me.rerere.rikkahub.utils.base64Decode
 import me.rerere.rikkahub.utils.navigateToChatPage
+import me.rerere.rikkahub.utils.UiState
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import org.koin.core.parameter.parametersOf
@@ -119,6 +123,34 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
     val currentChatModel by vm.currentChatModel.collectAsStateWithLifecycle()
     val enableWebSearch by vm.enableWebSearch.collectAsStateWithLifecycle()
     val errors by vm.errors.collectAsStateWithLifecycle()
+    val initialization = vm.conversationInitialization
+    val appSettings = LocalSettings.current
+    val initializationError = (initialization as? UiState.Error)?.error
+    val sessionAssistantExists = setting.getAssistantById(conversation.assistantId) != null
+    val assistantSelectionReady = !sessionAssistantExists || (
+        setting.getCurrentAssistant().id == conversation.assistantId &&
+            appSettings.getCurrentAssistant().id == conversation.assistantId
+        )
+
+    if (setting.init || appSettings.init || initialization !is UiState.Success || !assistantSelectionReady) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            if (initializationError == null) {
+                CircularProgressIndicator()
+            } else {
+                val initializationErrors = errors.filter { it.conversationId == id }
+                if (initializationErrors.isNotEmpty()) {
+                    ErrorCardsDisplay(
+                        errors = initializationErrors,
+                        onDismissError = vm::dismissError,
+                        onClearAllErrors = vm::clearAllErrors,
+                    )
+                } else {
+                    Text(initializationError.localizedMessage ?: initializationError.toString())
+                }
+            }
+        }
+        return
+    }
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val softwareKeyboardController = LocalSoftwareKeyboardController.current

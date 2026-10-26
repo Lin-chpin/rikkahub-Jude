@@ -95,6 +95,12 @@
   <string name="assistant_page_local_tools_javascript_engine_title">JavaScript 引擎</string>
   <string name="assistant_page_local_tools_time_info_desc">從裝置取得目前日期、星期、時間與時區資訊</string>
   <string name="assistant_page_local_tools_time_info_title">時間資訊</string>
+  <string name="assistant_page_local_tools_voice_call_visual_title">通話視訊與螢幕分享</string>
+  <string name="assistant_page_local_tools_voice_call_visual_desc">允許在通話中開啟視訊和螢幕分享。</string>
+  <string name="assistant_page_local_tools_voice_call_visual_camera_granted">允許在通話中開啟視訊和螢幕分享。</string>
+  <string name="assistant_page_local_tools_voice_call_visual_ocr_desc">允許在通話中開啟視訊和螢幕分享。</string>
+  <string name="assistant_page_local_tools_voice_call_visual_ocr_camera_granted">允許在通話中開啟視訊和螢幕分享。</string>
+  <string name="assistant_page_local_tools_voice_call_visual_model_required">目前聊天模型不支援圖片，且尚未設定可用的 OCR 模型。請先選擇支援圖片的聊天模型，或在設定的模型設定中設定 OCR 模型。</string>
     <string name="assistant_page_local_tools_tts_desc">允許 AI 在一般回覆中混排並儲存 TTS 語音訊息</string>
     <string name="assistant_page_local_tools_tts_title">AI 語音訊息</string>
   <string name="assistant_page_manage_memory_title">管理記憶</string>

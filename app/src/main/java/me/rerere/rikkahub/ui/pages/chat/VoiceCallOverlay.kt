@@ -6,6 +6,9 @@ import android.content.Context
 import android.util.Log
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,9 +37,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -54,6 +54,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -78,8 +79,12 @@ import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 import java.util.Locale
@@ -99,6 +104,14 @@ import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.voice.VoiceCallCompletion
+import me.rerere.rikkahub.data.voice.VoiceCallVisualCapture
+import me.rerere.rikkahub.data.voice.VoiceCallVisualSource
+import me.rerere.rikkahub.data.voice.supportsVoiceCallImages
+import me.rerere.rikkahub.data.voice.canUseVoiceCallVisuals
+import me.rerere.rikkahub.data.voice.toVoiceCallRequestParts
+import me.rerere.rikkahub.data.voice.toVoiceCallRequestImagePart
+import me.rerere.rikkahub.data.voice.toVoiceCallVisualDescriptionParts
+import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.voice.VoiceCallAudioTagMode
 import me.rerere.rikkahub.data.voice.forVoiceCallProvider
 import me.rerere.rikkahub.data.voice.voiceCallRecord
@@ -109,6 +122,9 @@ import me.rerere.rikkahub.data.voice.withoutVoiceCallRealtimeEmotionMarker
 import me.rerere.rikkahub.data.voice.sanitizeVoiceCallTextForTranslation
 import me.rerere.rikkahub.service.ChatRequestMode
 import me.rerere.rikkahub.service.VoiceCallSessionRegistry
+import me.rerere.rikkahub.service.VoiceCallFloatingBallActions
+import me.rerere.rikkahub.service.VoiceCallScreenCaptureService
+import me.rerere.rikkahub.data.ai.transformers.OcrTransformer
 import me.rerere.rikkahub.ui.components.richtext.appendVoiceCallAudioTagAwareText
 import me.rerere.rikkahub.ui.components.ai.AsrButton
 import me.rerere.rikkahub.ui.components.message.CollapsibleTranslationText
@@ -125,9 +141,9 @@ import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.hooks.rememberCustomAsrState
 import me.rerere.rikkahub.ui.components.message.ChatMessageBubbleShape
 import me.rerere.rikkahub.ui.components.message.MessageBubbleSurface
+import me.rerere.rikkahub.ui.components.ai.VoiceCallActionBubble
 import me.rerere.rikkahub.ui.theme.LocalLiquidGlass
 import me.rerere.rikkahub.ui.theme.LocalLiquidGlassHaze
-import me.rerere.rikkahub.ui.theme.liquidGlassChrome
 import me.rerere.tts.provider.TTSProviderSetting
 import me.rerere.tts.provider.isElevenLabsV4
 import me.rerere.tts.provider.isElevenLabsV4Family
@@ -193,6 +209,7 @@ fun VoiceCallOverlay(
     PermissionManager(permissionState = asrPermission)
     val callAsr = rememberCustomAsrState()
     val callAsrState by callAsr.state.collectAsState()
+    val liveConversationJob by vm.conversationJob.collectAsState()
 
     val speechPlayback = rememberVoiceCallSpeechPlaybackState(awaitInitialAssistantReply)
     var keyboardCaptureActive by remember { mutableStateOf(false) }
@@ -206,6 +223,35 @@ fun VoiceCallOverlay(
     val reportedCallState = remember(initialVoiceCallToolCallId) { mutableStateOf(false) }
     var voiceCallResultReported by reportedCallState
     val callScope = rememberCoroutineScope()
+    val visualCapture = remember(conversation.id) { VoiceCallVisualCapture(context.applicationContext) }
+    val visualCameraState by visualCapture.cameraState.collectAsState()
+    val visualScreenState by visualCapture.screenState.collectAsState()
+    val capturingVisualFrame by visualCapture.isCapturing.collectAsState()
+    var recognizingVisual by remember(conversation.id) { mutableStateOf(false) }
+    var cameraPreviewExpanded by remember(conversation.id) { mutableStateOf(false) }
+    val callModel = settings.findModelById(callAssistant.chatModelId ?: settings.chatModelId)
+    val callModelSupportsImages = callModel?.supportsVoiceCallImages() == true
+    val usesOcrFallback = remember(settings, callAssistant, callModelSupportsImages) {
+        !callModelSupportsImages && settings.canUseVoiceCallVisuals(callAssistant)
+    }
+    val supportsCallImages = callModelSupportsImages || usesOcrFallback
+    val visualFeatureEnabled by rememberUpdatedState(callAssistant.voiceCallVisualEnabled)
+    val supportsCallImagesNow by rememberUpdatedState(supportsCallImages)
+    val callModelSupportsImagesNow by rememberUpdatedState(callModelSupportsImages)
+    DisposableEffect(visualCapture) {
+        onDispose {
+            visualCapture.close()
+        }
+    }
+    LaunchedEffect(isHistory, callAssistant.voiceCallVisualEnabled, supportsCallImages) {
+        if (isHistory || !callAssistant.voiceCallVisualEnabled || !supportsCallImages) {
+            visualCapture.setCameraEnabled(false)
+            visualCapture.stopScreenSharing()
+        }
+    }
+    LaunchedEffect(visualCameraState.enabled, visualScreenState.active) {
+        if (!visualCameraState.enabled || visualScreenState.active) cameraPreviewExpanded = false
+    }
     val stopDuplexInput = remember { arrayOf<() -> Unit>({}) }
     var showVoiceCallFlowDialog by remember { mutableStateOf(false) }
     val voiceCallFlowSteps = remember { mutableStateListOf<String>() }
@@ -382,6 +428,7 @@ fun VoiceCallOverlay(
     fun hangUp(failureMessage: String? = null) {
         if (voiceCallResultReported) return
         voiceCallResultReported = true
+        visualCapture.close()
         stopDuplexInput[0]()
         callAsr.stop()
         val closingGeneration = vm.cancelGeneration()
@@ -454,7 +501,7 @@ fun VoiceCallOverlay(
         tts.stop()
     }
 
-    fun sendCapturedText(text: String): Boolean {
+    fun sendCapturedText(text: String, includeVisuals: Boolean = false): Boolean {
         if (voiceCallResultReported) return false
         val contentText = text.trim()
         if (contentText.isBlank()) {
@@ -472,10 +519,84 @@ fun VoiceCallOverlay(
             content = listOf(UIMessagePart.Text(contentText)),
             requestMode = ChatRequestMode.VoiceCall,
             includeVoiceCallConnectedEvent = includeConnectedEvent,
+            requestMessagePartsProvider = {
+                val allowVisuals = includeVisuals && visualFeatureEnabled && supportsCallImagesNow
+                val hadVisualInput = allowVisuals &&
+                    (visualCapture.cameraState.value.enabled || visualCapture.screenState.value.active)
+                val frames = try {
+                    if (hadVisualInput) visualCapture.captureFrames() else emptyList()
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    emptyList()
+                }
+                val includeCapturedFrames = allowVisuals
+                if (hadVisualInput && frames.isEmpty() && includeCapturedFrames) withContext(Dispatchers.Main) {
+                    toaster.show("本轮画面未就绪或采集失败，仅发送语音内容。", type = ToastType.Warning)
+                }
+                when {
+                    !includeCapturedFrames || frames.isEmpty() -> emptyList()
+                    callModelSupportsImagesNow -> frames.toVoiceCallRequestParts()
+                    else -> {
+                        recognizingVisual = true
+                        val recognizedFrames = try {
+                            withContext(Dispatchers.IO) {
+                                frames.map { frame ->
+                                    val source = when (frame.source) {
+                                        VoiceCallVisualSource.CAMERA -> "摄像头画面"
+                                        VoiceCallVisualSource.SCREEN -> "屏幕共享画面"
+                                    }
+                                    source to OcrTransformer.performOcr(
+                                        part = frame.toVoiceCallRequestImagePart(),
+                                        cacheResult = false,
+                                        suppressContentLogs = true,
+                                    )
+                                }
+                            }
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (_: Exception) {
+                            emptyList()
+                        } finally {
+                            recognizingVisual = false
+                        }
+                        val successfulDescriptions = recognizedFrames.filterNot { it.second == "[ERROR, OCR failed]" }
+                        if (successfulDescriptions.size < frames.size) withContext(Dispatchers.Main) {
+                            toaster.show(
+                                if (successfulDescriptions.isEmpty()) {
+                                    "通话画面 OCR 识别失败，本轮仅发送语音内容。"
+                                } else {
+                                    "部分通话画面 OCR 识别失败，已继续发送可识别的画面和语音。"
+                                },
+                                type = ToastType.Warning,
+                            )
+                        }
+                        val descriptionParts = successfulDescriptions.joinToString("\n") { (source, text) ->
+                            "$source：$text"
+                        }.toVoiceCallVisualDescriptionParts()
+                        descriptionParts
+                    }
+                }
+            },
         )
         hasSubmittedUserMessage = true
         onMessageSubmitted()
         return true
+    }
+
+    LaunchedEffect(visualCapture, callId) {
+        VoiceCallFloatingBallActions.events.collect { action ->
+            when (action) {
+                VoiceCallFloatingBallActions.Action.RETURN_TO_CALL -> Unit
+                VoiceCallFloatingBallActions.Action.CAPTURE_AND_SEND -> {
+                    if (visualCameraState.enabled || visualScreenState.active) {
+                        sendCapturedText("请看一下我发送的当前画面。", includeVisuals = true)
+                    } else {
+                        toaster.show("请先开启视频或屏幕共享，再截图发送。", type = ToastType.Warning)
+                    }
+                }
+            }
+        }
     }
 
     fun finishKeyboardInput() {
@@ -675,7 +796,7 @@ fun VoiceCallOverlay(
             state = speechPlayback,
             awaitInitialAssistantReply = awaitInitialAssistantReply,
             speechInput = vm.voiceCallSpeech,
-            loadingJob = loadingJob,
+            loadingJob = vm.conversationJob,
             ttsOnlyReadQuoted = settings.displaySetting.ttsOnlyReadQuoted,
             fullDuplex = fullDuplex,
             tts = tts,
@@ -717,12 +838,43 @@ fun VoiceCallOverlay(
     val dialogTopPadding = if (compactForIme) 10.dp else 20.dp
     val dialogBottomPadding = if (compactForIme) 8.dp else 20.dp
     val aiReplyActive = speechPlayback.isReplyActive(
-        loadingJob = loadingJob,
+        loadingJob = liveConversationJob,
         playbackStatus = playbackState.status,
         currentAssistantId = currentAssistantId,
         currentAssistantTextLength = currentAssistantText.length,
     )
-    val liquidGlass = LocalLiquidGlass.current.enabled
+    val callActivityStatus = when {
+        voiceCallResultReported -> "通话已结束，正在保存记录…"
+        !ttsProviderReady -> "正在连接语音模型..."
+        !ttsAvailable -> "电话里的 AI 声音使用「文本转语音」里选中的语音模型。"
+        !asrPermission.allRequiredPermissionsGranted -> "电话输入需要麦克风权限。"
+        duplexInput.muted -> "聆听已静音，点击按钮恢复聆听。"
+        autoListenEnabled && duplexInput.asrState.status == me.rerere.asr.ASRStatus.Connecting -> "正在连接 ASR..."
+        duplexListening -> "正在持续聆听，识别完成后自动发送；说话时可打断 AI。"
+        callAsrState.isRecording -> "正在使用已配置的 ASR 识别语音。"
+        duplexInput.error != null && autoListenEnabled -> "ASR连接失败，静音后再恢复可重试。"
+        aiReplyActive -> "AI 正在回复中"
+        callAsrState.isAvailable -> "点按语音输入，使用已配置的 ASR。"
+        else -> "未配置 ASR，点按语音输入使用输入法麦克风。"
+    }
+    val floatingCallStatus = when {
+        voiceCallResultReported -> null
+        aiReplyActive -> "AI 正在回复中"
+        duplexInput.muted -> "聆听已静音"
+        autoListenEnabled && duplexInput.asrState.status == me.rerere.asr.ASRStatus.Connecting -> "正在连接 ASR..."
+        duplexListening -> "正在持续聆听"
+        callAsrState.isRecording -> "正在使用已配置的 ASR 识别"
+        else -> null
+    }
+    val floatingStatus = floatingCallStatus.orEmpty()
+    LaunchedEffect(floatingStatus, visualScreenState.active) {
+        if (visualScreenState.active) VoiceCallScreenCaptureService.setFloatingBallStatus(floatingStatus)
+    }
+    LaunchedEffect(visualScreenState.active, asrPermission.allRequiredPermissionsGranted) {
+        if (visualScreenState.active && asrPermission.allRequiredPermissionsGranted) {
+            VoiceCallScreenCaptureService.refreshForegroundForMicrophone()
+        }
+    }
     val callHazeState = rememberHazeState()
 
     Dialog(
@@ -847,20 +999,7 @@ fun VoiceCallOverlay(
                             Spacer(Modifier.height(8.dp))
 
                             Text(
-                                text = when {
-                                    voiceCallResultReported -> "通话已结束，正在保存记录…"
-                                    !ttsProviderReady -> "正在连接语音模型..."
-                                    !ttsAvailable -> "电话里的 AI 声音使用「文本转语音」里选中的语音模型。"
-                                    !asrPermission.allRequiredPermissionsGranted -> "电话输入需要麦克风权限。"
-                                    duplexInput.muted -> "聆听已静音，点击按钮恢复聆听。"
-                                    autoListenEnabled && duplexInput.asrState.status == me.rerere.asr.ASRStatus.Connecting -> "正在连接 ASR..."
-                                    duplexListening -> "正在持续聆听，识别完成后自动发送；说话时可打断 AI。"
-                                    callAsrState.isRecording -> "正在使用已配置的 ASR 识别语音。"
-                                    duplexInput.error != null && autoListenEnabled -> "ASR连接失败，静音后再恢复可重试。"
-                                    aiReplyActive -> "AI 正在回复..."
-                                    callAsrState.isAvailable -> "点按语音输入，使用已配置的 ASR。"
-                                    else -> "未配置 ASR，点按语音输入使用输入法麦克风。"
-                                },
+                                text = callActivityStatus,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .widthIn(max = 520.dp),
@@ -962,19 +1101,22 @@ fun VoiceCallOverlay(
                     }
 
                     if (!isHistory) {
-                    val callActionShape = RoundedCornerShape(50)
+                        VoiceCallVisualControls(
+                            capture = visualCapture,
+                            enabled = !voiceCallResultReported && callAssistant.voiceCallVisualEnabled,
+                            supportsImages = supportsCallImages,
+                            onCaptureAndSend = {
+                                sendCapturedText("请看一下我发送的当前画面。", includeVisuals = true)
+                            },
+                            onError = { toaster.show(it, type = ToastType.Warning) },
+                        )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        FilledTonalButton(
+                        VoiceCallActionBubble(
                             onClick = ::hangUp,
-                            shape = callActionShape,
-                            modifier = if (liquidGlass) Modifier.liquidGlassChrome(callActionShape) else Modifier,
-                            colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = if (liquidGlass) Color.Transparent else MaterialTheme.colorScheme.secondaryContainer,
-                            ),
                         ) {
                             Text("挂断")
                         }
@@ -988,13 +1130,7 @@ fun VoiceCallOverlay(
                                 enabled = !voiceCallResultReported,
                                 onClick = duplexInput::toggleMute,
                             )
-                        } else Button(
-                            shape = callActionShape,
-                            modifier = if (liquidGlass) Modifier.liquidGlassChrome(callActionShape) else Modifier,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (liquidGlass) Color.Transparent else MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                            ),
+                        } else VoiceCallActionBubble(
                             enabled = !voiceCallResultReported && !submittingCallAsr && (
                                 !asrPermission.allRequiredPermissionsGranted ||
                                 !keyboardCaptureActive ||
@@ -1054,6 +1190,52 @@ fun VoiceCallOverlay(
                         }
                      }
                    }
+                }
+
+                BackHandler(enabled = cameraPreviewExpanded) {
+                    cameraPreviewExpanded = false
+                }
+                if (visualCameraState.enabled && !visualScreenState.active) {
+                    Box(
+                        modifier = Modifier
+                            .then(
+                                if (cameraPreviewExpanded) Modifier.fillMaxSize()
+                                else Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(top = 48.dp, end = 8.dp)
+                                    .size(width = 92.dp, height = 128.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                            )
+                            .background(if (cameraPreviewExpanded) Color.Black else Color.Transparent)
+                            .clickable(enabled = !cameraPreviewExpanded) { cameraPreviewExpanded = true },
+                    ) {
+                        VoiceCallCameraPreview(visualCapture, Modifier.fillMaxSize())
+                        if (cameraPreviewExpanded) {
+                            Row(
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                TextButton(onClick = { cameraPreviewExpanded = false }) {
+                                    Text("返回")
+                                }
+                                Row {
+                                    TextButton(onClick = visualCapture::switchCamera) {
+                                        Text("翻转镜头")
+                                    }
+                                    TextButton(onClick = {
+                                        visualCapture.setCameraEnabled(false)
+                                        cameraPreviewExpanded = false
+                                    }) {
+                                        Text("关闭视频")
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             }
@@ -1366,8 +1548,8 @@ private fun voiceCallTitle(
     !ttsAvailable -> "请先到「设置 > 语音服务 > 文本转语音」选择语音模型"
     !micPermissionGranted -> "请允许麦克风权限"
     keyboardCaptureActive -> "等待输入法语音"
+    loading -> "AI 正在回复中"
     asrRecording -> "正在使用 ASR 识别"
-    loading -> "AI 正在回复"
     asrAvailable -> "ASR 语音模式"
     else -> "输入法语音模式"
 }

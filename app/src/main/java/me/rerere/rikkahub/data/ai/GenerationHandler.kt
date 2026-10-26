@@ -106,6 +106,8 @@ class GenerationHandler(
         conversationLorebookIds: Set<Uuid> = emptySet(),
         extraSystemPrompt: String? = null,
         runtimeStateSystemPrompt: String? = null,
+        requestMessageParts: List<UIMessagePart> = emptyList(),
+        requestMessagePartsEnabled: suspend () -> Boolean = { true },
         disabledToolNames: Set<String> = emptySet(),
         maxTokensOverride: Int? = null,
         providerOverride: ProviderSetting? = null,
@@ -207,6 +209,7 @@ class GenerationHandler(
                     conversationLorebookIds = conversationLorebookIds,
                     extraSystemPrompt = extraSystemPrompt,
                     runtimeStateSystemPrompt = runtimeStateSystemPrompt,
+                    requestMessageParts = requestMessageParts.onlyWhile(requestMessagePartsEnabled),
                     maxTokensOverride = maxTokensOverride,
                     conversationId = conversationId,
                     sessionIdOverride = sessionIdOverride,
@@ -437,6 +440,7 @@ class GenerationHandler(
         conversationLorebookIds: Set<Uuid> = emptySet(),
         extraSystemPrompt: String? = null,
         runtimeStateSystemPrompt: String? = null,
+        requestMessageParts: List<UIMessagePart> = emptyList(),
         maxTokensOverride: Int? = null,
         conversationId: Uuid? = null,
         sessionIdOverride: String? = null,
@@ -532,7 +536,8 @@ class GenerationHandler(
             conversationLorebookIds = conversationLorebookIds,
             systemPrompt = configuredSystemPrompt,
             processingStatus = processingStatus,
-        ).withRuntimeContextInstruction(runtimeStateSystemPrompt)
+        ).withRequestMessageParts(requestMessageParts)
+            .withRuntimeContextInstruction(runtimeStateSystemPrompt)
 
         var responseMessages = beginAssistantResponse(
             messages = messages,

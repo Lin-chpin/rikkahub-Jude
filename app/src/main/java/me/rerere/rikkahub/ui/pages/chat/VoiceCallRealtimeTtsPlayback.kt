@@ -5,7 +5,6 @@ import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.core.net.toUri
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
@@ -34,15 +33,13 @@ internal fun BindVoiceCallRealtimeTtsPlayback(
     state: VoiceCallSpeechPlaybackState,
     awaitInitialAssistantReply: Boolean,
     speechInput: StateFlow<VoiceCallSpeechInput>,
-    loadingJob: Job?,
+    loadingJob: StateFlow<Job?>,
     ttsOnlyReadQuoted: Boolean,
     fullDuplex: Boolean,
     tts: CustomTtsState,
     filesManager: FilesManager,
     recordFlow: (String) -> Unit,
 ) {
-    val latestLoadingJob by rememberUpdatedState(loadingJob)
-
     LaunchedEffect(awaitInitialAssistantReply) {
         if (awaitInitialAssistantReply && !state.replyPending) state.beginReply()
     }
@@ -51,7 +48,7 @@ internal fun BindVoiceCallRealtimeTtsPlayback(
         if (!state.replyPending) return@LaunchedEffect
         // Start alongside generation, before the first assistant message or text exists.
         // The reply generation keeps interruption/restart distinct even within one UI frame.
-        val sourceDeadline = SystemClock.elapsedRealtime() + 30_000
+        var sourceDeadline: Long? = null
         var generationJob: Job? = null
         var lastGenerationGate: String? = null
         while (state.replyPending) {
@@ -125,19 +122,34 @@ internal fun BindVoiceCallRealtimeTtsPlayback(
                             input.generationJob == null -> "source_missing"
                             input.generationJob.isCancelled || input.cancelled -> "source_cancelled"
                             input.generationJob === state.excludedSpeechJob -> "previous_source"
-                            latestLoadingJob != null && input.generationJob !== latestLoadingJob -> "job_mismatch"
+                            loadingJob.value != null && input.generationJob !== loadingJob.value -> "job_mismatch"
                             else -> null
                         }
                         if (gate != null) {
-                            if (SystemClock.elapsedRealtime() >= sourceDeadline) {
-                                recordFlow("实时 TTS等待生成源超时")
+                            val latestJobActive = loadingJob.value?.isActive == true
+                            if (!latestJobActive &&
+                                (loadingJob.value?.isCancelled == true ||
+                                    (loadingJob.value == null && input.cancelled))
+                            ) {
+                                recordFlow("实时 TTS生成已取消")
                                 state.completeReply()
                                 return@LaunchedEffect
+                            }
+                            if (latestJobActive) {
+                                sourceDeadline = null
+                            } else {
+                                val deadline = sourceDeadline ?: (SystemClock.elapsedRealtime() + 5_000)
+                                    .also { sourceDeadline = it }
+                                if (SystemClock.elapsedRealtime() >= deadline) {
+                                    recordFlow("实时 TTS等待生成源超时")
+                                    state.completeReply()
+                                    return@LaunchedEffect
+                                }
                             }
                             if (lastGenerationGate != gate) {
                                 recordFlow(
                                     "实时 TTS等待生成源 gate=$gate " +
-                                        "loadingJobActive=${latestLoadingJob?.isActive == true} " +
+                                        "loadingJobActive=${loadingJob.value?.isActive == true} " +
                                         "inputFinished=${input.finished} cancelled=${input.cancelled}"
                                 )
                                 lastGenerationGate = gate

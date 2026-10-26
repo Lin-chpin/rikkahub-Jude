@@ -1,5 +1,7 @@
 package me.rerere.rikkahub.service
 
+import me.rerere.rikkahub.data.voice.supportsVoiceCallImages
+
 import android.app.Application
 import android.app.PendingIntent
 import android.content.Context
@@ -464,6 +466,7 @@ class ChatService(
         answer: Boolean = true,
         requestMode: ChatRequestMode = ChatRequestMode.Normal,
         includeVoiceCallConnectedEvent: Boolean = false,
+        requestMessagePartsProvider: (suspend () -> List<UIMessagePart>)? = null,
     ) {
         if (content.isEmptyInputMessage()) return
 
@@ -554,6 +557,9 @@ class ChatService(
                         voiceCallRuntimeState = voiceCallRuntimeState,
                         voiceCallUserEventState = voiceCallUserEventState,
                         requestTiming = timing,
+                        requestMessageParts = if (requestMode == ChatRequestMode.VoiceCall) {
+                            requestMessagePartsProvider?.invoke().orEmpty()
+                        } else emptyList(),
                     )
                 }
 
@@ -889,6 +895,7 @@ class ChatService(
         additionalSystemPrompt: String? = null,
         allowVoiceCallAudioTags: Boolean = true,
         requestTiming: GenerationTimingTrace? = null,
+        requestMessageParts: List<UIMessagePart> = emptyList(),
     ) {
         val timing = requestTiming ?: if (requestMode == ChatRequestMode.VoiceCall) {
             GenerationTimingTrace("voice_call:$conversationId")
@@ -909,6 +916,15 @@ class ChatService(
         val generationJob = currentCoroutineContext().job
         var speechReply: VoiceCallSpeechSource.Reply? = null
         runCatching {
+            val requestContainsImages = requestMessageParts.any { it is UIMessagePart.Image }
+            if (requestMessageParts.isNotEmpty()) {
+                require(requestMode == ChatRequestMode.VoiceCall) { "画面只能随当前通话发言发送" }
+            }
+            if (requestContainsImages) {
+                require(model.supportsVoiceCallImages()) {
+                    "当前聊天模型未启用图片输入，请选择支持图片的模型后再开启视频或屏幕共享。"
+                }
+            }
 
             // reset suggestions
             updateConversationState(conversationId) { it.copy(chatSuggestions = emptyList()) }
@@ -976,6 +992,20 @@ class ChatService(
             Log.i("PromptCacheContext", "conversation=$conversationId requestMode=$requestMode runtimeState=$voiceCallRuntimeState " +
                 "connectionEvent=${voiceCallUserEventState != null} historyProjection=spoken_text runtimePlacement=tail")
             val generationFlow = generationHandler.generateText(
+                requestMessageParts = requestMessageParts,
+                requestMessagePartsEnabled = {
+                    if (requestMode != ChatRequestMode.VoiceCall || requestMessageParts.isEmpty()) {
+                        true
+                    } else {
+                        val latestSettings = settingsStore.settingsFlow.first()
+                        val latestAssistant = latestSettings.getAssistantById(assistant.id)
+                        latestAssistant?.voiceCallVisualEnabled == true &&
+                            (!requestContainsImages || latestSettings.findModelById(
+                                latestAssistant.chatModelId ?: latestSettings.chatModelId
+                            )?.supportsVoiceCallImages() == true)
+                    }
+                },
+                suppressContentLogs = requestMessageParts.isNotEmpty(),
                 settings = settings,
                 model = model,
                 processingStatus = session.processingStatus,

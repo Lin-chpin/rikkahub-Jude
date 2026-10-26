@@ -2,12 +2,12 @@ package me.rerere.rikkahub.data.ai.transformers
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import me.rerere.ai.core.MessageRole
-import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderManager
@@ -22,6 +22,7 @@ import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.datastore.getCurrentChatModel
+import me.rerere.rikkahub.data.voice.supportsVoiceCallImages
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.get
 import java.io.File
@@ -52,12 +53,12 @@ object OcrTransformer : InputMessageTransformer, KoinComponent {
         ctx: TransformerContext,
         messages: List<UIMessage>,
     ): List<UIMessage> {
-        if (ctx.model.inputModalities.contains(Modality.IMAGE)) {
+        if (ctx.model.supportsVoiceCallImages()) {
             return messages
         }
 
         val hasImages = messages.any { message ->
-            message.parts.any { it is UIMessagePart.Image && it.url.startsWith("file:") }
+            message.parts.any { it is UIMessagePart.Image && it.isOcrInput() }
         }
         if (!hasImages) return messages
 
@@ -68,7 +69,7 @@ object OcrTransformer : InputMessageTransformer, KoinComponent {
                     message.copy(
                         parts = message.parts.map { part ->
                             when {
-                                part is UIMessagePart.Image && part.url.startsWith("file:") -> {
+                                part is UIMessagePart.Image && part.isOcrInput() -> {
                                     UIMessagePart.Text(performOcr(part))
                                 }
 
@@ -83,7 +84,11 @@ object OcrTransformer : InputMessageTransformer, KoinComponent {
         }
     }
 
-    suspend fun performOcr(part: UIMessagePart.Image): String {
+    suspend fun performOcr(
+        part: UIMessagePart.Image,
+        cacheResult: Boolean = true,
+        suppressContentLogs: Boolean = false,
+    ): String {
         val settings = get<SettingsStore>().settingsFlow.value
         val ocrConfig = settings.ocrOpenAIConfig
         val model = if (ocrConfig.enabled) {
@@ -108,11 +113,13 @@ object OcrTransformer : InputMessageTransformer, KoinComponent {
                 ?: throw IllegalStateException("Provider not found for OCR")
         }
         val provider = get<ProviderManager>().getProviderByType(providerSetting)
+        val useCache = cacheResult && part.url.startsWith("file:")
         return runCatching {
-            // Check cache first
-            cache.get(part.url)?.let { cachedResult ->
-                Log.i(TAG, "performOcr: Using cached image OCR result")
-                return cachedResult
+            if (useCache) {
+                cache.get(part.url)?.let { cachedResult ->
+                    Log.i(TAG, "performOcr: Using cached image OCR result")
+                    return cachedResult
+                }
             }
 
             val result = provider.generateText(
@@ -128,6 +135,7 @@ object OcrTransformer : InputMessageTransformer, KoinComponent {
                     model = model,
                     customHeaders = model.customHeaders,
                     customBody = model.customBodies,
+                    suppressContentLogs = suppressContentLogs,
                 ),
             )
             val content = result.choices[0].message?.toText() ?: "[ERROR, OCR failed]"
@@ -139,14 +147,17 @@ object OcrTransformer : InputMessageTransformer, KoinComponent {
                 * The image_file_ocr tag contains a description of an image that the user uploaded to you, not the user's prompt.
             """.trimIndent()
 
-            // Cache the result
-            cache.put(part.url, ocrResult)
+            if (useCache) cache.put(part.url, ocrResult)
             return ocrResult
         }.getOrElse { error ->
+            if (error is CancellationException) throw error
             Log.w(TAG, "performOcr: OCR failed error=${error::class.simpleName}")
             "[ERROR, OCR failed]"
         }
     }
+
+    private fun UIMessagePart.Image.isOcrInput() =
+        url.startsWith("file:") || url.startsWith("data:image/")
 
     private fun OcrOpenAIConfig.toProviderSetting(): ProviderSetting {
         return ProviderSetting.OpenAI(

@@ -106,6 +106,12 @@
   <string name="assistant_page_local_tools_weather_title">天气</string>
   <string name="assistant_page_local_tools_voice_call_desc">允许 AI 在适合时主动邀请你进行语音通话</string>
   <string name="assistant_page_local_tools_voice_call_title">主动语音通话</string>
+  <string name="assistant_page_local_tools_voice_call_visual_title">Call Video and Screen Sharing</string>
+  <string name="assistant_page_local_tools_voice_call_visual_desc">Allow video and screen sharing during calls.</string>
+  <string name="assistant_page_local_tools_voice_call_visual_camera_granted">Allow video and screen sharing during calls.</string>
+  <string name="assistant_page_local_tools_voice_call_visual_ocr_desc">Allow video and screen sharing during calls.</string>
+  <string name="assistant_page_local_tools_voice_call_visual_ocr_camera_granted">Allow video and screen sharing during calls.</string>
+  <string name="assistant_page_local_tools_voice_call_visual_model_required">The chat model cannot accept images and no usable OCR model is configured. Choose an image-capable chat model or configure an OCR model in Model Settings.</string>
   <string name="assistant_page_manage_memory_title">Manage Memory</string>
   <string name="assistant_page_max_tokens">Max Tokens</string>
   <string name="assistant_page_max_tokens_desc">Maximum number of tokens to generate. Leave empty for no limit.</string>

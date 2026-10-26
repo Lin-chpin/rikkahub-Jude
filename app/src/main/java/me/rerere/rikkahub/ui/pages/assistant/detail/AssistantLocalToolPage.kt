@@ -22,8 +22,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.ai.tools.LocalToolOption
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.voice.canUseVoiceCallVisuals
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.CardGroup
+import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.theme.CustomColors
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
@@ -36,6 +38,8 @@ fun AssistantLocalToolPage(id: String) {
         }
     )
     val assistant by vm.assistant.collectAsStateWithLifecycle()
+    val settings = LocalSettings.current
+    val supportsVoiceCallVisuals = settings.canUseVoiceCallVisuals(assistant)
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
     Scaffold(
@@ -57,6 +61,7 @@ fun AssistantLocalToolPage(id: String) {
         AssistantLocalToolContent(
             modifier = Modifier.padding(innerPadding),
             assistant = assistant,
+            supportsVoiceCallVisuals = supportsVoiceCallVisuals,
             onUpdate = { vm.update(it, assistant) }
         )
     }
@@ -66,6 +71,7 @@ fun AssistantLocalToolPage(id: String) {
 private fun AssistantLocalToolContent(
     modifier: Modifier = Modifier,
     assistant: Assistant,
+    supportsVoiceCallVisuals: Boolean,
     onUpdate: (Assistant) -> Unit
 ) {
     fun toggleLocalTool(option: LocalToolOption, enabled: Boolean) {
@@ -227,6 +233,30 @@ private fun AssistantLocalToolContent(
                     Switch(
                         checked = assistant.localTools.contains(LocalToolOption.VoiceCall),
                         onCheckedChange = { toggleLocalTool(LocalToolOption.VoiceCall, it) }
+                    )
+                }
+            )
+            item(
+                headlineContent = {
+                    Text(stringResource(R.string.assistant_page_local_tools_voice_call_visual_title))
+                },
+                supportingContent = {
+                    Text(
+                        stringResource(
+                            if (supportsVoiceCallVisuals) R.string.assistant_page_local_tools_voice_call_visual_desc
+                            else R.string.assistant_page_local_tools_voice_call_visual_model_required
+                        )
+                    )
+                },
+                trailingContent = {
+                    Switch(
+                        checked = assistant.voiceCallVisualEnabled,
+                        enabled = supportsVoiceCallVisuals || assistant.voiceCallVisualEnabled,
+                        onCheckedChange = { enabled ->
+                            if (!enabled || supportsVoiceCallVisuals) {
+                                onUpdate(assistant.copy(voiceCallVisualEnabled = enabled))
+                            }
+                        }
                     )
                 }
             )

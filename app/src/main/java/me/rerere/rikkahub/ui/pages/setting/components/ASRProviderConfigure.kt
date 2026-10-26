@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import me.rerere.asr.ASRProviderSetting
+import me.rerere.asr.providers.normalizeElevenLabsScribeLanguageCode
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.ui.components.ui.FormItem
 import me.rerere.rikkahub.ui.components.ui.OutlinedNumberInput
@@ -342,7 +343,7 @@ private fun ElevenLabsRealtimeASRConfiguration(
     ) {
         OutlinedTextField(
             value = setting.language,
-            onValueChange = { onValueChange(setting.copy(language = it)) },
+            onValueChange = { onValueChange(setting.copy(language = normalizeElevenLabsScribeLanguageCode(it))) },
             modifier = Modifier.fillMaxWidth(),
             placeholder = { Text("zh") }
         )
