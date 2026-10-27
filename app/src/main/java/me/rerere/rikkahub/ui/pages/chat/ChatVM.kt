@@ -17,6 +17,7 @@ import androidx.lifecycle.viewModelScope
 import com.google.firebase.analytics.FirebaseAnalytics
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -24,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import me.rerere.ai.provider.Model
@@ -75,6 +77,20 @@ internal fun resolveLoadingAssistantId(
     latestSettingsAssistantId: Uuid,
 ): Uuid = metadataAssistantId ?: latestSettingsAssistantId
 
+internal fun resolveChatPageSettings(
+    currentSettings: Settings,
+    startupSettings: Settings?,
+): Settings = if (currentSettings.init) startupSettings ?: currentSettings else currentSettings
+
+internal fun canShowChatShell(startupSettings: Settings?, assistantId: Uuid?): Boolean =
+    startupSettings != null && !startupSettings.init && assistantId != null
+
+internal fun canInteractWithChat(
+    conversationReady: Boolean,
+    storedSettingsReady: Boolean,
+    appSettingsReady: Boolean,
+): Boolean = conversationReady && storedSettingsReady && appSettingsReady
+
 class ChatVM(
     id: String,
     private val context: Application,
@@ -87,6 +103,8 @@ class ChatVM(
     private val favoriteRepository: FavoriteRepository,
 ) : ViewModel() {
     private val _conversationId: Uuid = Uuid.parse(id)
+    var startupSettingsSnapshot by mutableStateOf<Settings?>(null)
+        private set
     var conversationAssistantId by mutableStateOf<Uuid?>(null)
         private set
     var conversationInitialization by mutableStateOf<UiState<Unit>>(UiState.Loading)
@@ -132,10 +150,17 @@ class ChatVM(
         // 初始化对话
         viewModelScope.launch {
             try {
-                conversationAssistantId = resolveLoadingAssistantId(
-                    metadataAssistantId = conversationRepo.getConversationAssistantId(_conversationId),
-                    latestSettingsAssistantId = settingsStore.settingsFlowRaw.first().getCurrentAssistant().id,
-                )
+                supervisorScope {
+                    val metadataAssistantId = async {
+                        conversationRepo.getConversationAssistantId(_conversationId)
+                    }
+                    val settingsSnapshot = settingsStore.settingsFlowRaw.first()
+                        .also { startupSettingsSnapshot = it }
+                    conversationAssistantId = resolveLoadingAssistantId(
+                        metadataAssistantId = metadataAssistantId.await(),
+                        latestSettingsAssistantId = settingsSnapshot.getCurrentAssistant().id,
+                    )
+                }
                 chatService.initializeConversation(_conversationId)
                 conversationAssistantId = conversation.value.assistantId
                 context.writeStringPreference("lastConversationId", _conversationId.toString())

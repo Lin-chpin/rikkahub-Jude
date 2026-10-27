@@ -261,6 +261,7 @@ private data class MarkdownParseResult(
     val preprocessed: String,
     val astTree: ASTNode,
     val hasHtml: Boolean,
+    val htmlSegments: List<MarkdownHtmlSegment>,
 )
 
 private fun ASTNode.containsHtml(): Boolean {
@@ -271,7 +272,12 @@ private fun ASTNode.containsHtml(): Boolean {
 private fun parseMarkdown(content: String): MarkdownParseResult {
     val preprocessed = preProcess(content)
     val astTree = parser.buildMarkdownTreeFromString(preprocessed)
-    return MarkdownParseResult(preprocessed, astTree, astTree.containsHtml())
+    return MarkdownParseResult(
+        preprocessed = preprocessed,
+        astTree = astTree,
+        hasHtml = astTree.containsHtml(),
+        htmlSegments = splitMarkdownHtmlSegments(content),
+    )
 }
 
 @Composable
@@ -306,7 +312,44 @@ fun MarkdownBlock(
         }
     }
 
-    if (data.hasHtml && !renderScriptedHtml) {
+    val hasHtmlFragments = data.htmlSegments.any { it is MarkdownHtmlSegment.HtmlFragment }
+    if (hasHtmlFragments) {
+        ProvideTextStyle(style) {
+            Column(modifier = modifier.padding(horizontal = 4.dp)) {
+                data.htmlSegments.fastForEach { segment ->
+                    when (segment) {
+                        is MarkdownHtmlSegment.Markdown -> {
+                            if (segment.content.isNotBlank()) {
+                                if (renderScriptedHtml) {
+                                    MarkdownBlock(
+                                        content = segment.content,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        style = style,
+                                        onClickCitation = onClickCitation,
+                                        renderScriptedHtml = true,
+                                    )
+                                } else {
+                                    MarkdownNew(
+                                        content = segment.content,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        style = style,
+                                        onClickCitation = onClickCitation,
+                                    )
+                                }
+                            }
+                        }
+
+                        is MarkdownHtmlSegment.HtmlFragment -> {
+                            SillyTavernHtmlPreview(
+                                html = segment.content,
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    } else if (data.hasHtml && !renderScriptedHtml) {
         MarkdownNew(
             content = content,
             modifier = modifier,
@@ -672,6 +715,7 @@ private fun MarkdownNode(
                 SillyTavernHtmlPreview(
                     html = code,
                     modifier = Modifier.padding(bottom = 4.dp).fillMaxWidth(),
+                    allowInlineScripts = true,
                 )
             } else {
                 HighlightCodeBlock(

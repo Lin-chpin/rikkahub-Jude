@@ -95,8 +95,10 @@ import me.rerere.rikkahub.data.model.memoryScope
 import me.rerere.rikkahub.data.model.replaceRegexes
 import me.rerere.rikkahub.data.voice.withoutVoiceCallAudioTagsForChatDisplay
 import me.rerere.rikkahub.ui.components.richtext.MarkdownBlock
+import me.rerere.rikkahub.ui.components.richtext.MarkdownHtmlSegment
 import me.rerere.rikkahub.ui.components.richtext.LocalElevenLabsAudioTagAnnotations
 import me.rerere.rikkahub.ui.components.richtext.LocalMarkdownSearchTarget
+import me.rerere.rikkahub.ui.components.richtext.splitMarkdownHtmlSegments
 import me.rerere.rikkahub.ui.components.richtext.ZoomableAsyncImage
 import me.rerere.rikkahub.ui.components.richtext.buildMarkdownPreviewHtml
 import me.rerere.rikkahub.ui.components.ui.ChainOfThought
@@ -1072,7 +1074,7 @@ private fun AssistantTextParagraphs(
     }
 }
 
-private sealed interface AssistantTextSegment {
+internal sealed interface AssistantTextSegment {
     data class Paragraph(val text: String) : AssistantTextSegment
     data class CodeBlock(val text: String) : AssistantTextSegment
     data object Divider : AssistantTextSegment
@@ -1081,7 +1083,25 @@ private sealed interface AssistantTextSegment {
 private val markdownDividerLineRegex = Regex("^[\\s\\u200B\\u200C\\u200D]*([-*_])(?:[\\s\\u200B\\u200C\\u200D]*\\1){2,}[\\s\\u200B\\u200C\\u200D]*$")
 private val markdownCodeFenceLineRegex = Regex("^\\s{0,3}(`{3,}|~{3,}).*$")
 
-private fun String.splitAssistantTextSegments(): List<AssistantTextSegment> {
+internal fun String.splitAssistantTextSegments(): List<AssistantTextSegment> {
+    val segments = mutableListOf<AssistantTextSegment>()
+    splitMarkdownHtmlSegments(this).forEach { segment ->
+        when (segment) {
+            is MarkdownHtmlSegment.Markdown -> {
+                if (segment.content.isNotBlank()) {
+                    segments.addAll(segment.content.splitMarkdownTextSegments())
+                }
+            }
+            is MarkdownHtmlSegment.HtmlFragment -> {
+                val html = segment.content.trim()
+                if (html.isNotBlank()) segments += AssistantTextSegment.Paragraph(html)
+            }
+        }
+    }
+    return segments.ifEmpty { listOf(AssistantTextSegment.Paragraph(this)) }
+}
+
+private fun String.splitMarkdownTextSegments(): List<AssistantTextSegment> {
     val segments = mutableListOf<AssistantTextSegment>()
     val paragraph = StringBuilder()
     val codeBlock = StringBuilder()

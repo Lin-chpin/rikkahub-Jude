@@ -11,7 +11,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
 
@@ -66,6 +68,38 @@ class ChatConversationSettingsTest {
                 conversationReady = false,
                 requestedAssistantId = requestedAssistantId,
                 conversationAssistantId = first.id,
+            ),
+        )
+    }
+
+    @Test
+    fun decodedStartupSettingsShowTheCorrectShellButKeepInteractionsDisabledUntilBaselineIsReady() {
+        val rawSettings = Settings(assistantId = second.id, assistants = listOf(first, second))
+        val derivedSettings = Settings.dummy()
+        val metadataAssistantId = first.id
+
+        val settingsForPage = resolveChatPageSettings(derivedSettings, rawSettings)
+        val loadingAssistantId = resolveLoadingAssistantId(
+            metadataAssistantId = metadataAssistantId,
+            latestSettingsAssistantId = rawSettings.getCurrentAssistant().id,
+        )
+        val canShowShell = canShowChatShell(rawSettings, loadingAssistantId)
+        val canInteract = canInteractWithChat(
+            conversationReady = true,
+            storedSettingsReady = !derivedSettings.init,
+            appSettingsReady = false,
+        )
+
+        assertFalse(rawSettings.init)
+        assertTrue(canShowShell)
+        assertSame(rawSettings, settingsForPage)
+        assertEquals(first.id, settingsForPage.withDisplayedAssistant(loadingAssistantId).getCurrentAssistant().id)
+        assertFalse(canInteract)
+        assertTrue(
+            canInteractWithChat(
+                conversationReady = true,
+                storedSettingsReady = true,
+                appSettingsReady = true,
             ),
         )
     }

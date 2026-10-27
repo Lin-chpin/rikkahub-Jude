@@ -122,6 +122,7 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
     val storedSetting by vm.settings.collectAsStateWithLifecycle()
     val conversation by vm.conversation.collectAsStateWithLifecycle()
     val conversationAssistantId = vm.conversationAssistantId
+    val startupSettings = vm.startupSettingsSnapshot
     val conversationReady = vm.conversationInitialization is UiState.Success
     val displayedAssistantId = resolveChatPageAssistantId(
         conversationReady = conversationReady,
@@ -131,8 +132,9 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
     val displayedConversation = remember(conversation, displayedAssistantId, conversationReady) {
         if (conversationReady) conversation else conversation.copy(assistantId = displayedAssistantId)
     }
-    val setting = remember(storedSetting, displayedAssistantId) {
-        storedSetting.withDisplayedAssistant(displayedAssistantId)
+    val settingsForPage = resolveChatPageSettings(storedSetting, startupSettings)
+    val setting = remember(settingsForPage, displayedAssistantId) {
+        settingsForPage.withDisplayedAssistant(displayedAssistantId)
     }
     val loadingJob by vm.conversationJob.collectAsStateWithLifecycle()
     val processingStatus by vm.processingStatus.collectAsStateWithLifecycle()
@@ -142,8 +144,16 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
     val initialization = vm.conversationInitialization
     val appSettings = LocalSettings.current
     val initializationError = (initialization as? UiState.Error)?.error
-    if (setting.init || appSettings.init || conversationAssistantId == null) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    val pageReady = canInteractWithChat(
+        conversationReady = conversationReady,
+        storedSettingsReady = !storedSetting.init,
+        appSettingsReady = !appSettings.init,
+    )
+    if (!canShowChatShell(startupSettings, conversationAssistantId)) {
+        Box(
+            Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center,
+        ) {
             if (initializationError == null) {
                 CircularProgressIndicator()
             } else {
@@ -186,8 +196,8 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
     val inputState = vm.inputState
 
     // 初始化输入状态（处理传入的 files 和 text 参数）
-    LaunchedEffect(files, text, conversationReady) {
-        if (!conversationReady) return@LaunchedEffect
+    LaunchedEffect(files, text, pageReady) {
+        if (!pageReady) return@LaunchedEffect
         if (files.isNotEmpty()) {
             val localFiles = filesManager.createChatFilesByContents(files)
             val contentTypes = files.mapNotNull { file ->
@@ -215,8 +225,8 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
     }
 
     val chatListState = rememberLazyListState()
-    LaunchedEffect(nodeId, conversation.messageNodes.size, conversationReady) {
-        if (!conversationReady) return@LaunchedEffect
+    LaunchedEffect(nodeId, conversation.messageNodes.size, pageReady) {
+        if (!pageReady) return@LaunchedEffect
         if (!vm.chatListInitialized && conversation.messageNodes.isNotEmpty()) {
             if (nodeId != null) {
                 val index = conversation.messageNodes.indexOfFirst { it.id == nodeId }
@@ -232,7 +242,7 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
 
     CompositionLocalProvider(LocalSettings provides setting) {
         when {
-            !conversationReady -> {
+            !pageReady -> {
                 ChatPageContent(
                     inputState = inputState,
                     loadingJob = loadingJob,
