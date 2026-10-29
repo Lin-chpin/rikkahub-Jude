@@ -292,8 +292,8 @@ class VoiceCallScreenCaptureService : Service() {
             else service.floatingBall?.showAfterCapture()
         }
 
-        internal fun setFloatingBallStatus(status: String) {
-            runningService?.floatingBall?.setStatus(status)
+        internal fun setFloatingBallFeedback(status: String, thumbnail: ByteArray?) {
+            runningService?.floatingBall?.setVisualFeedback(status, thumbnail)
         }
 
         internal fun refreshForegroundForMicrophone() {

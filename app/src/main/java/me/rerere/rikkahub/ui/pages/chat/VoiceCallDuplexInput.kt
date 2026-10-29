@@ -35,6 +35,12 @@ internal class VoiceCallDuplexInputState {
     }
 }
 
+internal fun shouldClearVoiceCallPendingText(
+    enabled: Boolean,
+    permissionGranted: Boolean,
+    muted: Boolean,
+): Boolean = !enabled || permissionGranted || muted
+
 @Composable
 internal fun rememberVoiceCallDuplexInput(
     enabled: Boolean,
@@ -67,7 +73,9 @@ internal fun rememberVoiceCallDuplexInput(
         accepting = enabled && permissionGranted
         state.fallback = false
         state.error = null
-        state.pendingText = ""
+        if (shouldClearVoiceCallPendingText(enabled, permissionGranted, state.muted)) {
+            state.pendingText = ""
+        }
         if (accepting) normalAsr.stop()
         state.stop = {
             accepting = false
@@ -84,7 +92,9 @@ internal fun rememberVoiceCallDuplexInput(
         if (!enabled || !permissionGranted || state.muted) {
             if (accepting) asr.stop()
             accepting = false
-            state.pendingText = ""
+            if (shouldClearVoiceCallPendingText(enabled, permissionGranted, state.muted)) {
+                state.pendingText = ""
+            }
             return@LaunchedEffect
         }
         accepting = true

@@ -5,6 +5,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -17,7 +18,10 @@ internal fun VoiceCallCameraPreview(capture: VoiceCallVisualCapture, modifier: M
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val preview = remember(context, capture) { TextureView(context) }
-    AndroidView(factory = { preview }, modifier = modifier)
+    AndroidView(
+        factory = { preview },
+        modifier = modifier.onSizeChanged { capture.camera.updateTransform() },
+    )
     DisposableEffect(capture, preview, owner) {
         val camera = capture.camera
         camera.attach(preview)

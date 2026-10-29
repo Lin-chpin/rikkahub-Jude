@@ -37,6 +37,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
@@ -105,6 +106,7 @@ import me.rerere.rikkahub.data.voice.chatVoiceReply
 import me.rerere.rikkahub.data.voice.withEditedChatVoiceReplyText
 import me.rerere.rikkahub.data.voice.updateChatVoiceReplySegment
 import me.rerere.rikkahub.data.voice.VoiceCallCompletion
+import me.rerere.rikkahub.data.voice.VoiceCallVisualSendStatus
 import me.rerere.rikkahub.data.voice.isStandaloneVoiceCallRecord
 import me.rerere.rikkahub.data.voice.voiceCallRecord
 import me.rerere.rikkahub.data.voice.voiceCallRecordNodeIdsFullyCoveredBy
@@ -467,6 +469,7 @@ class ChatService(
         requestMode: ChatRequestMode = ChatRequestMode.Normal,
         includeVoiceCallConnectedEvent: Boolean = false,
         requestMessagePartsProvider: (suspend () -> List<UIMessagePart>)? = null,
+        onVoiceCallVisualSendStatus: ((VoiceCallVisualSendStatus) -> Unit)? = null,
     ) {
         if (content.isEmptyInputMessage()) return
 
@@ -551,15 +554,17 @@ class ChatService(
 
                         else -> null
                     }
+                    val requestParts = if (requestMode == ChatRequestMode.VoiceCall) {
+                        requestMessagePartsProvider?.invoke().orEmpty()
+                    } else emptyList()
                     handleMessageComplete(
                         conversationId = conversationId,
                         requestMode = requestMode,
                         voiceCallRuntimeState = voiceCallRuntimeState,
                         voiceCallUserEventState = voiceCallUserEventState,
                         requestTiming = timing,
-                        requestMessageParts = if (requestMode == ChatRequestMode.VoiceCall) {
-                            requestMessagePartsProvider?.invoke().orEmpty()
-                        } else emptyList(),
+                        requestMessageParts = requestParts,
+                        onVoiceCallVisualSendStatus = onVoiceCallVisualSendStatus,
                     )
                 }
 
@@ -570,6 +575,12 @@ class ChatService(
                     )
                 )
             } catch (e: Exception) {
+                if (requestMessagePartsProvider != null) {
+                    onVoiceCallVisualSendStatus?.invoke(
+                        if (e is CancellationException) VoiceCallVisualSendStatus.CANCELLED
+                        else VoiceCallVisualSendStatus.FAILED,
+                    )
+                }
                 if (e is CancellationException) throw e
                 timing?.mark(if (e is CancellationException) "send_cancelled" else "send_failed")
                 e.printStackTrace()
@@ -896,6 +907,7 @@ class ChatService(
         allowVoiceCallAudioTags: Boolean = true,
         requestTiming: GenerationTimingTrace? = null,
         requestMessageParts: List<UIMessagePart> = emptyList(),
+        onVoiceCallVisualSendStatus: ((VoiceCallVisualSendStatus) -> Unit)? = null,
     ) {
         val timing = requestTiming ?: if (requestMode == ChatRequestMode.VoiceCall) {
             GenerationTimingTrace("voice_call:$conversationId")
@@ -905,7 +917,10 @@ class ChatService(
         val initialConversation = getConversationFlow(conversationId).value
         val assistant = settings.getAssistantById(initialConversation.assistantId)
             ?: settings.getCurrentAssistant()
-        val model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId) ?: return
+        val model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId) ?: run {
+            onVoiceCallVisualSendStatus?.invoke(VoiceCallVisualSendStatus.FAILED)
+            return
+        }
 
         val senderName = if (assistant.useAssistantAvatar) {
             assistant.name.ifEmpty { context.getString(R.string.assistant_page_default_assistant) }
@@ -915,6 +930,7 @@ class ChatService(
 
         val generationJob = currentCoroutineContext().job
         var speechReply: VoiceCallSpeechSource.Reply? = null
+        var visualResponseReported = false
         runCatching {
             val requestContainsImages = requestMessageParts.any { it is UIMessagePart.Image }
             if (requestMessageParts.isNotEmpty()) {
@@ -1005,7 +1021,7 @@ class ChatService(
                             )?.supportsVoiceCallImages() == true)
                     }
                 },
-                suppressContentLogs = requestMessageParts.isNotEmpty(),
+                suppressContentLogs = requestMode == ChatRequestMode.VoiceCall || requestMessageParts.isNotEmpty(),
                 settings = settings,
                 model = model,
                 processingStatus = session.processingStatus,
@@ -1152,7 +1168,11 @@ class ChatService(
                     }
                 }
 
-                generationFlow.onCompletion {
+                generationFlow.onStart {
+                    onVoiceCallVisualSendStatus?.invoke(
+                        VoiceCallVisualSendStatus.GENERATION_FLOW_COLLECTION_STARTED,
+                    )
+                }.onCompletion {
                     if (session.getJob() !== generationJob) return@onCompletion
                     timing?.mark("generation_flow_completed")
                     // 取消 Live Update 通知
@@ -1203,6 +1223,10 @@ class ChatService(
                 }.collect { chunk ->
                     currentCoroutineContext().ensureActive()
                     if (session.getJob() !== generationJob) throw CancellationException("Generation replaced")
+                    if (!visualResponseReported) {
+                        visualResponseReported = true
+                        onVoiceCallVisualSendStatus?.invoke(VoiceCallVisualSendStatus.RESPONSE_RECEIVED)
+                    }
                     when (chunk) {
                         is GenerationChunk.Messages -> {
                             val chunkMessages = chunk.messages
@@ -1393,6 +1417,10 @@ class ChatService(
                 )
             }
         }.onFailure {
+            onVoiceCallVisualSendStatus?.invoke(
+                if (it is CancellationException) VoiceCallVisualSendStatus.CANCELLED
+                else VoiceCallVisualSendStatus.FAILED,
+            )
             speechReply?.finish(cancelled = true)
             // 取消 Live Update 通知
             cancelLiveUpdateNotification(conversationId)
@@ -1410,7 +1438,11 @@ class ChatService(
             Logging.log(TAG, "handleMessageComplete: $it")
             Logging.log(TAG, it.stackTraceToString())
         }.onSuccess {
-            if (getOrCreateSession(conversationId).getJob() !== generationJob) return@onSuccess
+            if (getOrCreateSession(conversationId).getJob() !== generationJob) {
+                onVoiceCallVisualSendStatus?.invoke(VoiceCallVisualSendStatus.CANCELLED)
+                return@onSuccess
+            }
+            onVoiceCallVisualSendStatus?.invoke(VoiceCallVisualSendStatus.COMPLETED)
             val finalConversation = getConversationFlow(conversationId).value
             speechReply?.publish(finalConversation.currentMessages)
             speechReply?.finish()

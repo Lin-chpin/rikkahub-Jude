@@ -14,10 +14,7 @@ internal fun Model.supportsVoiceCallImages(): Boolean =
     Modality.IMAGE in inputModalities ||
         Modality.IMAGE in ModelRegistry.MODEL_INPUT_MODALITIES.getData(modelId)
 
-internal fun Settings.canUseVoiceCallVisuals(assistant: Assistant): Boolean {
-    val chatModel = findModelById(assistant.chatModelId ?: chatModelId)
-    if (chatModel?.supportsVoiceCallImages() == true) return true
-
+internal fun Settings.hasConfiguredVoiceCallOcr(): Boolean {
     val separateOcr = ocrOpenAIConfig
     if (separateOcr.enabled) {
         return separateOcr.modelId.isNotBlank() && separateOcr.baseUrl.isNotBlank()
@@ -26,6 +23,10 @@ internal fun Settings.canUseVoiceCallVisuals(assistant: Assistant): Boolean {
     val ocrModel = ocrModelId?.let(::findModelById) ?: return false
     return ocrModel.supportsVoiceCallImages() && ocrModel.findProvider(providers)?.enabled == true
 }
+
+internal fun Settings.canUseVoiceCallVisuals(assistant: Assistant): Boolean =
+    findModelById(assistant.chatModelId ?: chatModelId)?.supportsVoiceCallImages() == true ||
+        hasConfiguredVoiceCallOcr()
 
 internal fun VoiceCallVisualFrame.toVoiceCallRequestImagePart(): UIMessagePart.Image =
     UIMessagePart.Image("data:image/jpeg;base64," + Base64.encode(jpeg))
@@ -45,6 +46,23 @@ internal fun List<VoiceCallVisualFrame>.toVoiceCallRequestParts(): List<UIMessag
             add(frame.toVoiceCallRequestImagePart())
         }
     }
+
+internal fun voiceCallVisualRequestParts(
+    frames: List<VoiceCallVisualFrame>,
+    useOcrModel: Boolean,
+    mainModelSupportsImages: Boolean,
+    recognizedDescriptions: List<Pair<VoiceCallVisualSource, String>>,
+): List<UIMessagePart> = when {
+    useOcrModel -> recognizedDescriptions.joinToString("\n") { (source, text) ->
+        val label = when (source) {
+            VoiceCallVisualSource.CAMERA -> "摄像头画面"
+            VoiceCallVisualSource.SCREEN -> "屏幕共享画面"
+        }
+        "$label：$text"
+    }.toVoiceCallVisualDescriptionParts()
+    mainModelSupportsImages -> frames.toVoiceCallRequestParts()
+    else -> emptyList()
+}
 
 internal fun String.toVoiceCallVisualDescriptionParts(): List<UIMessagePart> =
     trim().takeIf(String::isNotEmpty)?.let { description ->

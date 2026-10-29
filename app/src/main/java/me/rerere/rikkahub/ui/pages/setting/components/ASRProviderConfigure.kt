@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -229,7 +230,12 @@ private fun DashScopeASRConfiguration(
             value = setting.language,
             onValueChange = { onValueChange(setting.copy(language = it)) },
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("zh") }
+            placeholder = {
+                Text(
+                    stringResource(R.string.setting_asr_configure_language_auto_placeholder),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         )
     }
 
@@ -345,7 +351,12 @@ private fun ElevenLabsRealtimeASRConfiguration(
             value = setting.language,
             onValueChange = { onValueChange(setting.copy(language = normalizeElevenLabsScribeLanguageCode(it))) },
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("zh") }
+            placeholder = {
+                Text(
+                    stringResource(R.string.setting_asr_configure_language_auto_placeholder),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         )
     }
 }

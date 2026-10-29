@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.util.Log
+import android.view.HapticFeedbackConstants
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -81,7 +82,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
@@ -107,7 +108,9 @@ import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.voice.VoiceCallCompletion
 import me.rerere.rikkahub.data.voice.VoiceCallVisualCapture
-import me.rerere.rikkahub.data.voice.VoiceCallVisualRequest
+import me.rerere.rikkahub.data.voice.VoiceCallVisualRoundState
+import me.rerere.rikkahub.data.voice.VoiceCallVisualRoundStatus
+import me.rerere.rikkahub.data.voice.VoiceCallVisualSendStatus
 import me.rerere.rikkahub.data.voice.supportsVoiceCallImages
 import me.rerere.rikkahub.data.voice.canUseVoiceCallVisuals
 import me.rerere.rikkahub.data.voice.prepareRequest
@@ -149,7 +152,6 @@ import me.rerere.tts.provider.isElevenLabsV4
 import me.rerere.tts.provider.isElevenLabsV4Family
 import org.koin.compose.koinInject
 
-private const val VOICE_CALL_VISUAL_SPEECH_START_TIMEOUT_MS = 2_000L
 private const val VOICE_CALL_VISUAL_DEFAULT_QUESTION = "请看一下我发送的当前画面。"
 
 @Composable
@@ -227,15 +229,13 @@ fun VoiceCallOverlay(
     var voiceCallResultReported by reportedCallState
     val callScope = rememberCoroutineScope()
     val visualCapture = remember(conversation.id) { VoiceCallVisualCapture(context.applicationContext) }
-    var pendingVisualRequest by remember(conversation.id) {
-        mutableStateOf<Deferred<VoiceCallVisualRequest>?>(null)
-    }
+    val visualRound = remember(conversation.id) { VoiceCallVisualRoundState() }
+    val visualRoundState by visualRound.state.collectAsState()
     var visualSpeechStarted by remember(conversation.id) { mutableStateOf(false) }
-    var visualSpeechTimeout by remember(conversation.id) { mutableStateOf<Job?>(null) }
     val visualCameraState by visualCapture.cameraState.collectAsState()
     val visualScreenState by visualCapture.screenState.collectAsState()
-    val capturingVisualFrame by visualCapture.isCapturing.collectAsState()
-    var recognizingVisual by remember(conversation.id) { mutableStateOf(false) }
+    val capturingVisualFrame = visualRoundState.isCapturing
+    val recognizingVisual = visualRoundState.isRecognizing
     var cameraPreviewExpanded by remember(conversation.id) { mutableStateOf(false) }
     val callModel = settings.findModelById(callAssistant.chatModelId ?: settings.chatModelId)
     val callModelSupportsImages = callModel?.supportsVoiceCallImages() == true
@@ -254,8 +254,7 @@ fun VoiceCallOverlay(
     }
     DisposableEffect(conversation.id) {
         onDispose {
-            visualSpeechTimeout?.cancel()
-            pendingVisualRequest?.cancel()
+            visualRound.clear()
         }
     }
     LaunchedEffect(isHistory, callAssistant.voiceCallVisualEnabled, supportsCallImages) {
@@ -509,8 +508,16 @@ fun VoiceCallOverlay(
         return true
     }
 
+    val aiReplyActive = speechPlayback.isReplyActive(
+        loadingJob = liveConversationJob,
+        playbackStatus = playbackState.status,
+        currentAssistantId = currentAssistantId,
+        currentAssistantTextLength = currentAssistantText.length,
+    )
+
     fun interruptCurrentReplyForInput() {
         if (voiceCallResultReported) return
+        if (aiReplyActive) visualRound.interruptSubmission()
         speechPlayback.interruptReply(currentAssistantId)
         vm.stopGeneration()
         tts.stop()
@@ -518,7 +525,7 @@ fun VoiceCallOverlay(
 
     fun sendCapturedText(
         text: String,
-        visualRequest: Deferred<VoiceCallVisualRequest>? = null,
+        visualSessionId: String? = null,
     ): Boolean {
         if (voiceCallResultReported) return false
         val contentText = text.trim()
@@ -526,6 +533,9 @@ fun VoiceCallOverlay(
             toaster.show("没有识别到语音", type = ToastType.Warning)
             return false
         }
+        val activeVisualSessionId = visualSessionId?.takeIf(visualRound::isCurrent)
+        val visualAttemptId = activeVisualSessionId?.let(visualRound::beginSubmission)
+        if (activeVisualSessionId != null && visualAttemptId == null) return false
         if (speechPlayback.isReplyActive(loadingJob, playbackState.status, currentAssistantId, currentAssistantText.length)) {
             tts.stop()
         }
@@ -533,35 +543,46 @@ fun VoiceCallOverlay(
         speechPlayback.beginReply(vm.voiceCallSpeech.value.generationJob)
         submittedKeyboardInput = contentText
         val includeConnectedEvent = !hasSubmittedUserMessage
-        val visualPartsProvider: (suspend () -> List<UIMessagePart>)? = visualRequest?.let { request ->
+        val visualPartsProvider: (suspend () -> List<UIMessagePart>)? = activeVisualSessionId?.let { sessionId ->
                 {
                     val prepared = try {
-                        request.await()
+                        visualRound.preparedRequest(sessionId)
                     } catch (error: CancellationException) {
                         throw error
                     }
-                    withContext(Dispatchers.Main) {
-                        if (prepared.hadActiveSource && prepared.capturedFrameCount == 0) {
-                            toaster.show("本轮画面未就绪或采集失败，仅发送语音内容。", type = ToastType.Warning)
-                        } else if (prepared.failedOcrCount > 0) {
-                            toaster.show(
-                                if (prepared.failedOcrCount == prepared.capturedFrameCount) {
-                                    "通话画面 OCR 识别失败，本轮仅发送语音内容。"
-                                } else {
-                                    "部分通话画面 OCR 识别失败，已继续发送可识别的画面和语音。"
-                                },
-                                type = ToastType.Warning,
-                            )
+                    if (prepared == null) {
+                        emptyList()
+                    } else {
+                        withContext(Dispatchers.Main) {
+                            if (prepared.hadActiveSource && prepared.capturedFrameCount == 0) {
+                                toaster.show("本轮画面未就绪或采集失败，仅发送语音内容。", type = ToastType.Warning)
+                            } else if (prepared.failedOcrCount > 0) {
+                                toaster.show(
+                                    if (prepared.failedOcrCount == prepared.capturedFrameCount) {
+                                        "通话画面 OCR 识别失败，本轮仅发送语音内容。"
+                                    } else {
+                                        "部分通话画面 OCR 识别失败，已继续发送可识别的画面和语音。"
+                                    },
+                                    type = ToastType.Warning,
+                                )
+                            }
                         }
+                        prepared.parts
                     }
-                    prepared.parts
                 }
             }
+        val visualSendStatusCallback: ((VoiceCallVisualSendStatus) -> Unit)? =
+            if (activeVisualSessionId != null && visualAttemptId != null) {
+                { status: VoiceCallVisualSendStatus ->
+                    visualRound.submissionStatus(activeVisualSessionId, visualAttemptId, status)
+                }
+            } else null
         vm.handleMessageSend(
             content = listOf(UIMessagePart.Text(contentText)),
             requestMode = ChatRequestMode.VoiceCall,
             includeVoiceCallConnectedEvent = includeConnectedEvent,
             requestMessagePartsProvider = visualPartsProvider,
+            onVoiceCallVisualSendStatus = visualSendStatusCallback,
         )
         hasSubmittedUserMessage = true
         onMessageSubmitted()
@@ -711,16 +732,15 @@ fun VoiceCallOverlay(
 
     fun finishVisualQuestion(
         text: String,
-        request: Deferred<VoiceCallVisualRequest>? = pendingVisualRequest,
-    ) {
-        if (request == null || pendingVisualRequest !== request) return
-        pendingVisualRequest = null
-        visualSpeechTimeout?.cancel()
-        visualSpeechTimeout = null
+        sessionId: String? = visualRound.currentSessionId(),
+    ): Boolean {
+        if (sessionId == null || !visualRound.isCurrent(sessionId)) return false
+        if (visualRoundState.status == VoiceCallVisualRoundStatus.SENDING ||
+            visualRoundState.status == VoiceCallVisualRoundStatus.SENT || visualRoundState.completed
+        ) return false
+        val question = text.ifBlank { VOICE_CALL_VISUAL_DEFAULT_QUESTION }
         visualSpeechStarted = false
-        if (!sendCapturedText(text.ifBlank { VOICE_CALL_VISUAL_DEFAULT_QUESTION }, request)) {
-            request.cancel()
-        }
+        return sendCapturedText(question, sessionId)
     }
 
     val duplexInput = rememberVoiceCallDuplexInput(
@@ -728,67 +748,76 @@ fun VoiceCallOverlay(
         permissionGranted = asrPermission.allRequiredPermissionsGranted,
         providerId = settings.getSelectedASRProvider()?.id,
         onSpeechStarted = {
-            if (pendingVisualRequest != null && !visualSpeechStarted) {
-            }
-            if (pendingVisualRequest != null) {
-                visualSpeechStarted = true
-                visualSpeechTimeout?.cancel()
-                visualSpeechTimeout = null
-            }
+            if (visualRound.currentSessionId() != null) visualSpeechStarted = true
         },
         onEmptyFinal = {
-            finishVisualQuestion(VOICE_CALL_VISUAL_DEFAULT_QUESTION)
+            val sessionId = visualRound.currentSessionId()
+            if (sessionId != null) finishVisualQuestion("", sessionId)
         },
         onInterrupt = {
             if (!voiceCallResultReported) interruptCurrentReplyForInput()
         },
         onSubmit = { text ->
-            if (pendingVisualRequest != null) finishVisualQuestion(text)
-            else sendCapturedText(text)
+            val sessionId = visualRound.currentSessionId()
+            if (sessionId == null || !finishVisualQuestion(text, sessionId)) {
+                visualSpeechStarted = false
+                sendCapturedText(text)
+            }
         },
     )
     stopDuplexInput[0] = duplexInput.stop
-    val autoListenEnabled = !isHistory && duplexInput.asrState.isAvailable
+    val autoListenConfigured = !isHistory && duplexInput.asrState.isAvailable
+    val autoListenEnabled = autoListenConfigured && asrPermission.allRequiredPermissionsGranted
     val duplexListening = autoListenEnabled && !duplexInput.muted &&
         duplexInput.asrState.status == me.rerere.asr.ASRStatus.Listening && duplexInput.error == null
+    val visualPreparationTitle = if (visualRoundState.isPreparingGeneration) {
+        if (recognizingVisual) "正在识图中" else "正在准备画面"
+    } else null
+    val aiReplyDisplayActive = aiReplyActive && visualPreparationTitle == null
 
     fun startVisualQuestion() {
+        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
         if (isHistory || !visualFeatureEnabled || !supportsCallImagesNow) return
-        pendingVisualRequest?.cancel()
-        visualSpeechTimeout?.cancel()
         visualSpeechStarted = duplexInput.pendingText.isNotBlank()
         val useOcrModel = useSeparateVisualOcrNow
         val primaryModelSupportsImages = callModelSupportsImagesNow
-        recognizingVisual = useOcrModel
-        val request = callScope.async {
+        val sessionId = UUID.randomUUID().toString()
+        val request = callScope.async(start = CoroutineStart.LAZY) {
             try {
-                visualCapture.prepareRequest(useOcrModel, primaryModelSupportsImages)
-            } finally {
-                withContext(Dispatchers.Main.immediate) { recognizingVisual = false }
+                visualCapture.prepareRequest(
+                    useOcrModel = useOcrModel,
+                    mainModelSupportsImages = primaryModelSupportsImages,
+                    onFramesCaptured = { frames -> visualRound.framesCaptured(sessionId, frames) },
+                    onRecognitionChanged = { recognizing -> visualRound.recognitionChanged(sessionId, recognizing) },
+                ).also { prepared -> visualRound.captureFinished(sessionId, prepared) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                visualRound.captureFailed(sessionId)
+                throw error
             }
         }
-        request.invokeOnCompletion { cause ->
-        }
-        pendingVisualRequest = request
-        if (!duplexListening) {
-            finishVisualQuestion(VOICE_CALL_VISUAL_DEFAULT_QUESTION, request)
-        } else if (!visualSpeechStarted) {
-            visualSpeechTimeout = callScope.launch {
-                delay(VOICE_CALL_VISUAL_SPEECH_START_TIMEOUT_MS)
-                if (pendingVisualRequest === request && !visualSpeechStarted) {
-                    finishVisualQuestion(VOICE_CALL_VISUAL_DEFAULT_QUESTION, request)
-                }
+        visualRound.replace(sessionId, request)
+        request.start()
+        val shouldSubmitImmediately = duplexInput.muted ||
+            !asrPermission.allRequiredPermissionsGranted ||
+            !autoListenConfigured || duplexInput.error != null
+        if (shouldSubmitImmediately) {
+            if (finishVisualQuestion(duplexInput.pendingText, sessionId)) {
+                duplexInput.pendingText = ""
             }
         }
     }
 
+    val currentStartVisualQuestion by rememberUpdatedState(newValue = { startVisualQuestion() })
+    val canCaptureVisualNow by rememberUpdatedState(visualCameraState.enabled || visualScreenState.active)
     LaunchedEffect(visualCapture, callId) {
         VoiceCallFloatingBallActions.events.collect { action ->
             when (action) {
                 VoiceCallFloatingBallActions.Action.RETURN_TO_CALL -> Unit
                 VoiceCallFloatingBallActions.Action.CAPTURE_AND_SEND -> {
-                    if (visualCameraState.enabled || visualScreenState.active) {
-                        startVisualQuestion()
+                    if (canCaptureVisualNow) {
+                        currentStartVisualQuestion()
                     } else {
                         toaster.show("请先开启视频或屏幕共享，再截图发送。", type = ToastType.Warning)
                     }
@@ -796,9 +825,22 @@ fun VoiceCallOverlay(
             }
         }
     }
-    LaunchedEffect(duplexInput.error, pendingVisualRequest) {
-        if (duplexInput.error != null && pendingVisualRequest != null) {
-            finishVisualQuestion(duplexInput.pendingText)
+    LaunchedEffect(duplexInput.error, visualRoundState.sessionId) {
+        val sessionId = visualRound.currentSessionId()
+        if (duplexInput.error != null && sessionId != null) {
+            if (finishVisualQuestion(duplexInput.pendingText, sessionId)) {
+                duplexInput.pendingText = ""
+            }
+        }
+    }
+    LaunchedEffect(asrPermission.allRequiredPermissionsGranted, visualRoundState.sessionId) {
+        val sessionId = visualRound.currentSessionId()
+        if (!asrPermission.allRequiredPermissionsGranted && sessionId != null &&
+            !visualRoundState.completed
+        ) {
+            if (finishVisualQuestion(duplexInput.pendingText, sessionId)) {
+                duplexInput.pendingText = ""
+            }
         }
     }
     LaunchedEffect(callAsrState.status, callAsrState.isAvailable, callAsrState.errorMessage) {
@@ -813,8 +855,10 @@ fun VoiceCallOverlay(
         }
         callAsrState.errorMessage?.let { toaster.show(it, type = ToastType.Error) }
     }
-    LaunchedEffect(autoListenEnabled, asrPermission.allRequiredPermissionsGranted) {
-        if (autoListenEnabled && !asrPermission.allRequiredPermissionsGranted) asrPermission.requestPermissions()
+    LaunchedEffect(autoListenConfigured, asrPermission.allRequiredPermissionsGranted) {
+        if (autoListenConfigured && !asrPermission.allRequiredPermissionsGranted) {
+            asrPermission.requestPermissions()
+        }
     }
     LaunchedEffect(duplexInput.error) {
         duplexInput.error?.let { toaster.show(it, type = ToastType.Warning) }
@@ -885,12 +929,13 @@ fun VoiceCallOverlay(
     val dialogHorizontalPadding = if (compactForIme) 14.dp else 20.dp
     val dialogTopPadding = if (compactForIme) 10.dp else 20.dp
     val dialogBottomPadding = if (compactForIme) 8.dp else 20.dp
-    val aiReplyActive = speechPlayback.isReplyActive(
-        loadingJob = liveConversationJob,
-        playbackStatus = playbackState.status,
-        currentAssistantId = currentAssistantId,
-        currentAssistantTextLength = currentAssistantText.length,
-    )
+    LaunchedEffect(visualRoundState.sessionId, visualRoundState.completed, aiReplyActive, visualSpeechStarted) {
+        val sessionId = visualRoundState.sessionId ?: return@LaunchedEffect
+        if (!visualRoundState.completed || aiReplyActive || visualSpeechStarted) return@LaunchedEffect
+        visualRound.finishReply(sessionId)
+        delay(1_500)
+        visualRound.clear(sessionId)
+    }
     val callActivityStatus = when {
         voiceCallResultReported -> "通话已结束，正在保存记录…"
         !ttsProviderReady -> "正在连接语音模型..."
@@ -901,31 +946,38 @@ fun VoiceCallOverlay(
         duplexListening -> "正在持续聆听，识别完成后自动发送；说话时可打断 AI。"
         callAsrState.isRecording -> "正在使用已配置的 ASR 识别语音。"
         duplexInput.error != null && autoListenEnabled -> "ASR连接失败，静音后再恢复可重试。"
-        aiReplyActive -> "AI 正在回复中"
+        aiReplyDisplayActive -> "AI 正在回复中"
         callAsrState.isAvailable -> "点按语音输入，使用已配置的 ASR。"
         else -> "未配置 ASR，点按语音输入使用输入法麦克风。"
     }
     val visualActivityStatus = when {
         recognizingVisual -> "正在识图中"
         capturingVisualFrame -> "正在截屏中"
+        visualRoundState.status == VoiceCallVisualRoundStatus.SENDING -> "画面正在发送"
+        visualRoundState.status == VoiceCallVisualRoundStatus.SENT -> "画面已发送"
+        visualRoundState.status == VoiceCallVisualRoundStatus.FAILED -> "发送失败，画面已保留"
+        visualRoundState.status == VoiceCallVisualRoundStatus.READY -> "已截图，可以说话"
         visualScreenState.active -> "正在共享屏幕中"
         else -> null
     }
     val floatingCallStatus = when {
         voiceCallResultReported -> null
-        aiReplyActive -> "AI 正在回复中"
+        aiReplyDisplayActive -> "AI 正在回复中"
         duplexInput.muted -> "聆听已静音"
         autoListenEnabled && duplexInput.asrState.status == me.rerere.asr.ASRStatus.Connecting -> "正在连接 ASR..."
         duplexListening -> "正在持续聆听"
         callAsrState.isRecording -> "正在使用已配置的 ASR 识别"
-        recognizingVisual -> "正在识图中"
-        capturingVisualFrame -> "正在截屏中"
         else -> null
     }
     val floatingStatus = listOfNotNull(visualActivityStatus, floatingCallStatus)
         .joinToString(" · ")
-    LaunchedEffect(floatingStatus, visualScreenState.active) {
-        if (visualScreenState.active) VoiceCallScreenCaptureService.setFloatingBallStatus(floatingStatus)
+    LaunchedEffect(floatingStatus, visualScreenState.active, visualRoundState.thumbnail) {
+        if (visualScreenState.active) {
+            VoiceCallScreenCaptureService.setFloatingBallFeedback(
+                status = floatingStatus,
+                thumbnail = visualRoundState.thumbnail?.jpeg,
+            )
+        }
     }
     LaunchedEffect(visualScreenState.active, asrPermission.allRequiredPermissionsGranted) {
         if (visualScreenState.active && asrPermission.allRequiredPermissionsGranted) {
@@ -1023,7 +1075,7 @@ fun VoiceCallOverlay(
                             userName = userName,
                             assistantAvatar = assistantAvatar,
                             assistantName = assistantName,
-                            loading = aiReplyActive,
+                            loading = aiReplyDisplayActive,
                         )
 
                         Spacer(Modifier.height(10.dp))
@@ -1045,9 +1097,10 @@ fun VoiceCallOverlay(
                                     ttsAvailable = ttsAvailable,
                                     ttsProviderReady = ttsProviderReady,
                                     keyboardCaptureActive = keyboardCaptureActive,
+                                    visualPreparationStatus = visualPreparationTitle,
                                     asrAvailable = callAsrState.isAvailable,
                                     asrRecording = duplexListening || callAsrState.isRecording,
-                                    loading = aiReplyActive,
+                                    loading = aiReplyDisplayActive,
                                 ),
                                 style = MaterialTheme.typography.titleLarge,
                                 textAlign = TextAlign.Center,
@@ -1162,6 +1215,9 @@ fun VoiceCallOverlay(
                             capture = visualCapture,
                             enabled = !voiceCallResultReported && callAssistant.voiceCallVisualEnabled,
                             supportsImages = supportsCallImages,
+                            visualRoundState = visualRoundState,
+                            listening = duplexListening,
+                            muted = duplexInput.muted,
                             onCaptureAndSend = ::startVisualQuestion,
                             onError = { toaster.show(it, type = ToastType.Warning) },
                         )
@@ -1184,8 +1240,12 @@ fun VoiceCallOverlay(
                                 muted = duplexInput.muted,
                                 enabled = !voiceCallResultReported,
                                 onClick = {
-                                    if (!duplexInput.muted && pendingVisualRequest != null) {
-                                        finishVisualQuestion(duplexInput.pendingText)
+                                    val sessionId = visualRound.currentSessionId()
+                                    if (!duplexInput.muted && sessionId != null &&
+                                        visualRoundState.status != VoiceCallVisualRoundStatus.SENDING &&
+                                        (visualRoundState.status != VoiceCallVisualRoundStatus.SENT || visualSpeechStarted)
+                                    ) {
+                                        finishVisualQuestion(duplexInput.pendingText, sessionId)
                                     }
                                     duplexInput.toggleMute()
                                 },
@@ -1599,6 +1659,7 @@ private fun voiceCallTitle(
     ttsAvailable: Boolean,
     ttsProviderReady: Boolean,
     keyboardCaptureActive: Boolean,
+    visualPreparationStatus: String?,
     asrAvailable: Boolean,
     asrRecording: Boolean,
     loading: Boolean,
@@ -1608,6 +1669,7 @@ private fun voiceCallTitle(
     !ttsAvailable -> "请先到「设置 > 语音服务 > 文本转语音」选择语音模型"
     !micPermissionGranted -> "请允许麦克风权限"
     keyboardCaptureActive -> "等待输入法语音"
+    visualPreparationStatus != null -> visualPreparationStatus
     loading -> "AI 正在回复中"
     asrRecording -> "正在使用 ASR 识别"
     asrAvailable -> "ASR 语音模式"

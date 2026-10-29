@@ -2,13 +2,16 @@ package me.rerere.rikkahub.service
 
 import android.content.Context
 import android.graphics.Color
+import android.graphics.BitmapFactory
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.provider.Settings
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
+import android.widget.ImageView
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -41,7 +44,10 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
         y = (144 * appContext.resources.displayMetrics.density).toInt()
     }
     private var bubble: LinearLayout? = null
+    private var root: LinearLayout? = null
     private var statusView: TextView? = null
+    private var thumbnailView: ImageView? = null
+    private var thumbnailBytes: ByteArray? = null
     private var expanded = false
     private var status: String? = null
     private var temporarilyHidden = false
@@ -64,6 +70,15 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
         }
     }
 
+    fun setVisualFeedback(value: String, thumbnail: ByteArray?) {
+        setStatus(value)
+        thumbnailBytes = thumbnail
+        root?.let {
+            renderThumbnail(it)
+            renderActions(it)
+        }
+    }
+
     fun hideForCapture() {
         temporarilyHidden = true
         hide()
@@ -80,7 +95,12 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
         if (appVisible || temporarilyHidden || !Settings.canDrawOverlays(appContext)) hide() else show()
     }
 
-    private fun textBubble(label: String, onClick: () -> Unit, size: Float = 14f) = TextView(appContext).apply {
+    private fun textBubble(
+        label: String,
+        onClick: () -> Unit,
+        size: Float = 14f,
+        hapticFeedback: Boolean = false,
+    ) = TextView(appContext).apply {
         text = label
         textSize = size
         setTextColor(Color.WHITE)
@@ -93,7 +113,10 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
             setStroke((2 * appContext.resources.displayMetrics.density).toInt(), Color.WHITE)
         }
         elevation = 8 * appContext.resources.displayMetrics.density
-        setOnClickListener { onClick() }
+        setOnClickListener {
+            if (hapticFeedback) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            onClick()
+        }
     }
 
     private fun show() {
@@ -111,6 +134,8 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
         }
         statusView = main
         root.addView(main)
+        this.root = root
+        renderThumbnail(root)
         renderActions(root)
 
         val touchSlop = ViewConfiguration.get(appContext).scaledTouchSlop
@@ -159,7 +184,8 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
     }
 
     private fun renderActions(root: LinearLayout) {
-        root.removeViews(1, (root.childCount - 1).coerceAtLeast(0))
+        val actionStart = if (thumbnailView == null) 1 else 2
+        root.removeViews(actionStart, (root.childCount - actionStart).coerceAtLeast(0))
         if (!expanded) return
         val density = appContext.resources.displayMetrics.density
         val returnAction = textBubble("返回\n通话", onClick = { launchCall(); expanded = false; bubble?.let(::renderActions) })
@@ -167,7 +193,7 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
             VoiceCallFloatingBallActions.events.tryEmit(VoiceCallFloatingBallActions.Action.CAPTURE_AND_SEND)
             expanded = false
             bubble?.let(::renderActions)
-        })
+        }, hapticFeedback = true)
         listOf(returnAction, captureAction).forEachIndexed { index, view ->
             view.layoutParams = LinearLayout.LayoutParams(diameter, diameter).apply {
                 topMargin = (8 * density).toInt()
@@ -178,7 +204,38 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
         }
     }
 
+    private fun renderThumbnail(root: LinearLayout) {
+        val bytes = thumbnailBytes
+        if (bytes == null) {
+            thumbnailView?.let(root::removeView)
+            thumbnailView = null
+            return
+        }
+        if (thumbnailView != null) {
+            thumbnailView?.setImageBitmap(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+            return
+        }
+        val density = appContext.resources.displayMetrics.density
+        thumbnailView = ImageView(appContext).apply {
+            setImageBitmap(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            contentDescription = "本轮截图预览"
+            background = GradientDrawable().apply {
+                cornerRadius = 8 * density
+                setColor(Color.DKGRAY)
+            }
+            clipToOutline = true
+            layoutParams = LinearLayout.LayoutParams(diameter, (diameter * 0.72f).toInt()).apply {
+                topMargin = (6 * density).toInt()
+            }
+        }.also { root.addView(it, 1) }
+    }
+
     private fun conciseStatus(value: String): String? = when {
+        "发送失败" in value -> "发送失败"
+        "正在发送" in value -> "发送中"
+        "已发送" in value -> "已发送"
+        "已截图" in value -> "可以说话"
         "AI 正在回复中" in value || "AI正在回复" in value -> "AI回复中"
         "正在持续聆听" in value || "正在聆听" in value -> "正在聆听"
         "聆听已静音" in value -> "已静音"
@@ -203,7 +260,9 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
     private fun hide() {
         bubble?.let { view -> runCatching { windowManager.removeView(view) } }
         bubble = null
+        root = null
         statusView = null
+        thumbnailView = null
     }
 
     override fun close() {

@@ -6,13 +6,13 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Matrix
-import android.graphics.RectF
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
+import android.hardware.display.DisplayManager
 import android.os.Handler
 import android.os.Looper
 import android.util.Size
@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.asStateFlow
 
 internal class VoiceCallCameraCapture(private val context: Context) : AutoCloseable {
     private val manager = context.getSystemService(CameraManager::class.java)
+    private val displayManager = context.getSystemService(DisplayManager::class.java)
     private val handler = Handler(Looper.getMainLooper())
     private val mutableState = MutableStateFlow(VoiceCallCameraState())
     val state = mutableState.asStateFlow()
@@ -34,8 +35,16 @@ internal class VoiceCallCameraCapture(private val context: Context) : AutoClosea
     private var resumed = false
     private var ready = false
     private var opening = false
+    private var displayListenerRegistered = false
     private var previewSize = Size(640, 480)
     private var sensorOrientation = 90
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) = Unit
+        override fun onDisplayRemoved(displayId: Int) = Unit
+        override fun onDisplayChanged(displayId: Int) {
+            if (view?.display?.displayId == displayId) transform()
+        }
+    }
     var generation = 0L
         private set
 
@@ -43,6 +52,8 @@ internal class VoiceCallCameraCapture(private val context: Context) : AutoClosea
         if (this.view === view) return
         detach()
         this.view = view
+        displayManager.registerDisplayListener(displayListener, handler)
+        displayListenerRegistered = true
         view.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) = open()
             override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) = transform()
@@ -51,7 +62,9 @@ internal class VoiceCallCameraCapture(private val context: Context) : AutoClosea
                 return true
             }
             override fun onSurfaceTextureUpdated(texture: SurfaceTexture) {
-                if (session != null) ready = true
+                if (session != null) {
+                    ready = true
+                }
             }
         }
         open()
@@ -59,9 +72,15 @@ internal class VoiceCallCameraCapture(private val context: Context) : AutoClosea
 
     fun detach() {
         closeDevice()
+        if (displayListenerRegistered) {
+            displayManager.unregisterDisplayListener(displayListener)
+            displayListenerRegistered = false
+        }
         view?.surfaceTextureListener = null
         view = null
     }
+
+    fun updateTransform() = transform()
 
     fun setResumed(resumed: Boolean) {
         this.resumed = resumed
@@ -187,19 +206,22 @@ internal class VoiceCallCameraCapture(private val context: Context) : AutoClosea
             Surface.ROTATION_270 -> 270
             else -> 0
         }
-        val rotation = if (state.value.isFrontCamera) (sensorOrientation + deviceRotation) % 360
-            else (sensorOrientation - deviceRotation + 360) % 360
-        val buffer = RectF(0f, 0f, previewSize.width.toFloat(), previewSize.height.toFloat())
+        val transform = voiceCallCameraPreviewTransform(
+            viewWidth = preview.width,
+            viewHeight = preview.height,
+            previewWidth = previewSize.width,
+            previewHeight = previewSize.height,
+            sensorOrientationDegrees = sensorOrientation,
+            displayRotationDegrees = deviceRotation,
+            frontFacing = state.value.isFrontCamera,
+        )
+        val centerX = preview.width / 2f
+        val centerY = preview.height / 2f
         val matrix = Matrix().apply {
-            setRectToRect(RectF(0f, 0f, preview.width.toFloat(), preview.height.toFloat()), buffer, Matrix.ScaleToFit.FILL)
-            postRotate(rotation.toFloat(), buffer.centerX(), buffer.centerY())
+            setScale(transform.scaleX, transform.scaleY, centerX, centerY)
+            postRotate(transform.rotationDegrees, centerX, centerY)
+            if (transform.mirrorHorizontally) postScale(-1f, 1f, centerX, centerY)
         }
-        val rotated = RectF()
-        Matrix().apply { setRotate(rotation.toFloat(), buffer.centerX(), buffer.centerY()) }.mapRect(rotated, buffer)
-        val scale = maxOf(preview.width / rotated.width(), preview.height / rotated.height())
-        matrix.postTranslate(-rotated.centerX(), -rotated.centerY())
-        matrix.postScale(if (state.value.isFrontCamera) -scale else scale, scale)
-        matrix.postTranslate(preview.width / 2f, preview.height / 2f)
         preview.setTransform(matrix)
     }
 

@@ -695,6 +695,7 @@
   <string name="setting_asr_configure_language">Language</string>
   <string name="setting_asr_configure_language_code_desc">Optional language code, e.g. zh-CN, en-US, ja-JP</string>
   <string name="setting_asr_configure_language_iso_desc">Optional ISO language code, such as zh or en</string>
+  <string name="setting_asr_configure_language_auto_placeholder">Leave blank to detect the language automatically</string>
   <string name="setting_asr_configure_model">Model</string>
   <string name="setting_asr_configure_model_desc">Realtime transcription model</string>
   <string name="setting_asr_configure_name">Name</string>

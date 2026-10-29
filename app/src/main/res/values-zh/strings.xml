@@ -661,6 +661,7 @@
   <string name="setting_asr_configure_language">语言</string>
   <string name="setting_asr_configure_language_code_desc">可选语言代码，例如 zh-CN、en-US、ja-JP</string>
   <string name="setting_asr_configure_language_iso_desc">可选的 ISO 语言代码，如 zh 或 en</string>
+  <string name="setting_asr_configure_language_auto_placeholder">留空则自动识别语言</string>
   <string name="setting_asr_configure_model">模型</string>
   <string name="setting_asr_configure_model_desc">实时转录模型</string>
   <string name="setting_asr_configure_name">名称</string>

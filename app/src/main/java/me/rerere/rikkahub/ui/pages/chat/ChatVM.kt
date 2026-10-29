@@ -38,6 +38,7 @@ import me.rerere.rikkahub.data.datastore.getAssistantById
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.voice.VoiceCallCompletion
+import me.rerere.rikkahub.data.voice.VoiceCallVisualSendStatus
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.AutoCompressConfig
 import me.rerere.rikkahub.data.model.Avatar
@@ -263,6 +264,7 @@ class ChatVM(
         requestMode: ChatRequestMode = ChatRequestMode.Normal,
         includeVoiceCallConnectedEvent: Boolean = false,
         requestMessagePartsProvider: (suspend () -> List<UIMessagePart>)? = null,
+        onVoiceCallVisualSendStatus: ((VoiceCallVisualSendStatus) -> Unit)? = null,
     ) {
         if (content.isEmptyInputMessage()) return
         analytics.logEvent("ai_send_message", null)
@@ -274,6 +276,7 @@ class ChatVM(
             requestMode = requestMode,
             includeVoiceCallConnectedEvent = includeVoiceCallConnectedEvent,
             requestMessagePartsProvider = requestMessagePartsProvider,
+            onVoiceCallVisualSendStatus = onVoiceCallVisualSendStatus,
         )
     }
 

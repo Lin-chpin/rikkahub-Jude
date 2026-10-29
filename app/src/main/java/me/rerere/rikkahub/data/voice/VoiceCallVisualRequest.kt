@@ -16,6 +16,8 @@ internal data class VoiceCallVisualRequest(
 internal suspend fun VoiceCallVisualCapture.prepareRequest(
     useOcrModel: Boolean,
     mainModelSupportsImages: Boolean,
+    onFramesCaptured: (List<VoiceCallVisualFrame>) -> Unit = {},
+    onRecognitionChanged: (Boolean) -> Unit = {},
 ): VoiceCallVisualRequest {
     val hadActiveSource = cameraState.value.enabled || screenState.value.active
     val frames = try {
@@ -25,6 +27,7 @@ internal suspend fun VoiceCallVisualCapture.prepareRequest(
     } catch (error: Exception) {
         emptyList()
     }
+    onFramesCaptured(frames)
     if (frames.isEmpty()) {
         return VoiceCallVisualRequest(emptyList(), hadActiveSource, 0, 0)
     }
@@ -47,6 +50,7 @@ internal suspend fun VoiceCallVisualCapture.prepareRequest(
     }
 
     val recognizedFrames = try {
+        onRecognitionChanged(true)
         withContext(Dispatchers.IO) {
             frames.map { frame ->
                 frame.source to OcrTransformer.performOcr(
@@ -60,6 +64,8 @@ internal suspend fun VoiceCallVisualCapture.prepareRequest(
         throw error
     } catch (error: Exception) {
         emptyList()
+    } finally {
+        onRecognitionChanged(false)
     }
     val successfulDescriptions = recognizedFrames.filterNot { it.second == "[ERROR, OCR failed]" }
     return VoiceCallVisualRequest(
