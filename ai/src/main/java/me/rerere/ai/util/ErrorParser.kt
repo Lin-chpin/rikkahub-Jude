@@ -6,10 +6,18 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.Response
 
 class HttpException(
-    message: String
-) : RuntimeException(message)
+    message: String,
+    val statusCode: Int? = null,
+    cause: Throwable? = null,
+) : RuntimeException(message, cause)
+
+internal fun Throwable?.withHttpStatus(response: Response?): Throwable? =
+    if (response != null && !response.isSuccessful) {
+        HttpException(this?.message ?: "HTTP ${response.code}", response.code, this)
+    } else this
 
 fun JsonElement.parseErrorDetail(): HttpException {
     return when (this) {

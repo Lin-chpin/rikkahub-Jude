@@ -50,6 +50,11 @@ internal fun parseChatVoiceReplyArguments(arguments: JsonElement): ParsedChatVoi
 fun UIMessage.chatVoiceReply(): UIMessageAnnotation.ChatVoiceReply? =
     annotations.filterIsInstance<UIMessageAnnotation.ChatVoiceReply>().firstOrNull()
 
+internal fun UIMessage.chatVoiceReplyVoiceSegments(): List<Pair<Int, ChatVoiceReplySegment>> =
+    chatVoiceReply()?.segments.orEmpty().mapIndexedNotNull { index, segment ->
+        index.takeIf { segment.type == ChatVoiceReplySegmentType.VOICE }?.let { it to segment }
+    }
+
 fun UIMessage.chatVoiceReplyDraft(): ParsedChatVoiceReply? =
     if (chatVoiceReply() != null) null else parts
         .filterIsInstance<UIMessagePart.Tool>()

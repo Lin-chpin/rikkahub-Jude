@@ -2,6 +2,8 @@ package me.rerere.rikkahub.data.voice
 
 import kotlinx.serialization.json.Json
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.ui.ChatVoiceAudioSegment
+import me.rerere.ai.ui.ChatVoiceReplySegment
 import me.rerere.ai.ui.ChatVoiceReplySegmentType
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -119,6 +121,42 @@ class ChatVoiceReplyTest {
         assertEquals("模型流式前缀一\n\n模型流式前缀二\n\n我好想你\n\n你刚刚没听见吧", materialized.toText())
         assertEquals(3, materialized.chatVoiceReply()?.segments?.size)
         assertEquals("模型流式前缀一\n\n模型流式前缀二", materialized.chatVoiceReply()?.segments?.first()?.text)
+    }
+
+    @Test
+    fun mapsVoiceAudioToSegmentsAfterExistingText() {
+        val message = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(UIMessagePart.Text("已有流式回复")),
+        )
+        val parsed = requireNotNull(parseChatVoiceReplyArguments(Json.parseToJsonElement(
+            """{"segments":[{"type":"text","text":"说明"},{"type":"voice","text":"语音内容"}]}"""
+        )))
+        val prepared = message.withChatVoiceReply(parsed)
+        val voiceSegments = prepared.chatVoiceReplyVoiceSegments()
+
+        assertEquals(listOf(2 to ChatVoiceReplySegment(ChatVoiceReplySegmentType.VOICE, "语音内容")), voiceSegments)
+
+        val audio = ChatVoiceAudioSegment(
+            text = "语音内容",
+            audioUri = "file:///voice.mp3",
+            format = "MP3",
+            sampleRate = 24_000,
+        )
+        val materialized = voiceSegments.fold(prepared) { current, (index, segment) ->
+            current.expandChatVoiceReplySegment(
+                segmentIndex = index,
+                replacements = listOf(segment.copy(audioSegments = listOf(audio))),
+            )
+        }
+        val finalSegments = requireNotNull(materialized.chatVoiceReply()).segments
+
+        assertEquals(
+            listOf(ChatVoiceReplySegmentType.TEXT, ChatVoiceReplySegmentType.TEXT, ChatVoiceReplySegmentType.VOICE),
+            finalSegments.map { it.type },
+        )
+        assertEquals(1, finalSegments.count { it.type == ChatVoiceReplySegmentType.VOICE })
+        assertEquals(1, finalSegments.single { it.type == ChatVoiceReplySegmentType.VOICE }.audioSegments.size)
     }
 
     @Test

@@ -209,7 +209,7 @@
   <string name="backup_page_files">文件</string>
   <string name="backup_page_import_chatbox_desc">导入 ChatBox 提供商配置和完整聊天记录</string>
   <string name="backup_page_import_cherry_studio_desc">导入Cherry Studio提供商配置</string>
-  <string name="backup_page_import_rikkahub_adapter_desc">导入独立适配器生成的 .rhk 文件</string>
+  <string name="backup_page_import_rikkahub_adapter_desc">半成品入口，如果你不知道是什么请直接忽略</string>
   <string name="backup_page_import_desc">导入本地备份文件</string>
   <string name="backup_page_import_export">本地</string>
   <string name="backup_page_import_from_chatbox">从ChatBox导入</string>

@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -82,6 +83,8 @@ import me.rerere.rikkahub.ui.theme.JetbrainsMono
 import me.rerere.rikkahub.utils.toDp
 import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
 import org.intellij.markdown.html.HtmlGenerator
+import org.intellij.markdown.MarkdownElementTypes
+import org.intellij.markdown.ast.ASTNode
 import org.intellij.markdown.parser.MarkdownParser
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
@@ -116,10 +119,58 @@ private val flavour by lazy {
 
 private val parser by lazy { MarkdownParser(flavour) }
 
-private fun generateMarkdownHtml(content: String): String {
+internal fun generateMarkdownHtml(content: String): String {
     val preprocessed = preProcess(content)
     val tree = parser.buildMarkdownTreeFromString(preprocessed)
-    return HtmlGenerator(preprocessed, tree, flavour).generateHtml()
+    val renderableHtml = unindentStyledHtmlCodeBlocks(preprocessed, tree)
+    val renderTree = if (renderableHtml == preprocessed) tree else {
+        parser.buildMarkdownTreeFromString(renderableHtml)
+    }
+    return HtmlGenerator(renderableHtml, renderTree, flavour).generateHtml()
+}
+
+private fun unindentStyledHtmlCodeBlocks(content: String, root: ASTNode): String {
+    val codeBlocks = mutableListOf<Triple<Int, Int, String>>()
+
+    fun visit(node: ASTNode) {
+        if (node.type == MarkdownElementTypes.CODE_BLOCK) {
+            val start = node.startOffset
+            val end = node.endOffset
+            if (start >= 0 && end <= content.length && start < end) {
+                val source = content.substring(start, end)
+                val unindented = source.lineSequence().joinToString("\n") { line ->
+                    when {
+                        line.startsWith("    ") -> line.drop(4)
+                        line.startsWith('\t') -> line.drop(1)
+                        else -> line
+                    }
+                }
+                if (isStyledHtmlFragment(unindented)) {
+                    codeBlocks += Triple(start, end, unindented)
+                }
+            }
+        }
+        node.children.forEach(::visit)
+    }
+
+    visit(root)
+    if (codeBlocks.isEmpty()) return content
+
+    return buildString(content.length) {
+        append(content)
+        codeBlocks.asReversed().forEach { (start, end, replacement) ->
+            replace(start, end, replacement)
+        }
+    }
+}
+
+private fun isStyledHtmlFragment(source: String): Boolean {
+    val body = Jsoup.parseBodyFragment(source).body()
+    val content = body.childNodes().filterNot { node ->
+        node is org.jsoup.nodes.Comment || (node is TextNode && node.text().isBlank())
+    }
+    val root = content.singleOrNull() as? Element ?: return false
+    return root.tagName().equals("div", ignoreCase = true) && root.hasAttr("style")
 }
 
 // ---- Main composable ----
@@ -309,21 +360,30 @@ private fun HtmlDiv(
         }
     }
     val (paddingVertical, paddingHorizontal) = parseCssPadding(properties["padding"])
-    val maxWidth = parseCssLength(properties["max-width"])
-    val radius = parseCssLength(properties["border-radius"]) ?: 0.dp
-    val shape = remember(radius) { RoundedCornerShape(radius) }
+    val maxWidthLength = parseCssLength(properties["max-width"])
+    val maxWidthFraction = parseCssPercentage(properties["max-width"])
+    val radius = parseCssBorderRadius(properties["border-radius"])
+    val shape = remember(radius) {
+        radius?.let {
+            RoundedCornerShape(
+                topStart = it[0],
+                topEnd = it[1],
+                bottomEnd = it[2],
+                bottomStart = it[3],
+            )
+        } ?: RoundedCornerShape(0.dp)
+    }
     val marginRight = parseCssLength(properties["margin-right"]) ?: 0.dp
     val marginTop = parseCssLength(properties["margin-top"]) ?: 0.dp
+    val alignEnd = properties["align-self"].equals("flex-end", ignoreCase = true)
     val opacity = properties["opacity"]?.toFloatOrNull()?.takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 1f
     val background = remember(style) {
         (properties["background-color"] ?: properties["background"])?.let(::parseColor)
     }
     val shadow = remember(style) { parseCssBoxShadow(properties["box-shadow"]) }
-    val modifier = Modifier
-        .absolutePadding(top = marginTop, right = marginRight)
+    val contentModifier = Modifier
         .then(if (opacity < 1f) Modifier.alpha(opacity) else Modifier)
-        .then(maxWidth?.let { Modifier.widthIn(max = it) } ?: Modifier)
-        .then(if (isFlexItem) Modifier else Modifier.fillMaxWidth())
+        .then(maxWidthLength?.let { Modifier.widthIn(max = it) } ?: Modifier)
         .then(
             shadow?.let {
                 Modifier.shadow(
@@ -338,6 +398,13 @@ private fun HtmlDiv(
         .clip(shape)
         .then(background?.let { Modifier.background(it, shape) } ?: Modifier)
         .padding(vertical = paddingVertical, horizontal = paddingHorizontal)
+    val modifier = Modifier
+        .absolutePadding(top = marginTop, right = marginRight)
+        .then(contentModifier)
+        .then(
+            if (isFlexItem || alignEnd || maxWidthFraction != null) Modifier
+            else Modifier.fillMaxWidth(),
+        )
 
     ProvideTextStyle(baseTextStyle.merge(textStyle ?: TextStyle())) {
         if (properties["display"].equals("flex", ignoreCase = true)) {
@@ -350,6 +417,20 @@ private fun HtmlDiv(
                 },
             ) {
                 element.childNodes().fastForEach { HtmlBodyNode(it, onClickCitation, isFlexItem = true) }
+            }
+        } else if (!isFlexItem && (alignEnd || maxWidthFraction != null)) {
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth().absolutePadding(top = marginTop, right = marginRight)) {
+                val percentageMaxWidth = maxWidthFraction
+                    ?.takeIf { constraints.hasBoundedWidth }
+                    ?.let { maxWidth * it }
+                Column(
+                    modifier = Modifier
+                        .then(percentageMaxWidth?.let { Modifier.widthIn(max = it) } ?: Modifier)
+                        .then(contentModifier)
+                        .align(if (alignEnd) Alignment.TopEnd else Alignment.TopStart),
+                ) {
+                    element.childNodes().fastForEach { HtmlBodyNode(it, onClickCitation) }
+                }
             }
         } else {
             Column(modifier = modifier) {
@@ -376,6 +457,23 @@ private fun parseCssLength(value: String?): Dp? {
         else -> null
     }?.takeIf { it.isFinite() && it >= 0f } ?: return null
     return number.dp
+}
+
+internal fun parseCssPercentage(value: String?): Float? {
+    val normalized = value?.trim()?.takeIf { it.endsWith('%') }?.dropLast(1)?.trim() ?: return null
+    val percentage = normalized.toFloatOrNull()?.takeIf { it.isFinite() && it in 0f..100f } ?: return null
+    return percentage / 100f
+}
+
+internal fun parseCssBorderRadius(value: String?): List<Dp>? {
+    val values = value?.trim()?.split(Regex("\\s+"))?.takeIf { it.size in 1..4 } ?: return null
+    val corners = values.map { parseCssLength(it) ?: return null }
+    return when (corners.size) {
+        1 -> List(4) { corners[0] }
+        2 -> listOf(corners[0], corners[1], corners[0], corners[1])
+        3 -> listOf(corners[0], corners[1], corners[2], corners[1])
+        else -> corners
+    }
 }
 
 private fun parseCssBoxShadow(value: String?): Pair<Dp, Color>? {

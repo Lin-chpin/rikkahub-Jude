@@ -68,16 +68,14 @@ class ChatVoiceReplyMaterializer(
             return
         }
 
-        var materialized = conversation.updateReplyMessage(replyMessage.id) { message ->
-            message.withChatVoiceReply(parsedReply)
-        }
+        val completeReply = replyMessage.withChatVoiceReply(parsedReply)
+        val voiceSegments = completeReply.chatVoiceReplyVoiceSegments()
+        var materialized = conversation.updateReplyMessage(replyMessage.id) { completeReply }
 
         try {
-            parsedReply.segments.mapIndexedNotNull { index, segment ->
-                index.takeIf { segment.type == ChatVoiceReplySegmentType.VOICE }
-            }.forEach { segmentIndex ->
+            voiceSegments.forEach { (segmentIndex, segment) ->
                 val audioGroups = audioGenerator.generate(
-                    text = parsedReply.segments[segmentIndex].text,
+                    text = segment.text,
                     provider = provider,
                     englishOnly = settings.displaySetting.ttsEnglishOnly,
                     onlyReadQuoted = settings.displaySetting.ttsOnlyReadQuoted,

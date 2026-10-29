@@ -40,6 +40,8 @@ internal fun rememberVoiceCallDuplexInput(
     enabled: Boolean,
     permissionGranted: Boolean,
     providerId: kotlin.uuid.Uuid?,
+    onSpeechStarted: () -> Unit,
+    onEmptyFinal: () -> Unit,
     onInterrupt: () -> Unit,
     onSubmit: (String) -> Unit,
 ): VoiceCallDuplexInputState {
@@ -49,6 +51,8 @@ internal fun rememberVoiceCallDuplexInput(
     val state = remember { VoiceCallDuplexInputState() }
     val interrupt by rememberUpdatedState(onInterrupt)
     val submit by rememberUpdatedState(onSubmit)
+    val speechStarted by rememberUpdatedState(onSpeechStarted)
+    val emptyFinal by rememberUpdatedState(onEmptyFinal)
     var accepting by remember { mutableStateOf(false) }
     var attempts by remember(providerId) { mutableStateOf(0) }
 
@@ -114,9 +118,16 @@ internal fun rememberVoiceCallDuplexInput(
         asr.startUtterances { utterance ->
             if (!accepting || state.fallback) return@startUtterances
             attempts = 0
+            if (utterance.isSpeechStarted || (!utterance.isFinal && utterance.text.isNotBlank())) {
+                speechStarted()
+            }
             val action = gate.accept(utterance) ?: return@startUtterances
             state.pendingText = if (utterance.isFinal) "" else utterance.text
-            if (action.interrupt) interrupt()
+            if (action.interrupt) {
+                speechStarted()
+                interrupt()
+            }
+            if (utterance.isFinal && action.submittedText == null) emptyFinal()
             action.submittedText?.let(submit)
         }
     }

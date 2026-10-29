@@ -47,6 +47,8 @@ import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.util.KeyRoulette
+import me.rerere.ai.util.HttpException
+import me.rerere.ai.util.withHttpStatus
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.encodeBase64
 import me.rerere.ai.util.json
@@ -55,6 +57,7 @@ import me.rerere.ai.util.removeElements
 import me.rerere.ai.util.stringSafe
 import me.rerere.ai.util.toHeaders
 import me.rerere.common.http.await
+import me.rerere.common.http.withoutAutomaticReplay
 import me.rerere.common.http.jsonPrimitiveOrNull
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -184,43 +187,44 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 .headers(params.customHeaders.toHeaders())
                 .suppressContentLogs(params.suppressContentLogs)
                 .post(
-                    json.encodeToString(requestBody).toRequestBody("application/json".toMediaType())
+                    json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()).withoutAutomaticReplay()
                 )
                 .configureReferHeaders(providerSetting.baseUrl)
                 .build()
         )
 
-        val response = client.newCall(request).await()
-        if (!response.isSuccessful) {
-            if (params.suppressContentLogs) {
-                val failure = privateRequestFailure(null, response.code, response)
-                response.close()
-                throw failure
+        client.newCall(request).await { response ->
+            if (!response.isSuccessful) {
+                if (params.suppressContentLogs) {
+                    val failure = privateRequestFailure(null, response.code, response)
+                    response.close()
+                    throw failure
+                }
+                throw HttpException("Failed to get response: ${response.code} ${response.body?.string()}", response.code)
             }
-            throw Exception("Failed to get response: ${response.code} ${response.body?.string()}")
+
+            val bodyStr = response.body?.string() ?: ""
+            val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
+
+            val candidates = bodyJson["candidates"]!!.jsonArray
+            val usage = bodyJson["usageMetadata"]!!.jsonObject
+
+            val messageChunk = MessageChunk(
+                id = Uuid.random().toString(),
+                model = params.model.modelId,
+                choices = candidates.map { candidate ->
+                    UIMessageChoice(
+                        message = parseMessage(candidate.jsonObject, params.suppressContentLogs),
+                        index = 0,
+                        finishReason = null,
+                        delta = null
+                    )
+                },
+                usage = parseUsageMeta(usage)
+            )
+
+            messageChunk
         }
-
-        val bodyStr = response.body?.string() ?: ""
-        val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
-
-        val candidates = bodyJson["candidates"]!!.jsonArray
-        val usage = bodyJson["usageMetadata"]!!.jsonObject
-
-        val messageChunk = MessageChunk(
-            id = Uuid.random().toString(),
-            model = params.model.modelId,
-            choices = candidates.map { candidate ->
-                UIMessageChoice(
-                    message = parseMessage(candidate.jsonObject, params.suppressContentLogs),
-                    index = 0,
-                    finishReason = null,
-                    delta = null
-                )
-            },
-            usage = parseUsageMeta(usage)
-        )
-
-        messageChunk
     }
 
     override suspend fun streamText(
@@ -246,7 +250,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 .headers(params.customHeaders.toHeaders())
                 .suppressContentLogs(params.suppressContentLogs)
                 .post(
-                    json.encodeToString(requestBody).toRequestBody("application/json".toMediaType())
+                    json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()).withoutAutomaticReplay()
                 )
                 .configureReferHeaders(providerSetting.baseUrl)
                 .build()
@@ -346,7 +350,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     e.printStackTrace()
                     exception = e
                 } finally {
-                    close(exception ?: Exception("Stream failed"))
+                    close(exception.withHttpStatus(response) ?: Exception("Stream failed"))
                 }
             }
 

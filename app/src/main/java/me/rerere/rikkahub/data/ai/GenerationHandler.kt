@@ -4,9 +4,6 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
@@ -31,7 +28,6 @@ import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.registry.ModelRegistry
-import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.SYSTEM_PROMPT_DYNAMIC_SECTION
 import me.rerere.ai.ui.SYSTEM_PROMPT_SECTION_METADATA_KEY
 import me.rerere.ai.ui.SYSTEM_PROMPT_STABLE_SECTION
@@ -39,7 +35,6 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.handleMessageChunk
-import me.rerere.ai.ui.isEmptyUIMessage
 import me.rerere.ai.ui.limitContextBySteps
 import me.rerere.ai.util.GenerationTimingTrace
 import me.rerere.ai.util.textCharacterCount
@@ -62,14 +57,11 @@ import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.voice.CHAT_VOICE_REPLY_TOOL_NAME
 import me.rerere.rikkahub.data.voice.chatVoiceReplyError
 import me.rerere.rikkahub.utils.applyPlaceholders
-import java.io.IOException
 import java.util.Locale
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
 private const val TAG = "GenerationHandler"
-private const val MAX_PROVIDER_STREAM_RETRIES = 3
-private const val INITIAL_PROVIDER_STREAM_RETRY_DELAY_MS = 1_000L
 
 @Serializable
 sealed interface GenerationChunk {
@@ -576,187 +568,64 @@ class GenerationHandler(
                 addAll(model.customBodies)
             }
         )
-        if (stream) {
-            timing.mark("model_request_prepared")
-            aiLoggingManager.addLog(
-                AILogging.Generation(
-                    params = params,
-                    messages = internalMessages,
-                    providerSetting = provider,
-                    stream = true
-                )
-            )
-            val responseBeforeStream = responseMessages
-            val responseBaseMessages = if (responseBeforeStream.lastOrNull()?.role == MessageRole.ASSISTANT) {
-                responseBeforeStream
-            } else {
-                responseBeforeStream + UIMessage(
-                    role = MessageRole.ASSISTANT,
-                    parts = emptyList(),
-                    modelId = model.id,
-                )
-            }
-            var sawAssistantOutput = false
-            var retryCount = 0
-            while (true) {
-                var attemptMessages = responseBaseMessages
-                var attemptSawAssistantOutput = false
-                try {
-                    providerImpl.streamText(
-                        providerSetting = provider,
-                        messages = internalMessages,
-                        params = params
-                    ).collect {
-                        timing.markOnce("provider_first_chunk_consumed", it.id)
-                        timing.firstText(
-                            "provider_text_consumed",
-                            it.id,
-                            it.choices.sumOf { choice ->
-                                (choice.delta ?: choice.message)?.textCharacterCount() ?: 0
-                            },
-                        )
-                        if (it.hasAssistantOutput()) {
-                            attemptSawAssistantOutput = true
-                        }
-                        attemptMessages = attemptMessages.handleMessageChunk(chunk = it, model = model)
-                        it.usage?.let { usage ->
-                            Log.i("PromptCacheUsage", "conversation=$conversationId model=${model.modelId} " +
-                                "promptTokens=${usage.promptTokens} cachedTokens=${usage.cachedTokens}")
-                            attemptMessages = attemptMessages.mapIndexed { index, message ->
-                                if (index == attemptMessages.lastIndex) {
-                                    message.copy(usage = message.usage.merge(usage))
-                                } else {
-                                    message
-                                }
-                            }
-                        }
-                        onUpdateMessages(attemptMessages)
-                        timing.markOnce("first_update_callback_returned")
-                    }
-                    timing.mark(
-                        "provider_stream_collected",
-                        attemptMessages.lastOrNull()?.id?.toString(),
-                        attemptMessages.lastOrNull()?.textCharacterCount(),
-                    )
-                    responseMessages = attemptMessages
-                    sawAssistantOutput = attemptSawAssistantOutput
-                    break
-                } catch (error: Throwable) {
-                    if (error is CancellationException) {
-                        throw error
-                    }
-                    currentCoroutineContext().ensureActive()
-                    if (!isRetryableProviderStreamFailure(error, retryCount)) {
-                        throw error
-                    }
-                    retryCount++
-                    val retryDelay = providerStreamRetryDelayMillis(retryCount - 1)
-                    if (suppressContentLogs) Log.w(TAG, "Provider stream retry $retryCount error=${error::class.simpleName}") else Log.w(
-                        TAG,
-                        "Provider stream failed; retrying in ${retryDelay}ms " +
-                            "($retryCount/$MAX_PROVIDER_STREAM_RETRIES)",
-                        error,
-                    )
-                    delay(retryDelay)
-                }
-            }
-
-            if (!sawAssistantOutput && !responseMessages.hasAssistantOutputAfter(responseBeforeStream)) {
-                Log.w(TAG, "generateInternal: stream completed without assistant output, retrying without stream")
-                aiLoggingManager.addLog(
-                    AILogging.Generation(
-                        params = params,
-                        messages = internalMessages,
-                        providerSetting = provider,
-                        stream = false
-                    )
-                )
-                val chunk = providerImpl.generateText(
-                    providerSetting = provider,
-                    messages = internalMessages,
-                    params = params,
-                )
-                responseMessages = responseMessages.handleMessageChunk(chunk = chunk, model = model)
-                chunk.usage?.let { usage ->
-                    responseMessages = responseMessages.mapIndexed { index, message ->
-                        if (index == responseMessages.lastIndex) {
-                            message.copy(usage = message.usage.merge(usage))
-                        } else {
-                            message
-                        }
-                    }
-                }
-                onUpdateMessages(responseMessages)
-            }
-        } else {
-            aiLoggingManager.addLog(
-                AILogging.Generation(
-                    params = params,
-                    messages = internalMessages,
-                    providerSetting = provider,
-                    stream = false
-                )
-            )
-            val chunk = providerImpl.generateText(
-                providerSetting = provider,
-                messages = internalMessages,
+        timing.mark("model_request_prepared")
+        aiLoggingManager.addLog(
+            AILogging.Generation(
                 params = params,
+                messages = internalMessages,
+                providerSetting = provider,
+                stream = stream,
+            )
+        )
+        if (stream && responseMessages.lastOrNull()?.role != MessageRole.ASSISTANT) {
+            responseMessages = responseMessages + UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = emptyList(),
+                modelId = model.id,
+            )
+        }
+        requestAssistantResponse(
+            provider = providerImpl,
+            providerSetting = provider,
+            messages = internalMessages,
+            params = params,
+            stream = stream,
+        ) { chunk ->
+            timing.markOnce("provider_first_chunk_consumed", chunk.id)
+            timing.firstText(
+                "provider_text_consumed",
+                chunk.id,
+                chunk.choices.sumOf { choice ->
+                    (choice.delta ?: choice.message)?.textCharacterCount() ?: 0
+                },
             )
             responseMessages = responseMessages.handleMessageChunk(chunk = chunk, model = model)
             chunk.usage?.let { usage ->
+                Log.i("PromptCacheUsage", "conversation=$conversationId model=${model.modelId} " +
+                    "promptTokens=${usage.promptTokens} cachedTokens=${usage.cachedTokens}")
                 responseMessages = responseMessages.mapIndexed { index, message ->
                     if (index == responseMessages.lastIndex) {
-                        message.copy(
-                            usage = message.usage.merge(usage)
-                        )
+                        message.copy(usage = message.usage.merge(usage))
                     } else {
                         message
                     }
                 }
             }
             onUpdateMessages(responseMessages)
+            timing.markOnce("first_update_callback_returned")
         }
+        timing.mark(
+            "provider_stream_collected",
+            responseMessages.lastOrNull()?.id?.toString(),
+            responseMessages.lastOrNull()?.textCharacterCount(),
+        )
     }
-
     private fun String.toSystemPromptPart(section: String) = UIMessagePart.Text(
         text = this,
         metadata = buildJsonObject {
             put(SYSTEM_PROMPT_SECTION_METADATA_KEY, section)
         },
     )
-
-    private fun List<UIMessage>.hasAssistantOutputAfter(before: List<UIMessage>): Boolean {
-        if (size > before.size) {
-            return drop(before.size).any { message ->
-                message.role == MessageRole.ASSISTANT &&
-                    (!message.parts.isEmptyUIMessage() || message.parts.any { it is UIMessagePart.Tool })
-            }
-        }
-
-        val previousLast = before.lastOrNull()
-        val currentLast = lastOrNull()
-        return currentLast?.role == MessageRole.ASSISTANT &&
-            currentLast.parts != previousLast?.parts &&
-            (!currentLast.parts.isEmptyUIMessage() || currentLast.parts.any { it is UIMessagePart.Tool })
-    }
-
-    private fun MessageChunk.hasAssistantOutput(): Boolean {
-        return choices.any { choice ->
-            val message = choice.delta ?: choice.message ?: return@any false
-            message.role == MessageRole.ASSISTANT && message.parts.any { part ->
-                when (part) {
-                    is UIMessagePart.Text -> part.text.isNotBlank()
-                    is UIMessagePart.Reasoning -> part.reasoning.isNotBlank()
-                    is UIMessagePart.Image -> part.url.isNotBlank()
-                    is UIMessagePart.Video -> part.url.isNotBlank()
-                    is UIMessagePart.Audio -> part.url.isNotBlank()
-                    is UIMessagePart.Document -> part.url.isNotBlank()
-                    is UIMessagePart.Tool -> true
-                    else -> true
-                }
-            }
-        }
-    }
 
     fun translateText(
         settings: Settings,
@@ -830,9 +699,3 @@ class GenerationHandler(
         }
     }.flowOn(Dispatchers.IO)
 }
-
-internal fun isRetryableProviderStreamFailure(error: Throwable, retryCount: Int): Boolean =
-    error is IOException && retryCount < MAX_PROVIDER_STREAM_RETRIES
-
-internal fun providerStreamRetryDelayMillis(retryCount: Int): Long =
-    INITIAL_PROVIDER_STREAM_RETRY_DELAY_MS shl retryCount

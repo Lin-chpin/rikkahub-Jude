@@ -231,7 +231,14 @@ class OpenAIRealtimeASRController(
         }
 
         when (val type = event.optString("type")) {
-            "input_audio_buffer.speech_started", "input_audio_buffer.committed" -> {
+            "input_audio_buffer.speech_started" -> {
+                val itemId = event.optString("item_id")
+                if (itemId.isNotEmpty()) {
+                    onUtterance?.invoke(ASRUtterance(itemId, "", false, isSpeechStarted = true))
+                }
+            }
+
+            "input_audio_buffer.committed" -> {
                 val itemId = event.optString("item_id")
                 if (itemId.isNotEmpty()) onUtterance?.invoke(ASRUtterance(itemId, "", false))
             }
