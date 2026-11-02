@@ -88,10 +88,13 @@ object OcrTransformer : InputMessageTransformer, KoinComponent {
         part: UIMessagePart.Image,
         cacheResult: Boolean = true,
         suppressContentLogs: Boolean = false,
+        modelOverride: Model? = null,
     ): String {
         val settings = get<SettingsStore>().settingsFlow.value
         val ocrConfig = settings.ocrOpenAIConfig
-        val model = if (ocrConfig.enabled) {
+        val hasConfiguredOcrApi = ocrConfig.enabled &&
+            ocrConfig.modelId.isNotBlank() && ocrConfig.baseUrl.isNotBlank()
+        val model = if (hasConfiguredOcrApi) {
             ocrConfig.modelId.trim().takeIf { it.isNotBlank() }?.let { modelId ->
                 Model(
                     modelId = modelId,
@@ -102,11 +105,12 @@ object OcrTransformer : InputMessageTransformer, KoinComponent {
             ?: settings.getCurrentChatModel()
         } else {
             settings.ocrModelId?.let(settings::findModelById)
+                ?: modelOverride
                 ?: settings.getCurrentChatModel()
         } ?: throw IllegalStateException(
             "No chat model available for OCR. Configure the chat model in Settings > Model Settings."
         )
-        val providerSetting = if (ocrConfig.enabled) {
+        val providerSetting = if (hasConfiguredOcrApi) {
             ocrConfig.toProviderSetting()
         } else {
             model.findProvider(settings.providers)

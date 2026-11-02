@@ -1,11 +1,15 @@
 package me.rerere.rikkahub.data.voice
 
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import me.rerere.ai.ui.UIMessagePart
 import java.util.UUID
+
+internal const val VOICE_CALL_VISUAL_MAX_IMAGES = 10
 
 internal enum class VoiceCallVisualRoundStatus { CAPTURING, READY, SENDING, SENT, FAILED }
 
@@ -16,23 +20,35 @@ enum class VoiceCallVisualSendStatus {
 internal data class VoiceCallVisualRoundSnapshot(
     val sessionId: String? = null,
     val status: VoiceCallVisualRoundStatus? = null,
-    val thumbnail: VoiceCallVisualFrame? = null,
     val isCapturing: Boolean = false,
     val isRecognizing: Boolean = false,
     val generationFlowStarted: Boolean = false,
     val completed: Boolean = false,
     val failureMessage: String? = null,
+    val capturedImageCount: Int = 0,
+    val recognizedImageCount: Int = 0,
+    val failedImageCount: Int = 0,
 ) {
     val isPreparingGeneration: Boolean
         get() = status == VoiceCallVisualRoundStatus.SENDING && !generationFlowStarted
+
+    val canAddScreenshot: Boolean
+        get() = !isCapturing && (completed ||
+            (status != VoiceCallVisualRoundStatus.SENDING && status != VoiceCallVisualRoundStatus.SENT &&
+                capturedImageCount < VOICE_CALL_VISUAL_MAX_IMAGES))
+
+    val allImagesFailedRecognition: Boolean
+        get() = capturedImageCount > 0 && !isRecognizing && recognizedImageCount == 0 &&
+            failedImageCount >= capturedImageCount
 }
 
-/** Keeps a captured frame and its OCR result only for the active voice-call round. */
+/** Accumulates recognition results for one call turn and never retains captured image bytes. */
 internal class VoiceCallVisualRoundState {
     private data class Round(
         val id: String,
-        val request: Deferred<VoiceCallVisualRequest>,
+        val requests: MutableList<Deferred<VoiceCallVisualRequest>> = mutableListOf(),
         var sendAttemptId: String? = null,
+        var recognitionJobs: Int = 0,
     )
 
     private var round: Round? = null
@@ -45,15 +61,58 @@ internal class VoiceCallVisualRoundState {
 
     @Synchronized
     fun replace(sessionId: String, request: Deferred<VoiceCallVisualRequest>): String {
-        val oldRequest = round?.request
-        round = Round(sessionId, request)
+        round?.requests?.forEach { it.cancel() }
+        round = Round(sessionId, mutableListOf(request))
         mutableState.value = VoiceCallVisualRoundSnapshot(
             sessionId = sessionId,
             status = VoiceCallVisualRoundStatus.CAPTURING,
             isCapturing = true,
         )
-        oldRequest?.cancel()
         return sessionId
+    }
+
+    @Synchronized
+    fun beginCapture(): String? {
+        var current = round
+        if (current == null || mutableState.value.completed) {
+            current?.requests?.forEach { it.cancel() }
+            current = Round(UUID.randomUUID().toString())
+            round = current
+            mutableState.value = VoiceCallVisualRoundSnapshot(
+                sessionId = current.id,
+                status = VoiceCallVisualRoundStatus.CAPTURING,
+                isCapturing = true,
+            )
+            return current.id
+        }
+        val snapshot = mutableState.value
+        if (current.sendAttemptId != null || snapshot.isCapturing ||
+            snapshot.status == VoiceCallVisualRoundStatus.SENT ||
+            snapshot.capturedImageCount >= VOICE_CALL_VISUAL_MAX_IMAGES
+        ) return null
+        mutableState.update {
+            it.copy(
+                status = VoiceCallVisualRoundStatus.CAPTURING,
+                isCapturing = true,
+                failureMessage = null,
+            )
+        }
+        return current.id
+    }
+
+    @Synchronized
+    fun remainingImageCount(sessionId: String): Int =
+        if (round?.id == sessionId) {
+            (VOICE_CALL_VISUAL_MAX_IMAGES - mutableState.value.capturedImageCount).coerceAtLeast(0)
+        } else 0
+
+    @Synchronized
+    fun addCaptureRequest(sessionId: String, request: Deferred<VoiceCallVisualRequest>) {
+        val current = round?.takeIf { it.id == sessionId } ?: run {
+            request.cancel()
+            return
+        }
+        current.requests += request
     }
 
     @Synchronized
@@ -65,21 +124,25 @@ internal class VoiceCallVisualRoundState {
     @Synchronized
     fun framesCaptured(sessionId: String, frames: List<VoiceCallVisualFrame>) {
         if (round?.id != sessionId) return
-        val frame = frames.firstOrNull()
+        val count = minOf(
+            frames.size,
+            VOICE_CALL_VISUAL_MAX_IMAGES - mutableState.value.capturedImageCount,
+        ).coerceAtLeast(0)
         mutableState.update { current ->
             current.copy(
-                status = if (frame == null) current.status else current.statusAfterFrameReady(),
-                thumbnail = frame,
+                status = if (count == 0) current.status else current.statusAfterFrameReady(),
                 isCapturing = false,
-                failureMessage = if (frame == null) "截图未就绪，请重新截屏。" else current.failureMessage,
+                capturedImageCount = current.capturedImageCount + count,
+                failureMessage = if (count == 0 && current.capturedImageCount == 0) "截图未就绪，请重新截屏。" else current.failureMessage,
             )
         }
     }
 
     @Synchronized
     fun recognitionChanged(sessionId: String, recognizing: Boolean) {
-        if (round?.id != sessionId) return
-        mutableState.update { it.copy(isRecognizing = recognizing) }
+        val current = round?.takeIf { it.id == sessionId } ?: return
+        current.recognitionJobs = (current.recognitionJobs + if (recognizing) 1 else -1).coerceAtLeast(0)
+        mutableState.update { it.copy(isRecognizing = current.recognitionJobs > 0) }
     }
 
     @Synchronized
@@ -87,10 +150,10 @@ internal class VoiceCallVisualRoundState {
         if (round?.id != sessionId) return
         mutableState.update {
             it.copy(
-                status = VoiceCallVisualRoundStatus.FAILED,
+                status = if (it.capturedImageCount > 0) VoiceCallVisualRoundStatus.READY else VoiceCallVisualRoundStatus.FAILED,
                 isCapturing = false,
                 isRecognizing = false,
-                failureMessage = "截图失败，请重新截屏。",
+                failureMessage = if (it.capturedImageCount > 0) "新增截图失败，已有识图结果仍可发送。" else "截图失败，请重新截屏。",
             )
         }
     }
@@ -98,37 +161,58 @@ internal class VoiceCallVisualRoundState {
     @Synchronized
     fun captureFinished(sessionId: String, request: VoiceCallVisualRequest) {
         if (round?.id != sessionId) return
-        val attemptInProgress = round?.sendAttemptId != null
+        val currentRound = round ?: return
+        val attemptInProgress = currentRound.sendAttemptId != null
+        val current = mutableState.value
+        val requestRecognizedCount = request.recognizedDescriptions.size.takeIf { it > 0 }
+            ?: if (request.parts.isNotEmpty()) {
+                (request.capturedFrameCount - request.failedOcrCount).coerceAtLeast(0)
+            } else 0
+        val recognizedCount = current.recognizedImageCount + requestRecognizedCount
+        val failedCount = current.failedImageCount + request.failedOcrCount
+        val noImages = current.capturedImageCount == 0 && request.capturedFrameCount == 0
+        val allRecognitionFailed = current.capturedImageCount > 0 && recognizedCount == 0 &&
+            failedCount >= current.capturedImageCount
         val failure = when {
-            request.capturedFrameCount == 0 -> "截图失败，请重新截屏。"
-            request.failedOcrCount == request.capturedFrameCount && request.parts.isEmpty() ->
-                "识图失败，画面已保留；重新截图可重试。"
+            noImages -> "截图失败，请重新截屏。"
+            allRecognitionFailed -> "识图失败，原图未保留；请重新截屏。"
             else -> null
         }
-        mutableState.update { current ->
-            current.copy(
+        mutableState.update {
+            it.copy(
                 status = when {
+                    attemptInProgress -> it.status
                     failure != null -> VoiceCallVisualRoundStatus.FAILED
-                    attemptInProgress -> current.status
                     else -> VoiceCallVisualRoundStatus.READY
                 },
                 isCapturing = false,
-                isRecognizing = false,
+                isRecognizing = currentRound.recognitionJobs > 0,
+                recognizedImageCount = recognizedCount,
+                failedImageCount = failedCount,
                 failureMessage = failure,
             )
         }
     }
 
     suspend fun preparedRequest(sessionId: String): VoiceCallVisualRequest? {
-        val request = synchronized(this) { round?.takeIf { it.id == sessionId }?.request }
-            ?: return null
-        val prepared = request.await()
-        val stillCurrent = synchronized(this) {
-            if (round?.id != sessionId) return@synchronized false
-            captureFinished(sessionId, prepared)
-            true
+        val requests = synchronized(this) {
+            round?.takeIf { it.id == sessionId }?.requests?.toList()
+        } ?: return null
+        val preparedRequests = requests.awaitAll()
+        return synchronized(this) {
+            if (round?.id != sessionId) return@synchronized null
+            if (preparedRequests.size == 1) return@synchronized preparedRequests.single()
+            val descriptions = preparedRequests.flatMap { it.recognizedDescriptions }
+            val fallbackParts = preparedRequests.flatMap { it.parts }
+            val combined = VoiceCallVisualRequest(
+                parts = if (descriptions.isNotEmpty()) voiceCallVisualRequestParts(descriptions) else fallbackParts,
+                hadActiveSource = preparedRequests.any { it.hadActiveSource },
+                capturedFrameCount = preparedRequests.sumOf { it.capturedFrameCount },
+                failedOcrCount = preparedRequests.sumOf { it.failedOcrCount },
+                recognizedDescriptions = descriptions,
+            )
+            combined
         }
-        return if (stillCurrent) prepared else null
     }
 
     suspend fun partsForRequest(sessionId: String): List<UIMessagePart> =
@@ -184,10 +268,10 @@ internal class VoiceCallVisualRoundState {
                         status = VoiceCallVisualRoundStatus.FAILED,
                         generationFlowStarted = false,
                         completed = false,
-                        failureMessage = if (it.thumbnail != null) {
-                            "发送失败，画面已保留；再说一次可重试。"
+                        failureMessage = if (it.recognizedImageCount > 0) {
+                            "发送失败，识图文字仍可保留重试。"
                         } else {
-                            "发送失败，截图未就绪；请重新截屏。"
+                            "发送失败，未获得可用的画面识别结果。"
                         },
                     )
                 }
@@ -197,12 +281,13 @@ internal class VoiceCallVisualRoundState {
                 mutableState.update {
                     if (it.status == VoiceCallVisualRoundStatus.FAILED) it
                     else it.copy(
-                        status = if (it.thumbnail != null) VoiceCallVisualRoundStatus.READY
+                        status = if (it.recognizedImageCount > 0) VoiceCallVisualRoundStatus.READY
                         else if (it.isCapturing) VoiceCallVisualRoundStatus.CAPTURING
+                        else if (it.isRecognizing) VoiceCallVisualRoundStatus.READY
                         else VoiceCallVisualRoundStatus.FAILED,
                         generationFlowStarted = false,
                         completed = false,
-                        failureMessage = if (it.thumbnail != null || it.isCapturing) null
+                        failureMessage = if (it.recognizedImageCount > 0 || it.isCapturing || it.isRecognizing) null
                         else it.failureMessage,
                     )
                 }
@@ -214,11 +299,11 @@ internal class VoiceCallVisualRoundState {
     fun finishReply(sessionId: String) {
         val current = round?.takeIf { it.id == sessionId } ?: return
         if (!mutableState.value.completed || current.sendAttemptId != null) return
-        current.request.cancel()
+        current.requests.forEach { it.cancel() }
         round = null
         mutableState.update {
             if (it.sessionId != sessionId) it
-            else it.copy(thumbnail = null, isCapturing = false, isRecognizing = false)
+            else it.copy(isCapturing = false, isRecognizing = false)
         }
     }
 
@@ -243,7 +328,7 @@ internal class VoiceCallVisualRoundState {
         val current = round?.takeIf { it.id == sessionId }
         if (current == null && mutableState.value.sessionId != sessionId) return
         round = null
-        current?.request?.cancel()
+        current?.requests?.forEach { it.cancel() }
         mutableState.value = VoiceCallVisualRoundSnapshot()
     }
 

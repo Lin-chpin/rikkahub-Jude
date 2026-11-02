@@ -240,7 +240,8 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
         "正在持续聆听" in value || "正在聆听" in value -> "正在聆听"
         "聆听已静音" in value -> "已静音"
         "正在连接 ASR" in value || "正在连接语音模型" in value -> "连接中"
-        "正在使用已配置的 ASR 识别" in value -> "识别中"
+        "正在使用已配置的 ASR 识别" in value || "正在识图中" in value -> "识别中"
+        "正在截屏中" in value -> "截屏中"
         else -> null
     }
 

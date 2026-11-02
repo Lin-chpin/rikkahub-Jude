@@ -3,7 +3,6 @@ package me.rerere.rikkahub.ui.pages.chat
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -14,12 +13,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.material3.Text
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.unit.dp
@@ -27,14 +23,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import me.rerere.rikkahub.data.voice.VoiceCallVisualCapture
 import me.rerere.rikkahub.data.voice.VoiceCallVisualRoundSnapshot
 import me.rerere.rikkahub.data.voice.VoiceCallVisualRoundStatus
+import me.rerere.rikkahub.data.voice.VOICE_CALL_VISUAL_MAX_IMAGES
 import me.rerere.rikkahub.ui.components.ai.VoiceCallActionBubble
 
 @Composable
@@ -112,11 +107,15 @@ internal fun VoiceCallVisualControls(
             }) { CallVisualLabel(if (screen.active) "停止共享" else "共享屏幕") }
             if (camera.enabled || screen.active) {
                 val captureLabel = when {
-                    visualRoundState.thumbnail != null -> "重新截图"
-                    visualRoundState.status == VoiceCallVisualRoundStatus.FAILED -> "重新截屏"
-                    else -> "截屏发送"
+                    visualRoundState.completed || visualRoundState.capturedImageCount == 0 -> "截图"
+                    visualRoundState.capturedImageCount >= VOICE_CALL_VISUAL_MAX_IMAGES -> "已达${VOICE_CALL_VISUAL_MAX_IMAGES}张"
+                    else -> "继续截图 ${visualRoundState.capturedImageCount}/$VOICE_CALL_VISUAL_MAX_IMAGES"
                 }
-                CallVisualBubbleButton(Modifier.weight(1f), enabled, onClick = onCaptureAndSend) {
+                CallVisualBubbleButton(
+                    Modifier.weight(1f),
+                    enabled && visualRoundState.canAddScreenshot,
+                    onClick = onCaptureAndSend,
+                ) {
                     CallVisualLabel(captureLabel)
                 }
             }
@@ -131,19 +130,16 @@ private fun VoiceCallVisualRoundFeedback(
     muted: Boolean,
 ) {
     if (state.status == null) return
-    val thumbnailBytes = state.thumbnail?.jpeg
-    val thumbnail = remember(thumbnailBytes) {
-        thumbnailBytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() }
-    }
     val statusText = when (state.status) {
-        VoiceCallVisualRoundStatus.CAPTURING -> "正在截图"
-        VoiceCallVisualRoundStatus.READY -> "已截图，可以说话"
-        VoiceCallVisualRoundStatus.SENDING -> "正在发送"
+        VoiceCallVisualRoundStatus.CAPTURING -> "正在截图，已累计${state.capturedImageCount}/${VOICE_CALL_VISUAL_MAX_IMAGES}张"
+        VoiceCallVisualRoundStatus.READY -> "已累计${state.capturedImageCount}/${VOICE_CALL_VISUAL_MAX_IMAGES}张，5秒无语音自动提交"
+        VoiceCallVisualRoundStatus.SENDING -> "正在等待识图完成并发送"
         VoiceCallVisualRoundStatus.SENT -> "已发送"
-        VoiceCallVisualRoundStatus.FAILED -> state.failureMessage ?: "发送失败，画面已保留；再说一次可重试。"
+        VoiceCallVisualRoundStatus.FAILED -> state.failureMessage ?: "识图或发送失败；可以重新截图。"
     }
     val progress = buildList {
-        if (state.isRecognizing) add("正在识图")
+        if (state.isRecognizing) add("正在识图 ${state.recognizedImageCount + state.failedImageCount}/${state.capturedImageCount}")
+        if (state.failedImageCount > 0) add("${state.failedImageCount}张识图失败")
         when {
             listening -> add("正在聆听")
             muted -> add("已静音")
@@ -158,14 +154,6 @@ private fun VoiceCallVisualRoundFeedback(
             .padding(8.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        thumbnail?.let {
-            Image(
-                bitmap = it,
-                contentDescription = "本轮截图预览",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)),
-            )
-        }
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(statusText, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (progress.isNotBlank()) {

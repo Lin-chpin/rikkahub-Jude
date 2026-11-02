@@ -18,16 +18,18 @@ class VoiceCallVisualContextTest {
     }
 
     @Test
-    fun `two visual sources become labelled request images for a multimodal chat model`() {
-        val parts = listOf(
-            VoiceCallVisualFrame(VoiceCallVisualSource.CAMERA, byteArrayOf(1, 2)),
-            VoiceCallVisualFrame(VoiceCallVisualSource.SCREEN, byteArrayOf(3, 4)),
-        ).toVoiceCallRequestParts()
-        assertEquals(2, parts.filterIsInstance<UIMessagePart.Image>().size)
-        assertTrue((parts[1] as UIMessagePart.Text).text.contains("摄像头"))
-        assertTrue((parts[3] as UIMessagePart.Text).text.contains("屏幕"))
-        assertEquals("data:image/jpeg;base64,AQI=", (parts[2] as UIMessagePart.Image).url)
-        assertTrue(emptyList<VoiceCallVisualFrame>().toVoiceCallRequestParts().isEmpty())
+    fun `visual sources become ordered request text without images`() {
+        val parts = voiceCallVisualRequestParts(
+            listOf(
+                VoiceCallVisualSource.CAMERA to "人物和桌面",
+                VoiceCallVisualSource.SCREEN to "页面标题",
+            ),
+        )
+        val text = (parts.single() as UIMessagePart.Text).text
+        assertTrue(text.contains("第1张（摄像头画面）：人物和桌面"))
+        assertTrue(text.contains("第2张（屏幕共享画面）：页面标题"))
+        assertFalse(parts.any { it is UIMessagePart.Image })
+        assertTrue(voiceCallVisualRequestParts(emptyList()).isEmpty())
         assertFalse(Model(modelId = "custom-text-only").supportsVoiceCallImages())
         assertTrue(Model(modelId = "custom-vision", inputModalities = listOf(Modality.IMAGE)).supportsVoiceCallImages())
     }

@@ -2,7 +2,10 @@ package me.rerere.rikkahub.data.voice
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.ai.transformers.OcrTransformer
 
@@ -11,54 +14,43 @@ internal data class VoiceCallVisualRequest(
     val hadActiveSource: Boolean,
     val capturedFrameCount: Int,
     val failedOcrCount: Int,
+    val recognizedDescriptions: List<Pair<VoiceCallVisualSource, String>> = emptyList(),
 )
 
 internal suspend fun VoiceCallVisualCapture.prepareRequest(
-    useOcrModel: Boolean,
-    mainModelSupportsImages: Boolean,
+    mainModel: Model?,
+    maxFrameCount: Int,
     onFramesCaptured: (List<VoiceCallVisualFrame>) -> Unit = {},
     onRecognitionChanged: (Boolean) -> Unit = {},
 ): VoiceCallVisualRequest {
     val hadActiveSource = cameraState.value.enabled || screenState.value.active
-    val frames = try {
+    val capturedFrames = try {
         if (hadActiveSource) captureFrames() else emptyList()
     } catch (error: CancellationException) {
         throw error
     } catch (error: Exception) {
         emptyList()
     }
+    val frames = capturedFrames.take(maxFrameCount.coerceAtLeast(0))
+    capturedFrames.drop(frames.size).forEach { it.jpeg.fill(0) }
     onFramesCaptured(frames)
     if (frames.isEmpty()) {
         return VoiceCallVisualRequest(emptyList(), hadActiveSource, 0, 0)
     }
 
-    if (!useOcrModel && mainModelSupportsImages) {
-        return VoiceCallVisualRequest(
-            parts = voiceCallVisualRequestParts(
-                frames = frames,
-                useOcrModel = false,
-                mainModelSupportsImages = true,
-                recognizedDescriptions = emptyList(),
-            ),
-            hadActiveSource = true,
-            capturedFrameCount = frames.size,
-            failedOcrCount = 0,
-        )
-    }
-    if (!useOcrModel) {
-        return VoiceCallVisualRequest(emptyList(), true, frames.size, frames.size)
-    }
-
     val recognizedFrames = try {
         onRecognitionChanged(true)
-        withContext(Dispatchers.IO) {
+        coroutineScope {
             frames.map { frame ->
-                frame.source to OcrTransformer.performOcr(
-                    part = frame.toVoiceCallRequestImagePart(),
-                    cacheResult = false,
-                    suppressContentLogs = true,
-                )
-            }
+                async(Dispatchers.IO) {
+                    frame.source to OcrTransformer.performOcr(
+                        part = frame.toVoiceCallRequestImagePart(),
+                        cacheResult = false,
+                        suppressContentLogs = true,
+                        modelOverride = mainModel,
+                    )
+                }
+            }.awaitAll()
         }
     } catch (error: CancellationException) {
         throw error
@@ -66,17 +58,14 @@ internal suspend fun VoiceCallVisualCapture.prepareRequest(
         emptyList()
     } finally {
         onRecognitionChanged(false)
+        frames.forEach { it.jpeg.fill(0) }
     }
     val successfulDescriptions = recognizedFrames.filterNot { it.second == "[ERROR, OCR failed]" }
     return VoiceCallVisualRequest(
-        parts = voiceCallVisualRequestParts(
-            frames = frames,
-            useOcrModel = true,
-            mainModelSupportsImages = mainModelSupportsImages,
-            recognizedDescriptions = successfulDescriptions,
-        ),
+        parts = voiceCallVisualRequestParts(successfulDescriptions),
         hadActiveSource = true,
         capturedFrameCount = frames.size,
         failedOcrCount = frames.size - successfulDescriptions.size,
+        recognizedDescriptions = successfulDescriptions,
     )
 }

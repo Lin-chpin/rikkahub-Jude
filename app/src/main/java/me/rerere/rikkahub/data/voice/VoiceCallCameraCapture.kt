@@ -158,7 +158,7 @@ internal class VoiceCallCameraCapture(private val context: Context) : AutoClosea
                     if (attempt == generation) fail("摄像头暂时不可用，可能正被其他应用占用。语音通话仍可继续。")
                 }
             }, handler)
-        } catch (_: Exception) {
+        } catch (error: Exception) {
             fail("摄像头未能启动，请检查权限或稍后重试。语音通话仍可继续。")
         }
     }
