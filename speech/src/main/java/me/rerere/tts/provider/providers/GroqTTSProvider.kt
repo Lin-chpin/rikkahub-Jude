@@ -8,7 +8,9 @@ import me.rerere.tts.model.AudioChunk
 import me.rerere.tts.model.AudioFormat
 import me.rerere.tts.model.TTSRequest
 import me.rerere.tts.provider.TTSProvider
+import me.rerere.tts.provider.TTSProviderKind
 import me.rerere.tts.provider.TTSProviderSetting
+import me.rerere.tts.provider.createTTSProviderHttpException
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -35,8 +37,6 @@ class GroqTTSProvider : TTSProvider<TTSProviderSetting.Groq> {
             put("response_format", "wav")
         }
 
-        Log.i(TAG, "generateSpeech: $requestBody")
-
         val httpRequest = Request.Builder()
             .url("${providerSetting.baseUrl}/audio/speech")
             .addHeader("Authorization", "Bearer ${providerSetting.apiKey}")
@@ -44,15 +44,18 @@ class GroqTTSProvider : TTSProvider<TTSProviderSetting.Groq> {
             .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
-        val response = httpClient.newCall(httpRequest).execute()
-
-        if (!response.isSuccessful) {
-            Log.e(TAG, "generateSpeech: ${response.code} ${response.message}")
-            Log.e(TAG, "generateSpeech: ${response.body?.string()}")
-            throw Exception("Groq TTS request failed: ${response.code} ${response.message}")
+        val audioData = httpClient.newCall(httpRequest).execute().use { response ->
+            if (!response.isSuccessful) {
+                val failure = createTTSProviderHttpException(
+                    TTSProviderKind.GROQ,
+                    response.code,
+                    response.body.string(),
+                )
+                Log.e(TAG, "TTS HTTP failure: ${failure.message}")
+                throw failure
+            }
+            response.body.bytes()
         }
-
-        val audioData = response.body.bytes()
 
         emit(
             AudioChunk(

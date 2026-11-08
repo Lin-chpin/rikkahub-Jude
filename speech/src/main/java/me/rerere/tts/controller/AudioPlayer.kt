@@ -8,6 +8,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.ByteArrayDataSource
@@ -16,6 +17,7 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.ClippingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import kotlinx.coroutines.CoroutineScope
@@ -37,8 +39,14 @@ import me.rerere.tts.model.PlaybackState
 import me.rerere.tts.model.PlaybackStatus
 import me.rerere.tts.model.TTSResponse
 import java.io.ByteArrayOutputStream
+import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+
+enum class TtsTimingStage(val logName: String) {
+    FirstAudio("tts_first_audio"),
+    OutputAdvancing("audio_output_advancing"),
+}
 
 @OptIn(UnstableApi::class)
 class AudioPlayer(context: Context) {
@@ -98,6 +106,7 @@ class AudioPlayer(context: Context) {
         response: TTSResponse,
         startPositionMs: Long? = null,
         endPositionMs: Long? = null,
+        onTiming: ((TtsTimingStage) -> Unit)? = null,
     ) {
         val bytes = if (response.format == AudioFormat.PCM) {
             pcmToWav(response.audioData, response.sampleRate ?: 24000)
@@ -107,7 +116,7 @@ class AudioPlayer(context: Context) {
         val dataSourceFactory = DataSource.Factory { ByteArrayDataSource(bytes) }
         val clipStart = startPositionMs?.coerceAtLeast(0L) ?: 0L
         val mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory)
-            .createMediaSource(MediaItem.fromUri(Uri.EMPTY))
+            .createMediaSource(playbackMediaItem(onTiming))
         val clippedSource = if (startPositionMs != null || endPositionMs != null) {
             require(endPositionMs == null || endPositionMs > clipStart) { "Invalid audio clip range" }
             Log.i(TAG, "Cached audio clip: startMs=$clipStart endMs=$endPositionMs")
@@ -120,22 +129,28 @@ class AudioPlayer(context: Context) {
                 .build()
         } else mediaSource
         val durationMs = endPositionMs?.minus(clipStart) ?: response.duration?.times(1000)?.toLong()
-        playMediaSource(clippedSource, durationMs)
+        playMediaSource(clippedSource, durationMs, onTiming = onTiming)
     }
 
     @OptIn(UnstableApi::class)
-    suspend fun play(stream: Flow<AudioChunk>) = coroutineScope {
-        val streamTiming = StreamTiming()
+    suspend fun play(stream: Flow<AudioChunk>, onTiming: ((TtsTimingStage) -> Unit)? = null) = coroutineScope {
+        val streamTiming = StreamTiming(onTiming)
         val dataSourceFactory = DataSource.Factory { FlowDataSource(stream, streamTiming, this) }
         val mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory)
-            .createMediaSource(MediaItem.fromUri(Uri.EMPTY))
-        playMediaSource(mediaSource, null, streamTiming)
+            .createMediaSource(playbackMediaItem(onTiming))
+        playMediaSource(mediaSource, null, streamTiming, onTiming)
+    }
+
+    private fun playbackMediaItem(onTiming: ((TtsTimingStage) -> Unit)?): MediaItem {
+        if (onTiming == null) return MediaItem.fromUri(Uri.EMPTY)
+        return MediaItem.Builder().setUri(Uri.EMPTY).setMediaId(UUID.randomUUID().toString()).build()
     }
 
     private suspend fun playMediaSource(
         mediaSource: androidx.media3.exoplayer.source.MediaSource,
         durationMs: Long?,
         streamTiming: StreamTiming? = null,
+        onTiming: ((TtsTimingStage) -> Unit)? = null,
     ) = suspendCancellableCoroutine<Unit> { cont ->
         val generation = ++playbackGeneration
         Log.i(TAG, "Preparing ExoPlayer media source: durationMs=$durationMs startBufferMs=250")
@@ -145,6 +160,21 @@ class AudioPlayer(context: Context) {
                 positionMs = 0L,
                 durationMs = durationMs ?: it.durationMs
             )
+        }
+
+        val outputListener = onTiming?.let { report ->
+            object : AnalyticsListener {
+                override fun onAudioPositionAdvancing(eventTime: AnalyticsListener.EventTime, playoutStartSystemTimeMs: Long) {
+                    if (generation != playbackGeneration || !cont.isActive) return
+                    val timeline = eventTime.timeline
+                    if (eventTime.windowIndex !in 0 until timeline.windowCount) return
+                    // Analytics callbacks can arrive after the player has been assigned a new reply.
+                    val mediaId = timeline.getWindow(eventTime.windowIndex, Timeline.Window()).mediaItem.mediaId
+                    if (mediaId != mediaSource.mediaItem.mediaId) return
+                    report(TtsTimingStage.OutputAdvancing)
+                    player.removeAnalyticsListener(this)
+                }
+            }
         }
 
         val listener = object : Player.Listener {
@@ -182,6 +212,7 @@ class AudioPlayer(context: Context) {
                         }
                         Log.i(TAG, "Audio playback ended")
                         streamTiming?.playbackEnded()
+                        outputListener?.let(player::removeAnalyticsListener)
                         player.removeListener(this)
                         if (cont.isActive) cont.resume(Unit)
                     }
@@ -194,11 +225,14 @@ class AudioPlayer(context: Context) {
 
             override fun onPlayerError(error: PlaybackException) {
                 if (generation != playbackGeneration) return
-                Log.e(TAG, "Audio playback error: code=" + error.errorCode + ", message=" + error.message, error)
+                Log.e(TAG, "Audio playback error: code=${error.errorCode} name=${error.errorCodeName} cause=${error.cause?.javaClass?.simpleName ?: "none"}")
                 streamTiming?.playbackFailed(error.errorCode)
+                outputListener?.let(player::removeAnalyticsListener)
                 player.removeListener(this)
                 stopPositionUpdates()
-                _playbackState.update { it.copy(status = PlaybackStatus.Error, errorMessage = error.message) }
+                _playbackState.update {
+                    it.copy(status = PlaybackStatus.Error, errorMessage = "音频播放失败（错误码 ${error.errorCode}）")
+                }
                 if (cont.isActive) cont.resumeWithException(error)
             }
 
@@ -218,6 +252,7 @@ class AudioPlayer(context: Context) {
             }
         }
         player.addListener(listener)
+        outputListener?.let(player::addAnalyticsListener)
 
         // Register before prepare/play. ExoPlayer can reach READY immediately on
         // the main looper; registering afterwards leaves callers stuck in Buffering.
@@ -226,6 +261,7 @@ class AudioPlayer(context: Context) {
         player.play()
 
         cont.invokeOnCancellation {
+            outputListener?.let(player::removeAnalyticsListener)
             player.removeListener(listener)
             if (generation == playbackGeneration) {
                 player.stop()
@@ -292,10 +328,11 @@ class AudioPlayer(context: Context) {
         }
     }
 
-    private class StreamTiming {
+    private class StreamTiming(private val onTiming: ((TtsTimingStage) -> Unit)?) {
         private var traceId = "unknown"
         private var openedAtNanos = 0L
         private var firstChunkLogged = false
+        private var firstAudioReported = false
         private var firstReadLogged = false
         private var playerReadyLogged = false
         private var playbackStartedLogged = false
@@ -310,6 +347,10 @@ class AudioPlayer(context: Context) {
 
         @Synchronized
         fun chunkReceived(chunk: AudioChunk) {
+            if (onTiming != null && !firstAudioReported && chunk.data.isNotEmpty()) {
+                firstAudioReported = true
+                onTiming(TtsTimingStage.FirstAudio)
+            }
             if (traceId == "unknown") traceId = chunk.metadata["timing_id"] ?: traceId
             if (!firstChunkLogged && chunk.data.isNotEmpty() && traceId != "unknown") {
                 firstChunkLogged = true

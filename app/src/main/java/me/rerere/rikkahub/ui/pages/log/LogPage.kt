@@ -92,6 +92,7 @@ fun LogPage() {
 }
 
 private const val LOG_REFRESH_INTERVAL_MILLIS = 1_000L
+private const val MAX_REQUEST_BODY_DISPLAY_CHARS = 8 * 1024
 
 @Composable
 private fun UnifiedLogList(
@@ -280,20 +281,31 @@ private fun RequestLogDetail(log: LogEntry.RequestLog) {
                         modifier = Modifier.padding(top = 8.dp)
                     )
                     val jsonElement = remember(body) {
-                        runCatching { JsonInstantPretty.parseToJsonElement(body) }.getOrNull()
+                        if (body.length <= MAX_REQUEST_BODY_DISPLAY_CHARS) {
+                            runCatching { JsonInstantPretty.parseToJsonElement(body) }.getOrNull()
+                        } else {
+                            null
+                        }
                     }
                     if (jsonElement != null) {
                         JsonTree(
                             json = jsonElement,
                             modifier = Modifier.padding(top = 4.dp),
-                            initialExpandLevel = 2
+                            initialExpandLevel = 0
                         )
                     } else {
                         Text(
-                            text = body,
+                            text = body.take(MAX_REQUEST_BODY_DISPLAY_CHARS),
                             fontFamily = JetbrainsMono,
                             modifier = Modifier.padding(top = 4.dp)
                         )
+                        if (body.length > MAX_REQUEST_BODY_DISPLAY_CHARS) {
+                            Text(
+                                text = "Preview limited to $MAX_REQUEST_BODY_DISPLAY_CHARS characters",
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
                     }
                 }
             }

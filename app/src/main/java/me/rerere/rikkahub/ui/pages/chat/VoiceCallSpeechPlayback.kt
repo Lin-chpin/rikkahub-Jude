@@ -282,7 +282,9 @@ internal fun BindVoiceCallSpeechPlayback(
                             "mode=${if (useWholeReplyTts) "whole_reply" else "sentence"}"
                     )
                 }
-                if (input.finished) break
+                if (input.finished) {
+                    break
+                }
             }
             delay(20)
         }
@@ -342,6 +344,7 @@ internal fun BindVoiceCallSpeechPlayback(
 
             val flushCalled = speechQueue.flushForNextSegment()
             val segmentIndex = nextSpeechIndex
+            input.timing?.markOnce("tts_input_submitted", messageId, ttsText.length)
             Log.i(
                 "VoiceCallSpeechPlayback",
                 "tts_timing stage=segment_submitted messageId=$messageId " +
@@ -353,6 +356,9 @@ internal fun BindVoiceCallSpeechPlayback(
                 flushCalled = flushCalled,
                 chunked = false,
                 emotion = null,
+                onTiming = input.timing?.let { timing ->
+                    { stage -> timing.markOnce(stage.logName, messageId) }
+                },
                 onAudioReady = { response ->
                     Log.i(
                         "VoiceCallSpeechPlayback",

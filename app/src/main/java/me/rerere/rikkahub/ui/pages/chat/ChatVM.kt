@@ -30,15 +30,16 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.isEmptyInputMessage
+import me.rerere.ai.util.GenerationTimingTrace
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.mergeSettingsUpdate
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.getAssistantById
-import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.voice.VoiceCallCompletion
 import me.rerere.rikkahub.data.voice.VoiceCallVisualSendStatus
+import me.rerere.rikkahub.data.voice.withStandaloneVoiceCallSummary
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.AutoCompressConfig
 import me.rerere.rikkahub.data.model.Avatar
@@ -61,21 +62,6 @@ import kotlin.uuid.Uuid
 
 private const val TAG = "ChatVM"
 
-internal fun resolveChatPageAssistantId(
-    conversationReady: Boolean,
-    requestedAssistantId: Uuid?,
-    conversationAssistantId: Uuid,
-): Uuid = if (conversationReady) {
-    conversationAssistantId
-} else {
-    requestedAssistantId ?: conversationAssistantId
-}
-
-internal fun resolveLoadingAssistantId(
-    metadataAssistantId: Uuid?,
-    latestSettingsAssistantId: Uuid,
-): Uuid = metadataAssistantId ?: latestSettingsAssistantId
-
 class ChatVM(
     id: String,
     private val context: Application,
@@ -88,8 +74,6 @@ class ChatVM(
     private val favoriteRepository: FavoriteRepository,
 ) : ViewModel() {
     private val _conversationId: Uuid = Uuid.parse(id)
-    var conversationAssistantId by mutableStateOf<Uuid?>(null)
-        private set
     var conversationInitialization by mutableStateOf<UiState<Unit>>(UiState.Loading)
         private set
     private val updateCheckRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
@@ -133,12 +117,7 @@ class ChatVM(
         // 初始化对话
         viewModelScope.launch {
             try {
-                conversationAssistantId = resolveLoadingAssistantId(
-                    metadataAssistantId = conversationRepo.getConversationAssistantId(_conversationId),
-                    latestSettingsAssistantId = settingsStore.settingsFlowRaw.first().getCurrentAssistant().id,
-                )
                 chatService.initializeConversation(_conversationId)
-                conversationAssistantId = conversation.value.assistantId
                 context.writeStringPreference("lastConversationId", _conversationId.toString())
                 conversationInitialization = UiState.Success(Unit)
             } catch (error: CancellationException) {
@@ -265,6 +244,7 @@ class ChatVM(
         includeVoiceCallConnectedEvent: Boolean = false,
         requestMessagePartsProvider: (suspend () -> List<UIMessagePart>)? = null,
         onVoiceCallVisualSendStatus: ((VoiceCallVisualSendStatus) -> Unit)? = null,
+        voiceCallInputTiming: GenerationTimingTrace? = null,
     ) {
         if (content.isEmptyInputMessage()) return
         analytics.logEvent("ai_send_message", null)
@@ -277,6 +257,7 @@ class ChatVM(
             includeVoiceCallConnectedEvent = includeVoiceCallConnectedEvent,
             requestMessagePartsProvider = requestMessagePartsProvider,
             onVoiceCallVisualSendStatus = onVoiceCallVisualSendStatus,
+            voiceCallInputTiming = voiceCallInputTiming,
         )
     }
 
@@ -315,6 +296,18 @@ class ChatVM(
             }.onFailure {
                 chatService.addError(it, title = context.getString(R.string.error_title_compress_conversation))
             }
+        }
+    }
+
+    fun compressVoiceCallRecord(callId: String, onComplete: (Result<Unit>) -> Unit) {
+        viewModelScope.launch {
+            onComplete(chatService.compressVoiceCallRecord(_conversationId, callId))
+        }
+    }
+
+    fun updateVoiceCallRecordSummary(callId: String, summary: String) {
+        updateConversation { current ->
+            current.withStandaloneVoiceCallSummary(callId, summary) ?: current
         }
     }
 

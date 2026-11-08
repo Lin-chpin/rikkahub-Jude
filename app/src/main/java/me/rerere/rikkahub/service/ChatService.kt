@@ -61,10 +61,12 @@ import me.rerere.ai.ui.finishPendingTools
 import me.rerere.ai.ui.finishReasoning
 import me.rerere.ai.ui.isEmptyInputMessage
 import me.rerere.ai.util.GenerationTimingTrace
+import me.rerere.ai.util.safeFailureDiagnostic
 import me.rerere.common.android.Logging
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.CHAT_COMPLETED_NOTIFICATION_CHANNEL_ID
 import me.rerere.rikkahub.CHAT_LIVE_UPDATE_NOTIFICATION_CHANNEL_ID
+import me.rerere.rikkahub.BuildConfig
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.RouteActivity
 import me.rerere.rikkahub.data.ai.GenerationChunk
@@ -84,14 +86,12 @@ import me.rerere.rikkahub.data.ai.transformers.RegexOutputTransformer
 import me.rerere.rikkahub.data.ai.transformers.TemplateTransformer
 import me.rerere.rikkahub.data.ai.transformers.ThinkTagTransformer
 import me.rerere.rikkahub.data.ai.transformers.TimeReminderTransformer
-import me.rerere.rikkahub.data.datastore.CompressOpenAIConfig
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.datastore.getAssistantById
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
-import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.data.datastore.getSelectedTTSProvider
 import me.rerere.rikkahub.local.LocalBuildIntegration
 import me.rerere.rikkahub.data.files.FilesManager
@@ -110,6 +110,9 @@ import me.rerere.rikkahub.data.voice.VoiceCallVisualSendStatus
 import me.rerere.rikkahub.data.voice.isStandaloneVoiceCallRecord
 import me.rerere.rikkahub.data.voice.voiceCallRecord
 import me.rerere.rikkahub.data.voice.voiceCallRecordNodeIdsFullyCoveredBy
+import me.rerere.rikkahub.data.voice.standaloneVoiceCallRecord
+import me.rerere.rikkahub.data.voice.withStandaloneVoiceCallSummary
+import me.rerere.rikkahub.data.voice.voiceCallSummaryPrompt
 import me.rerere.rikkahub.data.voice.VoiceCallAudioTagFormat
 import me.rerere.rikkahub.data.voice.VoiceCallAudioTagSelectionResult
 import me.rerere.rikkahub.data.voice.VoiceCallTaggingFallbackReason
@@ -470,11 +473,12 @@ class ChatService(
         includeVoiceCallConnectedEvent: Boolean = false,
         requestMessagePartsProvider: (suspend () -> List<UIMessagePart>)? = null,
         onVoiceCallVisualSendStatus: ((VoiceCallVisualSendStatus) -> Unit)? = null,
+        voiceCallInputTiming: GenerationTimingTrace? = null,
     ) {
         if (content.isEmptyInputMessage()) return
 
         val timing = if (requestMode == ChatRequestMode.VoiceCall && answer) {
-            GenerationTimingTrace("voice_call:$conversationId")
+            voiceCallInputTiming ?: GenerationTimingTrace("voice_call:$conversationId")
         } else null
         timing?.mark("send_requested")
         val session = getOrCreateSession(conversationId)
@@ -583,7 +587,7 @@ class ChatService(
                 }
                 if (e is CancellationException) throw e
                 timing?.mark(if (e is CancellationException) "send_cancelled" else "send_failed")
-                e.printStackTrace()
+                Logging.log(TAG, "sendMessage failed: ${e.safeFailureDiagnostic()}")
                 addError(e, conversationId, title = context.getString(R.string.error_title_send_message))
             }
         }
@@ -912,6 +916,7 @@ class ChatService(
         val timing = requestTiming ?: if (requestMode == ChatRequestMode.VoiceCall) {
             GenerationTimingTrace("voice_call:$conversationId")
         } else null
+        val turnTiming = timing.takeIf { BuildConfig.DEBUG }
         timing?.mark("completion_handler_started")
         val settings = settingsStore.settingsFlow.first()
         val initialConversation = getConversationFlow(conversationId).value
@@ -974,6 +979,7 @@ class ChatService(
                     historyMessageIds = generationBaseMessageIds,
                     tagMode = voiceCallAudioTagMode,
                     tagFormat = voiceCallAudioTagFormat,
+                    timing = turnTiming,
                 )
             }
             val voiceCallToolEnabled = LocalToolOption.VoiceCall in assistant.localTools
@@ -1022,6 +1028,9 @@ class ChatService(
                     }
                 },
                 suppressContentLogs = requestMode == ChatRequestMode.VoiceCall || requestMessageParts.isNotEmpty(),
+                onInputWarning = { warning ->
+                    addError(warning, conversationId, title = "图片识别")
+                },
                 settings = settings,
                 model = model,
                 processingStatus = session.processingStatus,
@@ -1034,6 +1043,7 @@ class ChatService(
                 ) assistant.copy(streamOutput = true) else assistant,
                 conversationId = conversation.id,
                 requestSource = requestMode.name,
+                voiceCallTiming = turnTiming,
                 conversationSystemPrompt = conversation.customSystemPrompt,
                 conversationContextSummary = conversation.compressedSummary,
                 conversationModeInjectionIds = conversation.modeInjectionIds,
@@ -1044,6 +1054,7 @@ class ChatService(
                         VOICE_CALL_SYSTEM_PROMPT_COMMON.trimIndent(),
                         buildVoiceCallAudioTagPrompt(voiceCallAudioTagMode, voiceCallAudioTagFormat, settings.elevenLabsVoiceDirectorPrompt),
                     ).joinToString("\n\n") else null,
+                    conversation.voiceCallSummaryPrompt(messageRange),
                     momentContextPrompt,
                     anonymousQuestionContextPrompt,
                     additionalSystemPrompt,
@@ -1140,7 +1151,11 @@ class ChatService(
                                 Result.failure(error)
                             }
                             if (assignmentResult.isFailure) {
-                                Logging.log(TAG, "sentence voice-call tagging failed; using no-tag fallback: ${assignmentResult.exceptionOrNull()}")
+                                Logging.log(
+                                    TAG,
+                                    "sentence voice-call tagging failed; using no-tag fallback: " +
+                                        assignmentResult.exceptionOrNull()?.safeFailureDiagnostic(),
+                                )
                             }
                             synchronized(tagProjectionLock) {
                                 if (!generationJob.isActive || session.getJob() !== generationJob) return@synchronized
@@ -1426,17 +1441,18 @@ class ChatService(
             cancelLiveUpdateNotification(conversationId)
 
             withContext(NonCancellable) {
-                conversationPersistence.persistGeneration(conversationId, generationJob)
+                runCatching { conversationPersistence.persistGeneration(conversationId, generationJob) }
+                    .onFailure { persistError ->
+                        Logging.log(TAG, "handleMessageComplete: generation persistence also failed type=${persistError::class.simpleName}")
+                    }
             }
 
             if (it is CancellationException) {
                 return@onFailure
             }
 
-            it.printStackTrace()
             addError(it, conversationId, title = context.getString(R.string.error_title_generation))
-            Logging.log(TAG, "handleMessageComplete: $it")
-            Logging.log(TAG, it.stackTraceToString())
+            Logging.log(TAG, "handleMessageComplete failed: ${it.safeFailureDiagnostic()}")
         }.onSuccess {
             if (getOrCreateSession(conversationId).getJob() !== generationJob) {
                 onVoiceCallVisualSendStatus?.invoke(VoiceCallVisualSendStatus.CANCELLED)
@@ -1615,7 +1631,7 @@ class ChatService(
             throw error
         } catch (error: Exception) {
             requestFailureReason = VoiceCallTaggingFallbackReason.REQUEST_ERROR
-            Logging.log(TAG, "applySecondPassVoiceCallAudioTags: $error")
+            Logging.log(TAG, "applySecondPassVoiceCallAudioTags: ${error.safeFailureDiagnostic()}")
         }
         if (requestFailureReason == null) {
             requestFailureReason = when (selectionResult) {
@@ -1949,7 +1965,7 @@ class ChatService(
                 )
             }
         }.onFailure {
-            it.printStackTrace()
+            Logging.log(TAG, "generateConversationTitle failed: ${it.safeFailureDiagnostic()}")
             addError(
                 error = it,
                 conversationId = conversationId,
@@ -1995,11 +2011,42 @@ class ChatService(
                 current.copy(chatSuggestions = suggestions.take(10))
             }
         }.onFailure {
-            it.printStackTrace()
+            Logging.log(TAG, "generateChatSuggestions failed: ${it.safeFailureDiagnostic()}")
         }
     }
 
     // ---- 压缩对话历史 ----
+
+    suspend fun compressVoiceCallRecord(
+        conversationId: Uuid,
+        callId: String,
+    ): Result<Unit> = runCatching {
+        val settings = settingsStore.settingsFlow.first()
+        initializeConversation(conversationId)
+        val base = getConversationFlow(conversationId).value
+        val record = base.standaloneVoiceCallRecord(callId)
+            ?: throw IllegalStateException("通话记录不存在或不可压缩")
+        if (!record.summary.isNullOrBlank()) return@runCatching
+
+        val messageIds = record.messageIds
+        val callMessages = base.currentMessages.filter { message ->
+            message.id.toString() in messageIds &&
+                (message.role == MessageRole.USER || message.role == MessageRole.ASSISTANT)
+        }
+        if (callMessages.isEmpty()) throw IllegalStateException("通话记录没有可压缩的对话内容")
+
+        val summary = providerManager.generateVoiceCallSummary(settings, callMessages)
+        var saved = false
+        mutateConversation(conversationId) { current ->
+            val latestRecord = current.standaloneVoiceCallRecord(callId)
+            if (latestRecord == null || !latestRecord.summary.isNullOrBlank()) {
+                current
+            } else {
+                current.withStandaloneVoiceCallSummary(callId, summary)?.also { saved = true } ?: current
+            }
+        }
+        if (!saved) throw IllegalStateException("通话记录已变化，摘要未保存")
+    }
 
     suspend fun compressConversation(
         conversationId: Uuid,
@@ -2007,74 +2054,66 @@ class ChatService(
         targetTokens: Int,
         keepRecentMessages: Int = 32,
         autoCompressConfig: AutoCompressConfig? = null,
+        compressVisibleNodes: Boolean = true,
     ): Result<Unit> = runCatching {
         val settings = settingsStore.settingsFlow.first()
         initializeConversation(conversationId)
         val compressionBase = getConversationFlow(conversationId).value.normalizeCompressionState()
         val expectedSummary = compressionBase.compressedSummary
         val expectedCompressedNodeIds = compressionBase.activeCompressedMessageNodeIds
+        val recoveringMissingSummary = expectedSummary.isNullOrBlank() &&
+            expectedCompressedNodeIds.isNotEmpty()
         compressionDiagnostics.record(
             conversationId = conversationId,
             stage = "compress.start",
             conversation = compressionBase,
             details = "targetTokens=$targetTokens keepRecent=$keepRecentMessages",
         )
-        val model = settings.compressModelId?.let(settings::findModelById)
-            ?: settings.getCurrentChatModel()
-            ?: throw IllegalStateException("No model available for compression")
-        val provider = model.findProvider(settings.providers)
-            ?: throw IllegalStateException("Provider not found")
-        val compressionProvider = provider.withCompressionApiOverride(settings.compressOpenAIConfig)
-        val compressionModel = model.withCompressionModelOverride(settings.compressOpenAIConfig)
-
-        val providerHandler = providerManager.getProviderByType(compressionProvider)
+        val textGenerator = CompressionTextGenerator(providerManager, settings)
 
         val visibleNodes = compressionBase.visibleMessageNodes
-        val standaloneVoiceCallRecordNodes = visibleNodes
+        val voiceCallMessageIds = compressionBase.messageNodes
             .filter { it.currentMessage.isStandaloneVoiceCallRecord() }
-        val voiceCallMessageIds = standaloneVoiceCallRecordNodes
             .flatMapTo(mutableSetOf()) { node ->
                 node.currentMessage.voiceCallRecord()?.messageIds.orEmpty()
             }
+        val summarizedVoiceCallMessageIds = compressionBase.messageNodes
+            .filter { it.currentMessage.isStandaloneVoiceCallRecord() }
+            .mapNotNull { it.currentMessage.voiceCallRecord() }
+            .filter { !it.summary.isNullOrBlank() }
+            .flatMapTo(mutableSetOf()) { it.messageIds }
         val allNodes = visibleNodes.filterNot { it.currentMessage.isStandaloneVoiceCallRecord() }
+            .filterNot { it.currentMessage.id.toString() in summarizedVoiceCallMessageIds }
         val allMessages = allNodes.map { it.currentMessage }
-        if (allMessages.isEmpty()) {
+        if (allMessages.isEmpty() && !recoveringMissingSummary) {
             throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))
         }
         val effectiveKeepRecentMessages = effectiveCompressionKeepRecentMessages(keepRecentMessages)
 
         // Split messages into those to compress and those to keep
-        val nodesToCompress: List<MessageNode>
-        val messagesToCompress: List<UIMessage>
-
-        if (allMessages.size > effectiveKeepRecentMessages) {
-            nodesToCompress = allNodes.dropLast(effectiveKeepRecentMessages)
-            messagesToCompress = nodesToCompress.map { node ->
-                node.currentMessage.forConversationCompression(
-                    isVoiceCallTranscript = node.currentMessage.id.toString() in voiceCallMessageIds,
-                )
-            }
-        } else {
+        val nodesToCompress = compressionBase.compressionCandidates(
+            visibleCandidates = allNodes,
+            keepRecentMessages = effectiveKeepRecentMessages,
+            includeVisibleCandidates = compressVisibleNodes,
+        ).filter { node ->
+            !node.currentMessage.isStandaloneVoiceCallRecord() &&
+                node.currentMessage.id.toString() !in summarizedVoiceCallMessageIds
+        }
+        if (nodesToCompress.isEmpty()) {
             throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))
+        }
+        val messagesToCompress = nodesToCompress.map { node ->
+            node.currentMessage.forConversationCompression(
+                isVoiceCallTranscript = node.currentMessage.id.toString() in voiceCallMessageIds,
+            )
         }
 
         suspend fun generateCompressedSummary(contentToCompress: String, extraContext: String): String {
-            val prompt = settings.compressPrompt.applyPlaceholders(
-                "content" to contentToCompress,
-                "target_tokens" to targetTokens.toString(),
-                "additional_context" to extraContext,
-                "locale" to Locale.getDefault().displayName
+            return textGenerator.generate(
+                content = contentToCompress,
+                targetTokens = targetTokens,
+                additionalContext = extraContext,
             )
-
-            val result = providerHandler.generateText(
-                providerSetting = compressionProvider,
-                messages = listOf(UIMessage.user(prompt)),
-                params = TextGenerationParams(
-                    model = compressionModel,
-                ),
-            )
-
-            return result.choices[0].message?.toText()?.trim()
                 ?: throw IllegalStateException("Failed to generate compressed summary")
         }
 
@@ -2193,13 +2232,17 @@ class ChatService(
         } else {
             assistant.autoCompressConfig
         } ?: return
-        if (!config.enabled) return
+        val needsSummaryRecovery = conversation.compressedSummary.isNullOrBlank() &&
+            conversation.activeCompressedMessageNodeIds.isNotEmpty()
+        if (!config.enabled && !needsSummaryRecovery) return
 
         val triggerMessageCount = assistant.contextMessageSize
-        if (triggerMessageCount <= 0) return
+        if (!needsSummaryRecovery && triggerMessageCount <= 0) return
 
         val keepRecentMessages = config.keepRecentMessages.coerceAtLeast(1)
-        if (conversation.visibleMessageNodes.size < keepRecentMessages + triggerMessageCount) return
+        if (!needsSummaryRecovery &&
+            conversation.visibleMessageNodes.size < keepRecentMessages + triggerMessageCount
+        ) return
 
         compressConversation(
             conversationId = conversationId,
@@ -2211,29 +2254,11 @@ class ChatService(
             } else {
                 null
             },
+            compressVisibleNodes = config.enabled,
         ).onFailure {
             // 自动压缩是后台优化：失败时只记录日志、跳过本次压缩，不弹错误卡片打断聊天。
-            Logging.log(TAG, "autoCompressConversationIfNeeded: $it")
+            Logging.log(TAG, "autoCompressConversationIfNeeded: ${it.safeFailureDiagnostic()}")
         }
-    }
-
-    private fun ProviderSetting.withCompressionApiOverride(
-        config: CompressOpenAIConfig,
-    ): ProviderSetting {
-        if (!config.enabled) return this
-        return ProviderSetting.OpenAI(
-            apiKey = config.apiKey,
-            baseUrl = config.baseUrl,
-            chatCompletionsPath = config.chatCompletionsPath,
-            useResponseApi = config.useResponseApi,
-        )
-    }
-
-    private fun me.rerere.ai.provider.Model.withCompressionModelOverride(
-        config: CompressOpenAIConfig,
-    ): me.rerere.ai.provider.Model {
-        if (!config.enabled || config.modelId.isBlank()) return this
-        return copy(modelId = config.modelId.trim())
     }
 
     // ---- 通知 ----

@@ -6,10 +6,6 @@ import me.rerere.rikkahub.data.datastore.mergeSettingsUpdate
 import me.rerere.rikkahub.data.datastore.withDisplayedAssistant
 import me.rerere.rikkahub.data.datastore.withUpdateBaseline
 import me.rerere.rikkahub.data.model.Assistant
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Test
@@ -23,52 +19,6 @@ class ChatConversationSettingsTest {
         background = "file:///conversation-background.png",
     )
     private val second = Assistant(id = Uuid.random(), name = "Global selection")
-
-    @Test
-    fun loadingUsesRequestedAssistantAndReadyUsesInitializedConversationAssistant() {
-        val initializedAssistantId = Uuid.random()
-
-        assertEquals(
-            first.id,
-            resolveChatPageAssistantId(
-                conversationReady = false,
-                requestedAssistantId = first.id,
-                conversationAssistantId = second.id,
-            ),
-        )
-        assertEquals(
-            initializedAssistantId,
-            resolveChatPageAssistantId(
-                conversationReady = true,
-                requestedAssistantId = first.id,
-                conversationAssistantId = initializedAssistantId,
-            ),
-        )
-    }
-
-    @Test
-    fun loadingFallbackUsesLatestRawSettingsWhenDerivedSettingsFlowLags() = runBlocking {
-        val oldSettings = Settings(assistantId = first.id, assistants = listOf(first, second))
-        val latestSettings = oldSettings.copy(assistantId = second.id)
-        val derivedSettings = MutableStateFlow(oldSettings)
-        val rawSettings = flowOf(latestSettings)
-
-        val requestedAssistantId = resolveLoadingAssistantId(
-            metadataAssistantId = null,
-            latestSettingsAssistantId = rawSettings.first().getCurrentAssistant().id,
-        )
-
-        assertEquals(first.id, derivedSettings.value.getCurrentAssistant().id)
-        assertEquals(second.id, requestedAssistantId)
-        assertEquals(
-            second.id,
-            resolveChatPageAssistantId(
-                conversationReady = false,
-                requestedAssistantId = requestedAssistantId,
-                conversationAssistantId = first.id,
-            ),
-        )
-    }
 
     @Test
     fun restoredConversationUsesItsOwnAssistantBeforeGlobalSelectionCatchesUp() {

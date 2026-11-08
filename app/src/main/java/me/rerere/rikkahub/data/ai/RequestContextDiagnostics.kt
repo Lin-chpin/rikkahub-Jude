@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.longOrNull
+import me.rerere.common.android.Logging
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -56,6 +57,9 @@ internal class RequestContextDiagnostics(
                 "cached=${value(details?.get("cached_tokens"))} " +
                 "deepseekHit=${value(body["prompt_cache_hit_tokens"])} deepseekMiss=${value(body["prompt_cache_miss_tokens"])} " +
                 "cacheWrite=${value(details?.get("cache_write_tokens"))}")
+            if (source == "VoiceCall") {
+                Logging.log("VoiceCallRequest", "request=$requestId event=provider_usage_received")
+            }
         }
     }
 
@@ -63,6 +67,52 @@ internal class RequestContextDiagnostics(
     private fun record(conversationId: String, source: String, api: String, providerHash: String, requestId: String, body: JsonObject) {
         val items = (body["messages"] ?: body["input"]) as? JsonArray ?: JsonArray(emptyList())
         fun role(item: JsonElement) = ((item as? JsonObject)?.get("role") as? JsonPrimitive)?.contentOrNull
+        if (source == "VoiceCall" && api == "ChatCompletions") {
+            val requestMessages = items.mapIndexedNotNull { index, item ->
+                (item as? JsonObject)?.let { Triple(index, role(item).orEmpty(), it["content"].promptDiagnosticText()) }
+            }
+            val systemMessages = requestMessages.filter { (_, role, _) -> role in setOf("system", "developer") }
+            val runtimeStates = systemMessages.flatMap { (index, role, text) ->
+                VOICE_CALL_STATE.findAll(text).map { "${it.groupValues[1]}@$role[$index]" }
+            }
+            val lastUserIndex = requestMessages.indexOfLast { (_, role, _) -> role == "user" }
+            val priorContext = requestMessages.filter { (index, role, _) ->
+                index < lastUserIndex && role !in setOf("system", "developer")
+            }
+            val priorThirdPersonItems = priorContext.count { (_, _, text) ->
+                text.contains("第三人称") || text.contains("third person", ignoreCase = true) ||
+                    text.contains("third-person", ignoreCase = true)
+            }
+            val priorAssistantMessages = priorContext.filter { (_, role, _) -> role == "assistant" }
+            val priorAssistantThirdPersonStyleItems = priorAssistantMessages.count { (_, _, text) ->
+                isThirdPersonDominant(text)
+            }
+            val priorNovelNarrationItems = priorContext.count { (_, _, text) ->
+                text.contains("小说叙事") || text.contains("像小说") ||
+                    text.contains("novel narration", ignoreCase = true)
+            }
+            val compressedSummary = systemMessages.firstNotNullOfOrNull { (_, _, text) ->
+                text.substringAfter(COMPRESSED_SUMMARY_MARKER, "").takeIf { it.isNotEmpty() }
+            }
+            // ponytail: Pronoun counts can misclassify quoted dialogue; inspect captured text only if this signal is inconclusive.
+            val summaryThirdPersonDominant = compressedSummary?.let(::isThirdPersonDominant)
+            val runtimeInstructionIndex = systemMessages.lastOrNull { (_, _, text) ->
+                VOICE_CALL_STATE.containsMatchIn(text)
+            }?.first
+            val summary = "request=$requestId event=serialized " +
+                "runtimeStates=${runtimeStates.ifEmpty { listOf("missing") }.joinToString(",") } " +
+                "runtimeAfterLastUser=${lastUserIndex >= 0 && runtimeInstructionIndex != null && runtimeInstructionIndex > lastUserIndex} " +
+                "firstPerson=${systemMessages.any { (_, _, text) -> text.contains("Speak in the first person", ignoreCase = true) || text.contains("第1人称") || text.contains("第一人称") }} " +
+                "spokenOnly=${systemMessages.any { (_, _, text) -> text.contains("output only words you would actually say", ignoreCase = true) || text.contains("只说口语") }} " +
+                "connectionEvent=${systemMessages.any { (_, _, text) -> "[VOICE_CALL_RUNTIME_EVENT]" in text }} " +
+                "priorMessages=${priorContext.size} priorAssistantMessages=${priorAssistantMessages.size} " +
+                "priorThirdPersonCueItems=$priorThirdPersonItems " +
+                "priorAssistantThirdPersonStyleItems=$priorAssistantThirdPersonStyleItems " +
+                "priorNovelNarrationItems=$priorNovelNarrationItems " +
+                "compressedSummaryPresent=${compressedSummary != null} compressedSummaryThirdPersonDominant=$summaryThirdPersonDominant"
+            Logging.log("VoiceCallRequest", summary)
+            writeLog("VoiceCallRequest", summary)
+        }
         val current = Snapshot(
             requestId, source, System.currentTimeMillis(),
             body.filterKeys { it !in setOf("messages", "input", "tools", "instructions", "stream", "stream_options") }
@@ -129,6 +179,24 @@ internal class RequestContextDiagnostics(
         val field = (oldFields.keys + newFields.keys).firstOrNull { oldFields[it] != newFields[it] } ?: "fieldOrder"
         return "items[$index].$field"
     }
+
+    private companion object {
+        val VOICE_CALL_STATE = Regex("\\[VOICE_CALL_RUNTIME_STATE]\\s*state=(ACTIVE|ENDED|INACTIVE)")
+        const val COMPRESSED_SUMMARY_MARKER = "The following is a compressed summary of earlier messages in this conversation."
+    }
+}
+
+private fun JsonElement?.promptDiagnosticText(): String = when (this) {
+    is JsonPrimitive -> contentOrNull.orEmpty()
+    is JsonArray -> joinToString("\n") { it.promptDiagnosticText() }
+    is JsonObject -> get("text")?.promptDiagnosticText() ?: ""
+    else -> ""
+}
+
+private fun isThirdPersonDominant(text: String): Boolean {
+    val thirdPerson = text.count { it == '他' || it == '她' || it == '彼' }
+    val firstPerson = text.count { it == '我' || it == '僕' || it == '私' || it == '俺' }
+    return thirdPerson >= 3 && thirdPerson > firstPerson
 }
 
 private fun String.fingerprint(): String = MessageDigest.getInstance("SHA-256")

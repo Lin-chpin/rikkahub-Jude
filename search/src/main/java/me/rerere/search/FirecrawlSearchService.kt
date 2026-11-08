@@ -12,9 +12,11 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonObject
@@ -91,10 +93,17 @@ object FirecrawlSearchService : SearchService<SearchServiceOptions.FirecrawlOpti
         serviceOptions: SearchServiceOptions.FirecrawlOptions
     ): Result<SearchResult> = withContext(Dispatchers.IO) {
         runCatching {
-            val query = params["query"]?.jsonPrimitive?.content ?: error("query is required")
+            val query = params.requireSearchStringArgument("query")
 
-            val sources = params["sources"].asStringList()
-            val categories = params["categories"].asStringList()
+            val sources = params["sources"].asStringList("sources")
+            val categories = params["categories"].asStringList("categories")
+            if (sources?.any { it != "web" && it != "news" } == true) {
+                throw SearchToolArgumentException("sources")
+            }
+            if (categories?.any { it != "github" && it != "research" } == true) {
+                throw SearchToolArgumentException("categories")
+            }
+            val apiKey = requireSearchApiKey(serviceOptions.apiKey)
 
             val body = buildJsonObject {
                 put("query", query)
@@ -115,17 +124,22 @@ object FirecrawlSearchService : SearchService<SearchServiceOptions.FirecrawlOpti
                 .url("https://api.firecrawl.dev/v2/search")
                 .post(body.toString().toRequestBody())
                 .addHeader("Content-Type", "application/json")
-                .addHeader("Authorization", "Bearer ${serviceOptions.apiKey}")
+                .addHeader("Authorization", "Bearer $apiKey")
                 .build()
 
             val response = httpClient.newCall(request).await()
             if (!response.isSuccessful) {
-                error("response failed #${'$'}{response.code}")
+                response.throwSearchHttpFailure("Firecrawl search")
             }
 
             val bodyString = response.body.string()
-            val payload = json.parseToJsonElement(bodyString).jsonObject
-            val data = payload["data"]?.jsonObject ?: error("empty response data")
+            val payload = parseSearchResponse { json.parseToJsonElement(bodyString).jsonObject }
+            val success = payload["success"]?.let { parseSearchResponse { it.jsonPrimitive.boolean } }
+            if (success == false) {
+                searchProviderReportedFailure()
+            }
+            val data = payload["data"]?.let { parseSearchResponse { it.jsonObject } }
+                ?: missingSearchResponseField("data")
             val resultData = json.decodeFromJsonElement<FirecrawlSearchResultData>(data)
             val result = buildList {
                 resultData.web?.forEach { item ->
@@ -157,8 +171,12 @@ object FirecrawlSearchService : SearchService<SearchServiceOptions.FirecrawlOpti
         serviceOptions: SearchServiceOptions.FirecrawlOptions
     ): Result<ScrapedResult> = withContext(Dispatchers.IO) {
         runCatching {
-            val url = params["url"]?.jsonPrimitive?.content ?: error("url is required")
-            val onlyMainContent = params["onlyMainContent"]?.jsonPrimitive?.contentOrNull?.toBoolean() ?: true
+            val url = params.requireSearchStringArgument("url")
+            val apiKey = requireSearchApiKey(serviceOptions.apiKey)
+            val onlyMainContent = params["onlyMainContent"]?.let { value ->
+                (value as? JsonPrimitive)?.booleanOrNull
+                    ?: throw SearchToolArgumentException("onlyMainContent")
+            } ?: true
 
             val body = buildJsonObject {
                 put("url", url)
@@ -174,23 +192,25 @@ object FirecrawlSearchService : SearchService<SearchServiceOptions.FirecrawlOpti
                 .url("https://api.firecrawl.dev/v2/scrape")
                 .post(body.toString().toRequestBody())
                 .addHeader("Content-Type", "application/json")
-                .addHeader("Authorization", "Bearer ${serviceOptions.apiKey}")
+                .addHeader("Authorization", "Bearer $apiKey")
                 .build()
 
             val response = httpClient.newCall(request).await()
             if (!response.isSuccessful) {
-                error("response failed #${response.code}")
+                response.throwSearchHttpFailure("Firecrawl scrape")
             }
 
             val bodyString = response.body.string()
-            val payload = json.parseToJsonElement(bodyString).jsonObject
+            val payload = parseSearchResponse { json.parseToJsonElement(bodyString).jsonObject }
 
-            val success = payload["success"]?.jsonPrimitive?.contentOrNull?.toBoolean() ?: false
+            val success = payload["success"]?.let { parseSearchResponse { it.jsonPrimitive.boolean } }
+                ?: missingSearchResponseField("success")
             if (!success) {
-                error("scrape request failed")
+                searchProviderReportedFailure()
             }
 
-            val data = payload["data"]?.jsonObject ?: error("empty response data")
+            val data = payload["data"]?.let { parseSearchResponse { it.jsonObject } }
+                ?: missingSearchResponseField("data")
             val markdown = data["markdown"]?.jsonPrimitive?.content ?: ""
 
             ScrapedResult(
@@ -204,16 +224,22 @@ object FirecrawlSearchService : SearchService<SearchServiceOptions.FirecrawlOpti
         }
     }
 
-    private fun JsonElement?.asStringList(): List<String>? {
+    private fun JsonElement?.asStringList(argument: String): List<String>? {
         return when (this) {
             is JsonArray -> this.mapNotNull { element ->
-                element.jsonPrimitive.contentOrNull?.takeIf { it.isNotBlank() }
+                val primitive = element as? JsonPrimitive
+                    ?: throw SearchToolArgumentException(argument)
+                if (!primitive.isString) throw SearchToolArgumentException(argument)
+                primitive.contentOrNull?.trim()?.takeIf(String::isNotEmpty)
             }
 
-            is JsonPrimitive -> this.contentOrNull?.split(',')
-                ?.mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+            is JsonPrimitive -> {
+                if (!isString) throw SearchToolArgumentException(argument)
+                contentOrNull?.split(',')?.mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+            }
 
-            else -> null
+            null -> null
+            else -> throw SearchToolArgumentException(argument)
         }
     }
 }

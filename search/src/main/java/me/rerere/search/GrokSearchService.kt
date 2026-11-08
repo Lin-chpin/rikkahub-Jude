@@ -61,11 +61,10 @@ object GrokSearchService : SearchService<SearchServiceOptions.GrokOptions> {
     ): Result<SearchResult> = withContext(Dispatchers.IO) {
         runCatching {
             if (serviceOptions.apiKey.isBlank()) {
-                error("Grok API key is required")
+                missingSearchApiKey()
             }
 
-            val query = params["query"]?.jsonPrimitive?.content
-                ?: error("query is required")
+            val query = params.requireSearchStringArgument("query")
 
             val body = buildJsonObject {
                 put("model", JsonPrimitive(serviceOptions.model))
@@ -90,7 +89,7 @@ object GrokSearchService : SearchService<SearchServiceOptions.GrokOptions> {
                 put("store", JsonPrimitive(false))
             }
 
-            Log.i(TAG, "search: $query")
+            Log.i(TAG, "search request started")
 
             val request = Request.Builder()
                 .url(serviceOptions.customUrl)
@@ -133,7 +132,7 @@ object GrokSearchService : SearchService<SearchServiceOptions.GrokOptions> {
                     )
                 )
             } else {
-                error("response failed #${response.code}: ${response.body?.string()}")
+                response.throwSearchHttpFailure("Grok search")
             }
         }
     }

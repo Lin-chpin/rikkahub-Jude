@@ -44,6 +44,7 @@ import me.rerere.ai.provider.OPENAI_CODEX_BASE_URL
 import me.rerere.ai.provider.OpenAIAuthType
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.data.ai.chatErrorExplanation
 import me.rerere.rikkahub.data.ai.openai.OpenAICodexAuthService
 import me.rerere.rikkahub.data.ai.openai.OpenAICodexDeviceCode
 import me.rerere.rikkahub.data.datastore.DEFAULT_PROVIDERS
@@ -332,7 +333,7 @@ private fun ColumnScope.ProviderConfigureOpenAI(
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (error: Exception) {
-                authError = error.message ?: error.javaClass.simpleName
+                authError = error.chatErrorExplanation()
             } finally {
                 signingIn = false
                 authJob = null

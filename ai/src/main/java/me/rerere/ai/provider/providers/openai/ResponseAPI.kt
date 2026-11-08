@@ -40,7 +40,9 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.handleMessageChunk
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.HttpException
-import me.rerere.ai.util.withHttpStatus
+import me.rerere.ai.util.ProviderResponseParseException
+import me.rerere.ai.util.toHttpException
+import me.rerere.ai.util.safeFailureDiagnostic
 import me.rerere.ai.util.SSEEventSource
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.encodeBase64
@@ -49,7 +51,6 @@ import me.rerere.ai.util.mergeCustomBody
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
 import me.rerere.ai.util.parseErrorDetail
-import me.rerere.ai.util.stringSafe
 import me.rerere.ai.util.toHeaders
 import me.rerere.common.http.await
 import me.rerere.common.http.withoutAutomaticReplay
@@ -124,7 +125,7 @@ class ResponseAPI(
                     response.close()
                     throw failure
                 }
-                throw HttpException("Failed to get response: ${response.code} ${response.body.string()}", response.code)
+                throw response.toHttpException()
             }
 
             val bodyStr = response.body?.string() ?: ""
@@ -170,23 +171,52 @@ class ResponseAPI(
             ) {
                 if (completedNormally.get()) return
                 if (data == "[DONE]") {
-                    toolCalls.finish()?.let { trySendBlocking(it).getOrThrow() }
+                    val finalTools = try {
+                        toolCalls.finish()
+                    } catch (error: Exception) {
+                        completedNormally.set(true)
+                        close(ProviderResponseParseException("Responses API tool calls could not be parsed", error))
+                        return
+                    }
+                    finalTools?.let { trySendBlocking(it).getOrThrow() }
                     completedNormally.set(true)
                     close()
                     return
                 }
-                if (!params.suppressContentLogs) Log.d(TAG, "onEvent: $id/$type (${data.length} chars)")
-                val json = json.parseToJsonElement(data).jsonObject
-                ((json["response"] as? JsonObject)?.get("usage") as? JsonObject)?.let { usage ->
-                    runCatching { params.onTokenUsage?.invoke(usage) }
+                if (!params.suppressContentLogs) Log.d(TAG, "Responses API event received (${data.length} chars)")
+                val parsedEvent = try {
+                    val json = json.parseToJsonElement(data).jsonObject
+                    val response = json["response"] as? JsonObject
+                    val eventType = json["type"]?.jsonPrimitive?.contentOrNull
+                    val failure = if (eventType == "response.failed" || eventType == "error") {
+                        (response?.get("error") ?: json["error"])?.parseErrorDetail()
+                            ?: HttpException("Responses API reported a failed response")
+                    } else null
+                    response?.get("usage")?.let { it as? JsonObject }?.let { usage ->
+                        runCatching { params.onTokenUsage?.invoke(usage) }
+                    }
+                    toolCalls.accept(json)
+                    Triple(json, parseResponseDelta(json), failure)
+                } catch (error: Exception) {
+                    Log.w(TAG, "Responses stream response parse failed type=${error::class.simpleName}")
+                    close(ProviderResponseParseException("Responses API event could not be parsed", error))
+                    return
                 }
-                toolCalls.accept(json)
-                val chunk = parseResponseDelta(json)
+                val (json, chunk, failure) = parsedEvent
                 if (chunk != null) {
                     trySendBlocking(chunk).getOrThrow()
                 }
-                if (json["type"]?.jsonPrimitive?.contentOrNull == "response.completed") {
-                    toolCalls.finish()?.let { trySendBlocking(it).getOrThrow() }
+                if (failure != null) {
+                    completedNormally.set(true)
+                    close(failure)
+                } else if (json["type"]?.jsonPrimitive?.contentOrNull == "response.completed") {
+                    val finalTools = try {
+                        toolCalls.finish()
+                    } catch (error: Exception) {
+                        close(ProviderResponseParseException("Responses API tool calls could not be parsed", error))
+                        return
+                    }
+                    finalTools?.let { trySendBlocking(it).getOrThrow() }
                     completedNormally.set(true)
                     close()
                 }
@@ -203,24 +233,12 @@ class ResponseAPI(
                     close(failure)
                     return
                 }
-                var exception = t
-
-                t?.printStackTrace()
-                println("[onFailure] 发生错误: ${t?.javaClass?.name} ${t?.message} / $response")
-
-                val bodyRaw = response?.body?.stringSafe()
-                try {
-                    if (!bodyRaw.isNullOrBlank()) {
-                        val bodyElement = Json.parseToJsonElement(bodyRaw)
-                        exception = bodyElement.parseErrorDetail()
-                        Log.i(TAG, "onFailure: $exception")
-                    }
-                } catch (e: Throwable) {
-                    Log.w(TAG, "onFailure: failed to parse from $bodyRaw")
-                    e.printStackTrace()
-                } finally {
-                    close(exception.withHttpStatus(response))
-                }
+                val failure = response?.takeIf { !it.isSuccessful }?.toHttpException(t)
+                    ?: t
+                    ?: IllegalStateException("Responses API stream failed without an explicit cause")
+                response?.close()
+                Log.w(TAG, "Responses API stream request failed: ${failure.safeFailureDiagnostic()}")
+                close(failure)
             }
 
             override fun onClosed(eventSource: EventSource) {
@@ -525,7 +543,7 @@ class ResponseAPI(
                                         put("type", if (role == MessageRole.USER) "input_image" else "output_image")
                                         put("image_url", encodedImage.base64)
                                     }.onFailure {
-                                        it.printStackTrace()
+                                        Log.w(TAG, "Responses API image encoding failed: ${it.safeFailureDiagnostic()}")
                                         put("type", "input_text")
                                         put("text", "Error: Failed to encode image to base64")
                                     }

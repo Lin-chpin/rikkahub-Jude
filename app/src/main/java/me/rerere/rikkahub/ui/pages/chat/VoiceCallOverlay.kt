@@ -93,12 +93,14 @@ import java.util.UUID
 import java.util.Locale
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.util.GenerationTimingTrace
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Voice
 import me.rerere.hugeicons.stroke.VolumeHigh
 import me.rerere.rikkahub.RouteActivity
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.data.ai.chatErrorExplanation
 import me.rerere.rikkahub.data.datastore.getAssistantById
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.datastore.getSelectedASRProvider
@@ -237,6 +239,7 @@ fun VoiceCallOverlay(
     var visualSpeechStarted by remember(conversation.id) { mutableStateOf(false) }
     val visualCameraState by visualCapture.cameraState.collectAsState()
     val visualScreenState by visualCapture.screenState.collectAsState()
+    val cameraPreviewVisible = visualCameraState.enabled && !visualScreenState.active
     val capturingVisualFrame = visualRoundState.isCapturing
     val recognizingVisual = visualRoundState.isRecognizing
     var cameraPreviewExpanded by remember(conversation.id) { mutableStateOf(false) }
@@ -317,6 +320,27 @@ fun VoiceCallOverlay(
         }
     }
 
+    LaunchedEffect(
+        visualCameraState.enabled,
+        visualCameraState.isFrontCamera,
+        visualCameraState.error,
+        visualScreenState.active,
+        visualScreenState.error,
+        cameraPreviewExpanded,
+    ) {
+        val hiddenReason = when {
+            visualScreenState.active -> "screen_sharing"
+            !visualCameraState.enabled -> "camera_disabled"
+            else -> "none"
+        }
+        recordVoiceCallFlow(
+            "视觉 UI 状态 camera=${visualCameraState.enabled} front=${visualCameraState.isFrontCamera} " +
+                "cameraError=${visualCameraState.error != null} screen=${visualScreenState.active} " +
+                "screenError=${visualScreenState.error != null} previewVisible=$cameraPreviewVisible " +
+                "previewExpanded=$cameraPreviewExpanded hiddenReason=$hiddenReason"
+        )
+    }
+
     val standaloneHistoryRecord = if (isHistory) {
         conversation.messageNodes.asSequence()
             .flatMap { it.messages.asSequence() }
@@ -325,6 +349,7 @@ fun VoiceCallOverlay(
     } else {
         null
     }
+    var compressingCallSummary by remember(historyCallId) { mutableStateOf(false) }
     val historyMessageIds = standaloneHistoryRecord?.messageIds.orEmpty()
     val visibleMessages = if (isHistory) {
         if (historyMessageIds.isNotEmpty()) {
@@ -527,6 +552,7 @@ fun VoiceCallOverlay(
     fun sendCapturedText(
         text: String,
         visualSessionId: String? = null,
+        voiceCallInputTiming: GenerationTimingTrace? = null,
     ): Boolean {
         if (voiceCallResultReported) return false
         val contentText = text.trim()
@@ -563,19 +589,23 @@ fun VoiceCallOverlay(
                     }
                     if (prepared == null) {
                         visualRequestHasParts = false
+                        recordVoiceCallFlow("画面请求部件 session=${sessionId.take(8)} result=missing")
                         emptyList()
                     } else {
                         visualRequestHasParts = prepared.parts.isNotEmpty()
+                        recordVoiceCallFlow(
+                            "画面请求部件 session=${sessionId.take(8)} frames=${prepared.capturedFrameCount} " +
+                                "recognized=${prepared.recognizedDescriptions.joinToString(",") { "${it.first}:${it.second.length}" }.ifBlank { "none" }} " +
+                                "failed=${prepared.failedOcrCount} parts=${prepared.parts.joinToString(",") { it::class.simpleName ?: "unknown" }.ifBlank { "none" }}"
+                        )
                         withContext(Dispatchers.Main) {
                             if (prepared.hadActiveSource && prepared.capturedFrameCount == 0) {
                                 toaster.show("本轮画面未就绪或采集失败，仅发送语音内容。", type = ToastType.Warning)
                             } else if (prepared.failedOcrCount > 0) {
                                 toaster.show(
-                                    if (prepared.failedOcrCount == prepared.capturedFrameCount) {
+                                    prepared.ocrFailure?.userMessage() ?: if (prepared.failedOcrCount == prepared.capturedFrameCount) {
                                         "通话画面识图失败，本轮仅发送语音内容。"
-                                    } else {
-                                        "部分通话画面识图失败，已发送其余识图结果和语音。"
-                                    },
+                                    } else "部分通话画面识图失败，已发送其余识图结果和语音。",
                                     type = ToastType.Warning,
                                 )
                             }
@@ -600,6 +630,7 @@ fun VoiceCallOverlay(
             includeVoiceCallConnectedEvent = includeConnectedEvent,
             requestMessagePartsProvider = visualPartsProvider,
             onVoiceCallVisualSendStatus = visualSendStatusCallback,
+            voiceCallInputTiming = voiceCallInputTiming,
         )
         hasSubmittedUserMessage = true
         onMessageSubmitted()
@@ -751,6 +782,7 @@ fun VoiceCallOverlay(
         text: String,
         reason: String,
         sessionId: String? = visualRound.currentSessionId(),
+        voiceCallInputTiming: GenerationTimingTrace? = null,
     ): Boolean {
         if (sessionId == null || !visualRound.isCurrent(sessionId)) return false
         if (text.isBlank() && reason != "idle_timeout") return false
@@ -765,7 +797,7 @@ fun VoiceCallOverlay(
                 "chars=${text.trim().length}"
         )
         visualSpeechStarted = false
-        return sendCapturedText(question, sessionId)
+        return sendCapturedText(question, sessionId, voiceCallInputTiming)
     }
 
     val duplexInput = rememberVoiceCallDuplexInput(
@@ -785,11 +817,11 @@ fun VoiceCallOverlay(
         onInterrupt = {
             if (!voiceCallResultReported) interruptCurrentReplyForInput()
         },
-        onSubmit = { text ->
+        onSubmit = { text, timing ->
             val sessionId = visualRound.currentSessionId()
-            if (sessionId == null || !finishVisualQuestion(text, "asr_final", sessionId)) {
+            if (sessionId == null || !finishVisualQuestion(text, "asr_final", sessionId, timing)) {
                 visualSpeechStarted = false
-                sendCapturedText(text)
+                sendCapturedText(text, voiceCallInputTiming = timing)
             }
         },
     )
@@ -844,7 +876,14 @@ fun VoiceCallOverlay(
 
     fun startVisualQuestion() {
         view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-        if (isHistory || !visualFeatureEnabled || !supportsCallImagesNow) return
+        recordVoiceCallFlow(
+            "截图开始请求 history=$isHistory featureEnabled=$visualFeatureEnabled supportsImages=$supportsCallImagesNow " +
+                "camera=${visualCameraState.enabled} screen=${visualScreenState.active}"
+        )
+        if (isHistory || !visualFeatureEnabled || !supportsCallImagesNow) {
+            recordVoiceCallFlow("截图请求拒绝 history=$isHistory featureEnabled=$visualFeatureEnabled supportsImages=$supportsCallImagesNow")
+            return
+        }
         val previousSessionId = visualRound.currentSessionId()
         val sessionId = visualRound.beginCapture()
         if (sessionId == null) {
@@ -864,12 +903,35 @@ fun VoiceCallOverlay(
                 visualCapture.prepareRequest(
                     mainModel = callModel,
                     maxFrameCount = maxFrameCount,
-                    onFramesCaptured = { frames -> visualRound.framesCaptured(sessionId, frames) },
-                    onRecognitionChanged = { recognizing -> visualRound.recognitionChanged(sessionId, recognizing) },
-                ).also { prepared -> visualRound.captureFinished(sessionId, prepared) }
+                    onFramesCaptured = { frames ->
+                        recordVoiceCallFlow(
+                            "截图帧回调 session=${sessionId.take(8)} count=${frames.size} " +
+                                "sources=${frames.joinToString(",") { it.source.name }.ifBlank { "none" }} " +
+                                "jpegBytes=${frames.joinToString(",") { "${it.source.name}:${it.jpeg.size}" }.ifBlank { "none" }} " +
+                                "thumbnail=not_retained"
+                        )
+                        visualRound.framesCaptured(sessionId, frames)
+                    },
+                    onRecognitionChanged = { recognizing ->
+                        recordVoiceCallFlow("OCR 批次状态 session=${sessionId.take(8)} recognizing=$recognizing")
+                        visualRound.recognitionChanged(sessionId, recognizing)
+                    },
+                    onOcrFailure = { source, diagnostic ->
+                        recordVoiceCallFlow("截图识图失败 session=${sessionId.take(8)} source=$source $diagnostic")
+                    },
+                    traceId = sessionId,
+                ).also { prepared ->
+                    recordVoiceCallFlow(
+                        "截图准备结果 session=${sessionId.take(8)} frames=${prepared.capturedFrameCount} " +
+                            "recognized=${prepared.recognizedDescriptions.joinToString(",") { "${it.first}:${it.second.length}" }.ifBlank { "none" }} " +
+                            "failed=${prepared.failedOcrCount} parts=${prepared.parts.size}"
+                    )
+                    visualRound.captureFinished(sessionId, prepared)
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
+                recordVoiceCallFlow("画面请求准备失败 exception=${error::class.simpleName ?: "Exception"}")
                 visualRound.captureFailed(sessionId)
                 VoiceCallVisualRequest(
                     parts = emptyList(),
@@ -894,6 +956,9 @@ fun VoiceCallOverlay(
     val canCaptureVisualNow by rememberUpdatedState(visualCameraState.enabled || visualScreenState.active)
     LaunchedEffect(visualCapture, callId) {
         VoiceCallFloatingBallActions.events.collect { action ->
+            recordVoiceCallFlow(
+                "悬浮球操作 action=$action camera=${visualCameraState.enabled} screen=${visualScreenState.active}"
+            )
             when (action) {
                 VoiceCallFloatingBallActions.Action.RETURN_TO_CALL -> Unit
                 VoiceCallFloatingBallActions.Action.CAPTURE_AND_SEND -> {
@@ -911,6 +976,9 @@ fun VoiceCallOverlay(
         visualRoundState.status,
         visualRoundState.isCapturing,
         visualRoundState.isRecognizing,
+        visualRoundState.capturedImageCount,
+        visualRoundState.recognizedImageCount,
+        visualRoundState.failedImageCount,
         visualRoundState.completed,
         aiReplyActive,
         playbackState.status,
@@ -922,6 +990,8 @@ fun VoiceCallOverlay(
             recordVoiceCallFlow(
                 "画面/回复状态 session=${sessionId.take(8)} visual=${visualRoundState.status} " +
                     "capturing=${visualRoundState.isCapturing} ocr=${visualRoundState.isRecognizing} " +
+                    "frames=${visualRoundState.capturedImageCount} recognized=${visualRoundState.recognizedImageCount} " +
+                    "failed=${visualRoundState.failedImageCount} " +
                     "complete=${visualRoundState.completed} replyActive=$aiReplyActive " +
                     "playback=${playbackState.status} asr=${duplexInput.asrState.status} " +
                     "muted=${duplexInput.muted} asrError=${duplexInput.error != null}"
@@ -1030,7 +1100,7 @@ fun VoiceCallOverlay(
         autoListenEnabled && duplexInput.asrState.status == me.rerere.asr.ASRStatus.Connecting -> "正在连接 ASR..."
         duplexListening -> "正在持续聆听，识别完成后自动发送；说话时可打断 AI。"
         callAsrState.isRecording -> "正在使用已配置的 ASR 识别语音。"
-        duplexInput.error != null && autoListenEnabled -> "ASR连接失败，静音后再恢复可重试。"
+        duplexInput.error != null && autoListenEnabled -> duplexInput.error.orEmpty()
         aiReplyDisplayActive -> "AI 正在回复中"
         callAsrState.isAvailable -> "点按语音输入，使用已配置的 ASR。"
         else -> "未配置 ASR，点按语音输入使用输入法麦克风。"
@@ -1047,17 +1117,25 @@ fun VoiceCallOverlay(
     }
     val floatingCallStatus = when {
         voiceCallResultReported -> null
-        aiReplyDisplayActive -> "AI 正在回复中"
         duplexInput.muted -> "聆听已静音"
+        duplexInput.error != null && autoListenEnabled -> "ASR错误：${duplexInput.error.orEmpty()}"
+        aiReplyActive -> "AI 正在回复中"
         autoListenEnabled && duplexInput.asrState.status == me.rerere.asr.ASRStatus.Connecting -> "正在连接 ASR..."
         duplexListening -> "正在持续聆听"
         callAsrState.isRecording -> "正在使用已配置的 ASR 识别"
         else -> null
     }
-    val floatingStatus = listOfNotNull(visualActivityStatus, floatingCallStatus)
-        .joinToString(" · ")
+    val floatingStatus = listOfNotNull(
+        visualActivityStatus,
+        floatingCallStatus,
+        visualRoundState.capturedImageCount.takeIf { it > 0 }?.let { "$it/$VOICE_CALL_VISUAL_MAX_IMAGES" },
+    ).joinToString(" · ")
     LaunchedEffect(floatingStatus, visualScreenState.active) {
         if (visualScreenState.active) {
+            recordVoiceCallFlow(
+                "共享屏幕悬浮球反馈 status=${floatingStatus.ifBlank { "none" }} " +
+                    "thumbnail=false bytes=0"
+            )
             VoiceCallScreenCaptureService.setFloatingBallFeedback(
                 status = floatingStatus,
                 thumbnail = null,
@@ -1204,6 +1282,42 @@ fun VoiceCallOverlay(
                                 maxLines = 3,
                                 overflow = TextOverflow.Ellipsis,
                             )
+
+                            if (isHistory && standaloneHistoryRecord != null) {
+                                val callSummary = standaloneHistoryRecord.summary.orEmpty()
+                                if (callSummary.isBlank()) {
+                                    VoiceCallActionBubble(
+                                        enabled = !compressingCallSummary,
+                                        onClick = {
+                                            compressingCallSummary = true
+                                            vm.compressVoiceCallRecord(historyCallId) { result ->
+                                                compressingCallSummary = false
+                                                result.onFailure { error ->
+                                                    toaster.show(
+                                                        error.chatErrorExplanation(),
+                                                        type = ToastType.Warning,
+                                                    )
+                                                }
+                                            }
+                                        },
+                                    ) {
+                                        Text(if (compressingCallSummary) "正在压缩…" else "压缩本次通话")
+                                    }
+                                } else {
+                                    ConversationSummaryButton(
+                                        summary = callSummary,
+                                        autoCompressEnabled = false,
+                                        title = "通话摘要",
+                                        statusLabel = "仅本次通话",
+                                        allowClear = false,
+                                        onSummaryChange = { editedSummary ->
+                                            editedSummary?.let {
+                                                vm.updateVoiceCallRecordSummary(historyCallId, it)
+                                            }
+                                        },
+                                    )
+                                }
+                            }
                         }
                     }
 
@@ -1389,9 +1503,10 @@ fun VoiceCallOverlay(
                 }
 
                 BackHandler(enabled = cameraPreviewExpanded) {
+                    recordVoiceCallFlow("相机预览收起 source=back")
                     cameraPreviewExpanded = false
                 }
-                if (visualCameraState.enabled && !visualScreenState.active) {
+                if (cameraPreviewVisible) {
                     Box(
                         modifier = Modifier
                             .then(
@@ -1403,7 +1518,10 @@ fun VoiceCallOverlay(
                                     .clip(RoundedCornerShape(16.dp))
                             )
                             .background(if (cameraPreviewExpanded) Color.Black else Color.Transparent)
-                            .clickable(enabled = !cameraPreviewExpanded) { cameraPreviewExpanded = true },
+                            .clickable(enabled = !cameraPreviewExpanded) {
+                                recordVoiceCallFlow("相机预览展开 source=preview_tap")
+                                cameraPreviewExpanded = true
+                            },
                     ) {
                         VoiceCallCameraPreview(visualCapture, Modifier.fillMaxSize())
                         if (cameraPreviewExpanded) {
@@ -1416,13 +1534,18 @@ fun VoiceCallOverlay(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 TextButton(onClick = { cameraPreviewExpanded = false }) {
+                                    recordVoiceCallFlow("相机预览收起 source=return_button")
                                     Text("返回")
                                 }
                                 Row {
-                                    TextButton(onClick = visualCapture::switchCamera) {
+                                    TextButton(onClick = {
+                                        recordVoiceCallFlow("镜头切换 source=expanded_preview")
+                                        visualCapture.switchCamera()
+                                    }) {
                                         Text("翻转镜头")
                                     }
                                     TextButton(onClick = {
+                                        recordVoiceCallFlow("摄像头关闭 source=expanded_preview")
                                         visualCapture.setCameraEnabled(false)
                                         cameraPreviewExpanded = false
                                     }) {

@@ -52,7 +52,8 @@ object OllamaSearchService : SearchService<SearchServiceOptions.OllamaOptions> {
         serviceOptions: SearchServiceOptions.OllamaOptions
     ): Result<SearchResult> = withContext(Dispatchers.IO) {
         runCatching {
-            val query = params["query"]?.jsonPrimitive?.content ?: error("query is required")
+            val query = params.requireSearchStringArgument("query")
+            val apiKey = requireSearchApiKey(serviceOptions.apiKey)
 
             val body = buildJsonObject {
                 put("query", query)
@@ -62,7 +63,7 @@ object OllamaSearchService : SearchService<SearchServiceOptions.OllamaOptions> {
             val request = Request.Builder()
                 .url("https://ollama.com/api/web_search")
                 .post(body.toString().toRequestBody("application/json".toMediaType()))
-                .addHeader("Authorization", "Bearer ${serviceOptions.apiKey}")
+                .addHeader("Authorization", "Bearer $apiKey")
                 .build()
 
             val response = httpClient.newCall(request).await()
@@ -82,7 +83,7 @@ object OllamaSearchService : SearchService<SearchServiceOptions.OllamaOptions> {
                     )
                 )
             } else {
-                error("Ollama search failed with code ${response.code}: ${response.message}")
+                response.throwSearchHttpFailure("Ollama search")
             }
         }
     }

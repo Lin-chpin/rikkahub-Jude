@@ -64,13 +64,14 @@ object TinyfishSearchService : SearchService<SearchServiceOptions.TinyfishOption
         serviceOptions: SearchServiceOptions.TinyfishOptions
     ): Result<SearchResult> = withContext(Dispatchers.IO) {
         runCatching {
-            val query = params["query"]?.jsonPrimitive?.content ?: error("query is required")
+            val query = params.requireSearchStringArgument("query")
+            val apiKey = requireSearchApiKey(serviceOptions.apiKey)
             val url = "https://api.search.tinyfish.ai" +
                     "?query=${java.net.URLEncoder.encode(query, "UTF-8")}"
 
             val request = Request.Builder()
                 .url(url)
-                .addHeader("X-API-Key", serviceOptions.apiKey)
+                .addHeader("X-API-Key", apiKey)
                 .build()
 
             val response = httpClient.newCall(request).await()
@@ -93,7 +94,7 @@ object TinyfishSearchService : SearchService<SearchServiceOptions.TinyfishOption
                     )
                 )
             } else {
-                error("Tinyfish search failed with code ${response.code}: ${response.message}")
+                response.throwSearchHttpFailure("Tinyfish search")
             }
         }
     }
@@ -104,7 +105,8 @@ object TinyfishSearchService : SearchService<SearchServiceOptions.TinyfishOption
         serviceOptions: SearchServiceOptions.TinyfishOptions
     ): Result<ScrapedResult> = withContext(Dispatchers.IO) {
         runCatching {
-            val url = params["url"]?.jsonPrimitive?.content ?: error("url is required")
+            val url = params.requireSearchStringArgument("url")
+            val apiKey = requireSearchApiKey(serviceOptions.apiKey)
             val body = buildJsonObject {
                 put("urls", kotlinx.serialization.json.buildJsonArray {
                     add(kotlinx.serialization.json.JsonPrimitive(url))
@@ -115,7 +117,7 @@ object TinyfishSearchService : SearchService<SearchServiceOptions.TinyfishOption
             val request = Request.Builder()
                 .url("https://api.fetch.tinyfish.ai")
                 .post(body.toString().toRequestBody("application/json".toMediaType()))
-                .addHeader("X-API-Key", serviceOptions.apiKey)
+                .addHeader("X-API-Key", apiKey)
                 .build()
 
             val response = httpClient.newCall(request).await()
@@ -139,7 +141,7 @@ object TinyfishSearchService : SearchService<SearchServiceOptions.TinyfishOption
                     )
                 )
             } else {
-                error("Tinyfish fetch failed with code ${response.code}: ${response.message}")
+                response.throwSearchHttpFailure("Tinyfish fetch")
             }
         }
     }

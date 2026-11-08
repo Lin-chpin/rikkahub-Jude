@@ -35,7 +35,6 @@ class ConversationRepository(
     companion object {
         private const val PAGE_SIZE = 20
         private const val INITIAL_LOAD_SIZE = 40
-        private const val MESSAGE_NODE_PAGE_SIZE = 256
     }
 
     suspend fun getRecentConversations(assistantId: Uuid, limit: Int = 10): List<Conversation> {
@@ -198,9 +197,6 @@ class ConversationRepository(
         } else null
     }
 
-    suspend fun getConversationAssistantId(uuid: Uuid): Uuid? =
-        conversationDAO.getConversationAssistantId(uuid.toString())?.let { Uuid.parse(it) }
-
     suspend fun existsConversationById(uuid: Uuid): Boolean {
         return conversationDAO.existsById(uuid.toString())
     }
@@ -361,7 +357,7 @@ class ConversationRepository(
         return database.withTransaction {
             val nodes = mutableListOf<MessageNode>()
             var offset = 0
-            val pageSize = MESSAGE_NODE_PAGE_SIZE
+            val pageSize = 64
             while (true) {
                 // A partial conversation must never reach the full-replacement save path.
                 val page = messageNodeDAO.getNodesOfConversationPaged(conversationId, pageSize, offset)

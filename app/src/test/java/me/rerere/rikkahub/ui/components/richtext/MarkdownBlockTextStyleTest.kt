@@ -4,17 +4,76 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.isSpecified
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.jsoup.Jsoup
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MarkdownBlockTextStyleTest {
     private val density = Density(1f)
     private val parent = TextStyle(fontSize = 16.sp, lineHeight = 24.sp)
+
+    @Test
+    fun `unlabelled indented styled HTML is recovered from a Markdown code block`() {
+        val markdown = """
+            <!-- generated reply -->
+                <div style="background:#9d174d;color:#fff">
+                    你好
+                </div>
+        """.trimIndent()
+        val parsedMarkdown = Jsoup.parse(generateMarkdownHtml(markdown))
+
+        assertNull("The user’s styled HTML should no longer be emitted as code", parsedMarkdown.selectFirst("pre > code"))
+        assertNotNull(parsedMarkdown.selectFirst("div[style]"))
+    }
+
+    @Test
+    fun `fenced HTML with and without a language and ordinary code remain code blocks`() {
+        listOf(
+            """
+                ```
+                    <div style="color:red">text</div>
+                ```
+            """.trimIndent(),
+            """
+                ```html
+                    <div style="color:red">text</div>
+                ```
+            """.trimIndent(),
+            "    <div>code example</div>",
+        ).forEach { markdown ->
+            assertNotNull(Jsoup.parse(generateMarkdownHtml(markdown)).selectFirst("pre > code"))
+        }
+    }
+
+    @Test
+    fun `CSS percentages and four-value border radius accept screenshot bubble values`() {
+        assertEquals(0.82f, requireNotNull(parseCssPercentage("82%")), 0.001f)
+        assertNull(parseCssPercentage("-2%"))
+        assertNull(parseCssPercentage("82px"))
+        assertEquals(
+            listOf(12.dp, 12.dp, 12.dp, 12.dp),
+            parseCssBorderRadius("12px"),
+        )
+        assertEquals(
+            listOf(12.dp, 4.dp, 12.dp, 4.dp),
+            parseCssBorderRadius("12px 4px"),
+        )
+        assertEquals(
+            listOf(12.dp, 4.dp, 2.dp, 4.dp),
+            parseCssBorderRadius("12px 4px 2px"),
+        )
+        assertEquals(
+            listOf(12.dp, 12.dp, 2.dp, 12.dp),
+            parseCssBorderRadius("12px 12px 2px 12px"),
+        )
+        assertNull(parseCssBorderRadius("12px invalid 2px 12px"))
+    }
 
     @Test
     fun `reward card HTML accepts the outer container without an explicit font size`() {

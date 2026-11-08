@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import me.rerere.tts.model.AudioChunk
+import me.rerere.tts.provider.TTSProviderErrorCode
+import me.rerere.tts.provider.TTSProviderException
 
 /** Replay text only before any audio escapes. An audible turn must never restart from its beginning. */
 internal fun recoverRealtimeDialogue(
@@ -46,7 +48,20 @@ internal fun recoverRealtimeDialogue(
                     return@coroutineScope
                 } catch (error: Throwable) {
                     if (error is CancellationException || audioDelivered) throw error
-                    val permanent = listOf("401", "403").any { error.message.orEmpty().contains(it) }
+                    val permanent = error.causeChain().filterIsInstance<TTSProviderException>().any {
+                        it.statusCode in setOf(401, 402, 403) ||
+                            it.providerCode in setOf(
+                                TTSProviderErrorCode.INVALID_API_KEY,
+                                TTSProviderErrorCode.AUTHENTICATION_ERROR,
+                                TTSProviderErrorCode.AUTH_ERROR,
+                                TTSProviderErrorCode.UNAUTHORIZED,
+                                TTSProviderErrorCode.PERMISSION_DENIED,
+                                TTSProviderErrorCode.FORBIDDEN,
+                                TTSProviderErrorCode.PAYMENT_ISSUE,
+                                TTSProviderErrorCode.PAYMENT_REQUIRED,
+                                TTSProviderErrorCode.INSUFFICIENT_QUOTA,
+                            )
+                    }
                     if (permanent) throw error
                     if (attempt == 1) {
                         if (fallback == null) throw error
@@ -60,5 +75,14 @@ internal fun recoverRealtimeDialogue(
             producer.cancel()
             pending.cancel()
         }
+    }
+}
+
+private fun Throwable.causeChain(): Sequence<Throwable> = sequence {
+    val seen = mutableSetOf<Throwable>()
+    var current: Throwable? = this@causeChain
+    while (current != null && seen.add(current)) {
+        yield(current)
+        current = current.cause
     }
 }

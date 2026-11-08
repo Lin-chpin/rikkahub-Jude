@@ -25,6 +25,7 @@ import android.os.HandlerThread
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.DisplayMetrics
+import android.util.Log
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -33,6 +34,8 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.RouteActivity
 import me.rerere.rikkahub.data.voice.VoiceCallScreenFrames
 import me.rerere.rikkahub.data.voice.voiceCallFrameSize
+
+private const val TAG = "VoiceCallFlow"
 
 class VoiceCallScreenCaptureService : Service() {
     private var floatingBall: VoiceCallFloatingBall? = null
@@ -56,6 +59,7 @@ class VoiceCallScreenCaptureService : Service() {
 
         override fun onStop() {
             if (!isCurrent()) return
+            Log.i(TAG, "screen projection stopped session=${sessionId.take(8)}")
             VoiceCallScreenFrames.stop(sessionId)
             releaseCapture()
             stopSelf()
@@ -63,16 +67,22 @@ class VoiceCallScreenCaptureService : Service() {
 
         override fun onCapturedContentResize(width: Int, height: Int) {
             if (!isCurrent()) return
-            runCatching { resize(width, height) }.onFailure { fail() }
+            Log.i(TAG, "screen projection resize callback session=${sessionId.take(8)} size=${width}x$height")
+            runCatching { resize(width, height) }
+                .onFailure { fail("resize_exception=${it::class.simpleName ?: "Exception"}") }
         }
 
         override fun onCapturedContentVisibilityChanged(isVisible: Boolean) {
-            if (isCurrent()) VoiceCallScreenFrames.setVisible(sessionId, isVisible)
+            if (isCurrent()) {
+                Log.i(TAG, "screen projection visibility session=${sessionId.take(8)} visible=$isVisible")
+                VoiceCallScreenFrames.setVisible(sessionId, isVisible)
+            }
         }
     }
 
     override fun onCreate() {
         super.onCreate()
+        Log.i(TAG, "screen capture service created")
         runningService = this
         floatingBall = VoiceCallFloatingBall(this)
         captureThread.start()
@@ -85,10 +95,12 @@ class VoiceCallScreenCaptureService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val request = intent ?: run {
+            Log.w(TAG, "screen capture service start rejected reason=missing_intent")
             stopSelf(startId)
             return START_NOT_STICKY
         }
         if (request.action == ACTION_STOP) {
+            Log.i(TAG, "screen capture service stop action session=${owner?.take(8) ?: "none"}")
             owner?.let { VoiceCallScreenFrames.stop(it) }
             releaseCapture()
             stopSelf()
@@ -96,15 +108,20 @@ class VoiceCallScreenCaptureService : Service() {
         }
         val sessionId = request.getStringExtra(EXTRA_SESSION)
         if (sessionId == null || !VoiceCallScreenFrames.owns(sessionId)) {
+            Log.w(TAG, "screen capture service start rejected reason=stale_owner session=${sessionId?.take(8) ?: "none"}")
             stopSelf(startId)
             return START_NOT_STICKY
         }
         if (getSystemService(KeyguardManager::class.java).isKeyguardLocked ||
             !getSystemService(PowerManager::class.java).isInteractive) {
+            Log.w(TAG, "screen capture service start rejected reason=screen_locked session=${sessionId.take(8)}")
             stopForScreenLock(sessionId)
             return START_NOT_STICKY
         }
-        if (owner == sessionId && projection != null) return START_NOT_STICKY
+        if (owner == sessionId && projection != null) {
+            Log.i(TAG, "screen capture service start ignored reason=already_active session=${sessionId.take(8)}")
+            return START_NOT_STICKY
+        }
         releaseCapture()
         owner = sessionId
         try {
@@ -125,6 +142,11 @@ class VoiceCallScreenCaptureService : Service() {
             mediaProjection.registerCallback(callback, mainHandler)
             val (width, height) = screenDimensions()
             val (captureWidth, captureHeight) = voiceCallFrameSize(width, height)
+            Log.i(
+                TAG,
+                "screen capture start session=${sessionId.take(8)} display=${width}x$height " +
+                    "capture=${captureWidth}x$captureHeight densityDpi=${resources.configuration.densityDpi}",
+            )
             val imageReader = createReader(sessionId, captureWidth, captureHeight)
             reader = imageReader
             currentSize = captureWidth to captureHeight
@@ -133,17 +155,26 @@ class VoiceCallScreenCaptureService : Service() {
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, imageReader.surface, null, mainHandler,
             )
             VoiceCallScreenFrames.started(sessionId)
-        } catch (_: Exception) {
-            fail()
+        } catch (error: Exception) {
+            fail("start_exception=${error::class.simpleName ?: "Exception"}")
         }
         return START_NOT_STICKY
     }
 
     private fun createReader(sessionId: String, width: Int, height: Int): ImageReader {
         val generation = VoiceCallScreenFrames.newReader(sessionId)
+        Log.i(TAG, "screen image reader created session=${sessionId.take(8)} generation=$generation size=${width}x$height")
         return ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3).apply {
+            var firstFrameLogged = false
             setOnImageAvailableListener({ source ->
                 runCatching { source.acquireLatestImage() }.getOrNull()?.let {
+                    if (!firstFrameLogged) {
+                        firstFrameLogged = true
+                        Log.i(
+                            TAG,
+                            "screen first frame session=${sessionId.take(8)} generation=$generation size=${it.width}x${it.height}",
+                        )
+                    }
                     VoiceCallScreenFrames.offer(sessionId, generation, it)
                 }
             }, captureHandler)
@@ -156,6 +187,7 @@ class VoiceCallScreenCaptureService : Service() {
         if (width <= 0 || height <= 0) return
         val size = voiceCallFrameSize(width, height)
         if (size == currentSize) return
+        Log.i(TAG, "screen capture resize session=${sessionId.take(8)} from=${currentSize?.first}x${currentSize?.second} to=${size.first}x${size.second}")
         VoiceCallScreenFrames.newReader(sessionId)
         currentDisplay.surface = null
         reader?.setOnImageAvailableListener(null, null)
@@ -171,7 +203,8 @@ class VoiceCallScreenCaptureService : Service() {
         super.onConfigurationChanged(newConfig)
         if (Build.VERSION.SDK_INT < 34) {
             val (width, height) = screenDimensions()
-            runCatching { resize(width, height) }.onFailure { fail() }
+            runCatching { resize(width, height) }
+                .onFailure { fail("configuration_resize_exception=${it::class.simpleName ?: "Exception"}") }
         }
     }
 
@@ -220,13 +253,15 @@ class VoiceCallScreenCaptureService : Service() {
         )
     }
 
-    private fun fail() {
+    private fun fail(reason: String) {
+        Log.w(TAG, "screen capture failed session=${owner?.take(8) ?: "none"} reason=$reason")
         owner?.let { VoiceCallScreenFrames.stop(it, "屏幕共享已中断，请返回通话界面重新授权。语音通话仍可继续。") }
         releaseCapture()
         stopSelf()
     }
 
     private fun stopForScreenLock(sessionId: String? = owner) {
+        Log.w(TAG, "screen capture stopped reason=screen_locked session=${sessionId?.take(8) ?: "none"}")
         sessionId?.let { VoiceCallScreenFrames.stop(it, "屏幕关闭或锁定，共享已停止。解锁后可重新开启共享。") }
         releaseCapture()
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -235,6 +270,13 @@ class VoiceCallScreenCaptureService : Service() {
 
     private fun releaseCapture() {
         val sessionId = owner
+        if (sessionId != null || projection != null || display != null || reader != null) {
+            Log.i(
+                TAG,
+                "screen capture release session=${sessionId?.take(8) ?: "none"} " +
+                    "projection=${projection != null} display=${display != null} reader=${reader != null}",
+            )
+        }
         owner = null
         sessionId?.let(VoiceCallScreenFrames::clearFrame)
         reader?.setOnImageAvailableListener(null, null)
@@ -252,6 +294,7 @@ class VoiceCallScreenCaptureService : Service() {
     }
 
     override fun onDestroy() {
+        Log.i(TAG, "screen capture service destroyed session=${owner?.take(8) ?: "none"}")
         unregisterReceiver(screenOffReceiver)
         floatingBall?.close()
         floatingBall = null
@@ -288,12 +331,19 @@ class VoiceCallScreenCaptureService : Service() {
 
         internal fun setFloatingBallHidden(hidden: Boolean) {
             val service = runningService ?: return
+            Log.i(TAG, "screen capture hides floating ball hidden=$hidden session=${service.owner?.take(8) ?: "none"}")
             if (hidden) service.floatingBall?.hideForCapture()
             else service.floatingBall?.showAfterCapture()
         }
 
         internal fun setFloatingBallFeedback(status: String, thumbnail: ByteArray?) {
-            runningService?.floatingBall?.setVisualFeedback(status, thumbnail)
+            val service = runningService ?: return
+            Log.i(
+                TAG,
+                "screen floating feedback session=${service.owner?.take(8) ?: "none"} " +
+                    "status=${status.ifBlank { "none" }} thumbnail=${thumbnail != null} thumbnailBytes=${thumbnail?.size ?: 0}",
+            )
+            service.floatingBall?.setVisualFeedback(status, thumbnail)
         }
 
         internal fun refreshForegroundForMicrophone() {

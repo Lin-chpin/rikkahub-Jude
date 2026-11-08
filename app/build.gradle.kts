@@ -35,9 +35,15 @@ android {
     productFlavors {
         create("public") {
             dimension = "distribution"
+            versionCode = 177
+            versionName = "v1.2.1"
+            buildConfigField("String", "VERSION_NAME", "\"v1.2.1\"")
+            buildConfigField("String", "VERSION_CODE", "\"177\"")
         }
         create("personal") {
             dimension = "distribution"
+            buildConfigField("String", "VERSION_NAME", "\"${android.defaultConfig.versionName}\"")
+            buildConfigField("String", "VERSION_CODE", "\"${android.defaultConfig.versionCode}\"")
         }
     }
 
@@ -87,13 +93,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            buildConfigField("String", "VERSION_NAME", "\"${android.defaultConfig.versionName}\"")
-            buildConfigField("String", "VERSION_CODE", "\"${android.defaultConfig.versionCode}\"")
         }
         debug {
             applicationIdSuffix = ".debug"
-            buildConfigField("String", "VERSION_NAME", "\"${android.defaultConfig.versionName}\"")
-            buildConfigField("String", "VERSION_CODE", "\"${android.defaultConfig.versionCode}\"")
         }
         create("baseline") {
             initWith(getByName("release"))

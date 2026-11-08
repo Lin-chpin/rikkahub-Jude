@@ -69,7 +69,7 @@ class WebDavClient(
 
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "put failed: ${response.status} - $errorBody")
+                Log.e(TAG, "put failed: ${response.status}")
                 throw WebDavException("Failed to put: ${response.status}", response.status.value, errorBody)
             }
 
@@ -100,7 +100,7 @@ class WebDavClient(
 
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "put(file) failed: ${response.status} - $errorBody")
+                Log.e(TAG, "put(file) failed: ${response.status}")
                 throw WebDavException("Failed to put file: ${response.status}", response.status.value, errorBody)
             }
 
@@ -121,7 +121,7 @@ class WebDavClient(
 
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "get failed: ${response.status} - $errorBody")
+                Log.e(TAG, "get failed: ${response.status}")
                 throw WebDavException("Failed to get: ${response.status}", response.status.value, errorBody)
             }
 
@@ -142,7 +142,7 @@ class WebDavClient(
 
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "getStream failed: ${response.status} - $errorBody")
+                Log.e(TAG, "getStream failed: ${response.status}")
                 throw WebDavException("Failed to get stream: ${response.status}", response.status.value, errorBody)
             }
 
@@ -161,7 +161,7 @@ class WebDavClient(
             }.execute { response ->
                 if (!response.status.isSuccess()) {
                     val errorBody = response.bodyAsText()
-                    Log.e(TAG, "downloadToFile failed: ${response.status} - $errorBody")
+                    Log.e(TAG, "downloadToFile failed: ${response.status}")
                     throw WebDavException("Failed to download: ${response.status}", response.status.value, errorBody)
                 }
 
@@ -193,7 +193,7 @@ class WebDavClient(
 
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "delete failed: ${response.status} - $errorBody")
+                Log.e(TAG, "delete failed: ${response.status}")
                 throw WebDavException("Failed to delete: ${response.status}", response.status.value, errorBody)
             }
 
@@ -213,7 +213,7 @@ class WebDavClient(
             }
 
             if (!response.status.isSuccess()) {
-                throw WebDavException("Resource not found: ${response.status}", response.status.value, "")
+                throw WebDavException("Failed to inspect resource: ${response.status}", response.status.value, "")
             }
 
             WebDavResourceInfo(
@@ -240,7 +240,7 @@ class WebDavClient(
             // 201 Created or 405 Method Not Allowed (already exists) are acceptable
             if (!response.status.isSuccess() && response.status != HttpStatusCode.MethodNotAllowed) {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "mkcol failed: ${response.status} - $errorBody")
+                Log.e(TAG, "mkcol failed: ${response.status}")
                 throw WebDavException("Failed to create collection: ${response.status}", response.status.value, errorBody)
             }
 
@@ -281,7 +281,7 @@ class WebDavClient(
 
             if (!response.status.isSuccess() && response.status.value != 207) {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "propfind failed: ${response.status} - $errorBody")
+                Log.e(TAG, "propfind failed: ${response.status}")
                 throw WebDavException("Failed to propfind: ${response.status}", response.status.value, errorBody)
             }
 
@@ -291,7 +291,13 @@ class WebDavClient(
     }
 
     suspend fun exists(path: String): Boolean {
-        return head(path).isSuccess
+        return head(path).fold(
+            onSuccess = { true },
+            onFailure = { error ->
+                if (error is WebDavException && error.statusCode == HttpStatusCode.NotFound.value) false
+                else throw error
+            },
+        )
     }
 
     suspend fun ensureCollectionExists(path: String = ""): Result<Unit> = withContext(Dispatchers.IO) {
@@ -300,10 +306,12 @@ class WebDavClient(
             Log.d(TAG, "Ensuring collection exists: $targetUrl")
 
             // Try propfind first to check if it exists
-            val propfindResult = propfind(path, depth = 0)
-            if (propfindResult.isSuccess) {
+            try {
+                propfind(path, depth = 0).getOrThrow()
                 Log.d(TAG, "Collection already exists: $targetUrl")
                 return@runCatching
+            } catch (error: WebDavException) {
+                if (error.statusCode != HttpStatusCode.NotFound.value) throw error
             }
 
             // Create collection if not exists

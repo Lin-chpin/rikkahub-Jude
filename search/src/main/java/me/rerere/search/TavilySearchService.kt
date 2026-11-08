@@ -79,12 +79,11 @@ object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
         serviceOptions: SearchServiceOptions.TavilyOptions
     ): Result<SearchResult> = withContext(Dispatchers.IO) {
         runCatching {
-            val query = params["query"]?.jsonPrimitive?.content ?: error("query is required")
-            val topic = params["topic"]?.jsonPrimitive?.contentOrNull ?: "general"
+            val query = params.requireSearchStringArgument("query")
+            val topic = params.optionalSearchStringArgument("topic") ?: "general"
 
-            // Validate topic
             if (topic !in listOf("general", "news", "finance")) {
-                error("topic must be one of `general`, `news`, `finance`")
+                throw SearchToolArgumentException("topic")
             }
 
             val body = buildJsonObject {
@@ -94,7 +93,7 @@ object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
                 put("topic", topic)
                 put("include_answer", "advanced")
             }
-            val apiKey = keyRoulette.next(serviceOptions.apiKey, serviceOptions.id.toString())
+            val apiKey = requireSearchApiKey(keyRoulette.next(serviceOptions.apiKey, serviceOptions.id.toString()))
 
             val request = Request.Builder()
                 .url("https://api.tavily.com/search")
@@ -119,7 +118,7 @@ object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
                         }
                     ))
             } else {
-                error("response failed #${response.code}")
+                response.throwSearchHttpFailure("Tavily search")
             }
         }
     }
@@ -130,13 +129,13 @@ object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
         serviceOptions: SearchServiceOptions.TavilyOptions
     ): Result<ScrapedResult> = withContext(Dispatchers.IO) {
         runCatching {
-            val url = params["url"]?.jsonPrimitive?.content ?: error("url is required")
+            val url = params.requireSearchStringArgument("url")
             val body = buildJsonObject {
                 put("urls", buildJsonArray {
                     add(url)
                 })
             }
-            val apiKey = keyRoulette.next(serviceOptions.apiKey, serviceOptions.id.toString())
+            val apiKey = requireSearchApiKey(keyRoulette.next(serviceOptions.apiKey, serviceOptions.id.toString()))
             val request = Request.Builder()
                 .url("https://api.tavily.com/extract")
                 .post(body.toString().toRequestBody())
@@ -158,7 +157,7 @@ object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
                     )
                 )
             } else {
-                error("response failed #${response.code}")
+                response.throwSearchHttpFailure("Tavily scrape")
             }
         }
     }

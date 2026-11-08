@@ -9,13 +9,22 @@ import me.rerere.rikkahub.data.ai.mcp.McpTool
 import me.rerere.rikkahub.data.ai.mcp.availableMcpTools
 import me.rerere.rikkahub.data.ai.mcp.buildMcpTools
 import me.rerere.rikkahub.data.ai.mcp.mcpToolName
+import me.rerere.rikkahub.data.ai.mcp.mcpConnectionMessage
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.model.Assistant
 import org.junit.Assert.*
 import org.junit.Test
+import java.net.ConnectException
+import java.net.SocketException
 import kotlin.uuid.Uuid
 
 class McpToolsTest {
+    @Test
+    fun `MCP transport errors distinguish connection setup from interruption`() {
+        assertTrue(ConnectException("refused").mcpConnectionMessage().contains("无法连接 MCP 服务"))
+        assertTrue(SocketException("connection reset").mcpConnectionMessage().contains("连接中断，具体阶段无法确认"))
+    }
+
     @Test
     fun `request assistant selects servers independently of the current assistant`() {
         val first = McpServerConfig.StreamableHTTPServer(commonOptions = McpCommonOptions(tools = listOf(McpTool(name = "fetch"))))

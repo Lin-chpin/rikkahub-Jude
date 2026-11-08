@@ -85,6 +85,63 @@ class ConversationCompressionStateTest {
     }
 
     @Test
+    fun emptyCompressionSummaryCannotHideMoreMessages() {
+        val hidden = messageNode("A")
+        val visible = messageNode("B")
+        val current = conversationOf(hidden, visible).copy(
+            compressedMessageNodeIds = setOf(hidden.id),
+        )
+
+        val result = current.withCompressionResultIfBaseUnchanged(
+            expectedSummary = null,
+            expectedCompressedNodeIds = setOf(hidden.id),
+            newSummary = "  ",
+            nodeIdsToCompress = setOf(visible.id),
+            newAutoCompressConfig = null,
+        )
+
+        assertNull(result)
+        assertEquals(null, current.compressedSummary)
+        assertEquals(setOf(hidden.id), current.compressedMessageNodeIds)
+    }
+
+    @Test
+    fun missingSummarySelectsOnlyPreviouslyCompressedNodesForRecovery() {
+        val nodes = List(950) { index -> messageNode("Message $index") }
+        val compressedNodes = nodes.take(916)
+        val conversation = conversationOf(*nodes.toTypedArray()).copy(
+            compressedSummary = "",
+            compressedMessageNodeIds = compressedNodes.mapTo(mutableSetOf()) { it.id },
+        )
+
+        val recoveryNodes = conversation.compressionCandidates(
+            visibleCandidates = nodes.drop(916),
+            keepRecentMessages = 32,
+            includeVisibleCandidates = false,
+        )
+        assertEquals(916, recoveryNodes.size)
+        assertEquals(compressedNodes.map { it.id }.toSet(), recoveryNodes.map { it.id }.toSet())
+        assertEquals(34, conversation.visibleMessageNodes.size)
+        assertEquals(
+            918,
+            conversation.compressionCandidates(
+                visibleCandidates = nodes.drop(916),
+                keepRecentMessages = 32,
+                includeVisibleCandidates = true,
+            ).size,
+        )
+
+        assertEquals(
+            emptyList<MessageNode>(),
+            conversation.copy(compressedSummary = "restored").compressionCandidates(
+                visibleCandidates = nodes.drop(916),
+                keepRecentMessages = 32,
+                includeVisibleCandidates = false,
+            ),
+        )
+    }
+
+    @Test
     fun normalizationKeepsLatestNodeVisibleWhenStoredIdsCoverEveryNode() {
         val first = messageNode("A")
         val second = messageNode("B")

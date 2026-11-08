@@ -47,9 +47,21 @@ internal fun SentinelSettingsSection(
     var acknowledged by remember(assistant.id) { mutableStateOf(false) }
     val testResultResource = when (verification.failureReason) {
         HeartbeatRunReason.NETWORK_TIMEOUT -> R.string.sentinel_test_timeout
+        HeartbeatRunReason.REQUEST_TIMEOUT -> R.string.heartbeat_reason_request_timeout
+        HeartbeatRunReason.SERVICE_REQUEST_TIMEOUT -> R.string.heartbeat_reason_service_request_timeout
+        HeartbeatRunReason.REQUEST_REJECTED -> R.string.heartbeat_reason_request_rejected
         HeartbeatRunReason.AUTHENTICATION_FAILED -> R.string.sentinel_test_auth_failed
+        HeartbeatRunReason.PAYMENT_REQUIRED -> R.string.heartbeat_reason_payment_required
+        HeartbeatRunReason.ACCESS_DENIED -> R.string.heartbeat_reason_access_denied
+        HeartbeatRunReason.RESOURCE_NOT_FOUND -> R.string.heartbeat_reason_resource_not_found
+        HeartbeatRunReason.REQUEST_TOO_LARGE -> R.string.heartbeat_reason_request_too_large
         HeartbeatRunReason.RATE_LIMITED -> R.string.sentinel_test_rate_limited
         HeartbeatRunReason.NETWORK_UNAVAILABLE -> R.string.sentinel_test_network_failed
+        HeartbeatRunReason.NETWORK_TRANSPORT_FAILURE -> R.string.heartbeat_reason_network_transport_failure
+        HeartbeatRunReason.SECURE_CONNECTION_FAILURE -> R.string.heartbeat_reason_secure_connection_failure
+        HeartbeatRunReason.CONTENT_POLICY_REJECTED -> R.string.heartbeat_reason_content_policy_rejected
+        HeartbeatRunReason.SERVER_ERROR -> R.string.heartbeat_reason_server_error
+        HeartbeatRunReason.HTTP_ERROR -> R.string.heartbeat_reason_http_error
         else -> if (verification.failed) R.string.sentinel_test_failed else R.string.sentinel_test_success
     }
     LaunchedEffect(verification.completedAttempt) {

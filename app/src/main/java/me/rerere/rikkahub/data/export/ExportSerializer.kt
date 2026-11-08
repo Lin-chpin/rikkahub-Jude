@@ -8,8 +8,8 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
@@ -247,10 +247,12 @@ object LorebookSerializer : ExportSerializer<Lorebook> {
                 val extension = entry["extensions"] as? JsonObject
                 val content = entry.string("content")
                 if (content.isBlank()) return@mapNotNull null
-                val position = when (entry.string("position")) {
+                val positionValue = entry.string("position")
+                val position = when (positionValue) {
                     "before_char", "0" -> InjectionPosition.BEFORE_SYSTEM_PROMPT
                     "after_char", "1" -> InjectionPosition.AFTER_SYSTEM_PROMPT
-                    "2", "3" -> InjectionPosition.TOP_OF_CHAT
+                    "2" -> InjectionPosition.TOP_OF_CHAT
+                    "3" -> InjectionPosition.TOP_OF_CHAT
                     "4" -> InjectionPosition.AT_DEPTH
                     else -> InjectionPosition.AFTER_SYSTEM_PROMPT
                 }
@@ -321,52 +323,52 @@ object LorebookSerializer : ExportSerializer<Lorebook> {
             val entries = preset.prompts
                 .sortedBy { orderById[it.identifier]?.first ?: order.size }
                 .mapNotNull { prompt ->
-                val orderInfo = orderById[prompt.identifier] ?: return@mapNotNull null
-                val orderIndex = orderInfo.first
-                val isOrderedAndEnabled = orderInfo.second
-                val marker = prompt.identifier == "charDescription" && prompt.content.isBlank()
-                val content = when {
-                    marker -> "{{assistant_system_prompt}}"
-                    else -> prompt.content
-                }
-                if (content.isBlank() || prompt.identifier in IGNORED_PRESET_PROMPTS) return@mapNotNull null
+                    val orderInfo = orderById[prompt.identifier] ?: return@mapNotNull null
+                    val orderIndex = orderInfo.first
+                    val isOrderedAndEnabled = orderInfo.second
+                    val marker = prompt.identifier == "charDescription" && prompt.content.isBlank()
+                    val content = when {
+                        marker -> "{{assistant_system_prompt}}"
+                        else -> prompt.content
+                    }
+                    if (content.isBlank() || prompt.identifier in IGNORED_PRESET_PROMPTS) return@mapNotNull null
 
-                val condition = if (prompt.conditionEnabled) parseSimpleModelCondition(prompt.conditionScript) else null
-                val supportedCondition = !prompt.conditionEnabled || condition != null
-                val isInChat = prompt.injectionPosition == 1
-                val isAfterHistory = historyIndex >= 0 && orderIndex > historyIndex
-                val position = when {
-                    isInChat -> InjectionPosition.AT_DEPTH
-                    isAfterHistory -> InjectionPosition.AT_DEPTH
-                    else -> InjectionPosition.AFTER_SYSTEM_PROMPT
-                }
-                val depth = when {
-                    isInChat -> prompt.injectionDepth
-                    isAfterHistory -> 0
-                    else -> prompt.injectionDepth
-                }
-                val priority = entryCount - orderIndex
+                    val condition = if (prompt.conditionEnabled) parseSimpleModelCondition(prompt.conditionScript) else null
+                    val supportedCondition = !prompt.conditionEnabled || condition != null
+                    val isInChat = prompt.injectionPosition == 1
+                    val isAfterHistory = historyIndex >= 0 && orderIndex > historyIndex
+                    val position = when {
+                        isInChat -> InjectionPosition.AT_DEPTH
+                        isAfterHistory -> InjectionPosition.AT_DEPTH
+                        else -> InjectionPosition.AFTER_SYSTEM_PROMPT
+                    }
+                    val depth = when {
+                        isInChat -> prompt.injectionDepth
+                        isAfterHistory -> 0
+                        else -> prompt.injectionDepth
+                    }
+                    val priority = entryCount - orderIndex
 
-                PromptInjection.RegexInjection(
-                    id = Uuid.random(),
-                    name = prompt.name.ifBlank { prompt.identifier },
-                    enabled = prompt.enabled && isOrderedAndEnabled && supportedCondition,
-                    priority = priority,
-                    position = position,
-                    content = content,
-                    injectDepth = depth,
-                    role = when (prompt.role.lowercase()) {
-                        "assistant" -> MessageRole.ASSISTANT
-                        "user" -> MessageRole.USER
-                        else -> MessageRole.SYSTEM
-                    },
-                    constantActive = true,
-                    modelConditionRegex = condition?.first,
-                    modelConditionIgnoreCase = condition?.second == true,
-                    preserveRole = true,
-                    tavernPresetSlot = "charDescription".takeIf { marker },
-                )
-            }
+                    PromptInjection.RegexInjection(
+                        id = Uuid.random(),
+                        name = prompt.name.ifBlank { prompt.identifier },
+                        enabled = prompt.enabled && isOrderedAndEnabled && supportedCondition,
+                        priority = priority,
+                        position = position,
+                        content = content,
+                        injectDepth = depth,
+                        role = when (prompt.role.lowercase()) {
+                            "assistant" -> MessageRole.ASSISTANT
+                            "user" -> MessageRole.USER
+                            else -> MessageRole.SYSTEM
+                        },
+                        constantActive = true,
+                        modelConditionRegex = condition?.first,
+                        modelConditionIgnoreCase = condition?.second == true,
+                        preserveRole = true,
+                        tavernPresetSlot = "charDescription".takeIf { marker },
+                    )
+                }
             require(entries.isNotEmpty())
             Lorebook(
                 id = Uuid.random(),

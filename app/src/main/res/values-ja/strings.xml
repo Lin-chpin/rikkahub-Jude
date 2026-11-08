@@ -172,6 +172,7 @@
   <string name="backup_page_backup_items">バックアップ項目</string>
   <string name="backup_page_backup_now">今すぐバックアップ</string>
   <string name="backup_page_backup_success">バックアップ成功</string>
+  <string name="backup_page_export_failed">ローカルバックアップのエクスポートに失敗しました。原因は特定できません。</string>
   <string name="backup_page_chat_records">チャット履歴</string>
   <string name="backup_page_connection_failed">接続失敗: %s</string>
   <string name="backup_page_connection_success">接続成功</string>

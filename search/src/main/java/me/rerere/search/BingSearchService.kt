@@ -42,7 +42,7 @@ object BingSearchService : SearchService<SearchServiceOptions.BingLocalOptions> 
         serviceOptions: SearchServiceOptions.BingLocalOptions
     ): Result<SearchResult> = withContext(Dispatchers.IO) {
         runCatching {
-            val query = params["query"]?.jsonPrimitive?.content ?: error("query is required")
+            val query = params.requireSearchStringArgument("query")
             val url = "https://www.bing.com/search?q=" + URLEncoder.encode(query, "UTF-8")
             val locale = Locale.getDefault()
             val acceptLanguage = "${locale.language}-${locale.country},${locale.language}"

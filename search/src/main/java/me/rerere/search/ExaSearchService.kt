@@ -68,7 +68,7 @@ object ExaSearchService : SearchService<SearchServiceOptions.ExaOptions> {
         serviceOptions: SearchServiceOptions.ExaOptions
     ): Result<SearchResult> = withContext(Dispatchers.IO) {
         runCatching {
-            val query = params["query"]?.jsonPrimitive?.content ?: error("query is required")
+            val query = params.requireSearchStringArgument("query")
             val body = buildJsonObject {
                 put("query", JsonPrimitive(query))
                 put("numResults", JsonPrimitive(commonOptions.resultSize))
@@ -77,7 +77,7 @@ object ExaSearchService : SearchService<SearchServiceOptions.ExaOptions> {
                     put("text", JsonPrimitive(true))
                 })
             }
-            val apiKey = keyRoulette.next(serviceOptions.apiKey, serviceOptions.id.toString())
+            val apiKey = requireSearchApiKey(keyRoulette.next(serviceOptions.apiKey, serviceOptions.id.toString()))
 
             val request = Request.Builder()
                 .url("https://api.exa.ai/search")
@@ -88,13 +88,9 @@ object ExaSearchService : SearchService<SearchServiceOptions.ExaOptions> {
             val response = httpClient.newCall(request).execute()
             if (response.isSuccessful) {
                 val bodyRaw = response.body.string()
-                val response = runCatching {
+                val response = parseSearchResponse {
                     json.decodeFromString<ExaData>(bodyRaw)
-                }.onFailure {
-                    it.printStackTrace()
-                    println(bodyRaw)
-                    error("Failed to decode response: $bodyRaw")
-                }.getOrThrow()
+                }
 
                 return@withContext Result.success(
                     SearchResult(
@@ -108,8 +104,7 @@ object ExaSearchService : SearchService<SearchServiceOptions.ExaOptions> {
                         }
                     ))
             } else {
-                println(response.body.string())
-                error("response failed #${response.code}")
+                response.throwSearchHttpFailure("Exa search")
             }
         }
     }

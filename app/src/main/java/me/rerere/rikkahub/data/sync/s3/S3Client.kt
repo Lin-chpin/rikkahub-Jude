@@ -55,8 +55,8 @@ class S3Client(
 
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "putObject failed: ${response.status} - $errorBody")
-                throw S3Exception("Failed to put object: ${response.status}", errorBody)
+                Log.e(TAG, "putObject failed: ${response.status}")
+                throw S3Exception("Failed to put object: ${response.status}", errorBody, response.status.value)
             }
 
             Log.d(TAG, "putObject success: $key")
@@ -92,8 +92,8 @@ class S3Client(
 
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "putObject(file) failed: ${response.status} - $errorBody")
-                throw S3Exception("Failed to put object: ${response.status}", errorBody)
+                Log.e(TAG, "putObject(file) failed: ${response.status}")
+                throw S3Exception("Failed to put object: ${response.status}", errorBody, response.status.value)
             }
 
             Log.d(TAG, "putObject(file) success: $key (${file.length()} bytes)")
@@ -119,8 +119,8 @@ class S3Client(
 
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "getObject failed: ${response.status} - $errorBody")
-                throw S3Exception("Failed to get object: ${response.status}", errorBody)
+                Log.e(TAG, "getObject failed: ${response.status}")
+                throw S3Exception("Failed to get object: ${response.status}", errorBody, response.status.value)
             }
 
             val channel = response.bodyAsChannel()
@@ -146,8 +146,8 @@ class S3Client(
 
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "getObjectStream failed: ${response.status} - $errorBody")
-                throw S3Exception("Failed to get object stream: ${response.status}", errorBody)
+                Log.e(TAG, "getObjectStream failed: ${response.status}")
+                throw S3Exception("Failed to get object stream: ${response.status}", errorBody, response.status.value)
             }
 
             response.bodyAsChannel().toInputStream()
@@ -173,8 +173,8 @@ class S3Client(
             }.execute { response ->
                 if (!response.status.isSuccess()) {
                     val errorBody = response.bodyAsText()
-                    Log.e(TAG, "downloadObjectToFile failed: ${response.status} - $errorBody")
-                    throw S3Exception("Failed to download object: ${response.status}", errorBody)
+                    Log.e(TAG, "downloadObjectToFile failed: ${response.status}")
+                    throw S3Exception("Failed to download object: ${response.status}", errorBody, response.status.value)
                 }
 
                 val channel = response.bodyAsChannel()
@@ -211,8 +211,8 @@ class S3Client(
 
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "deleteObject failed: ${response.status} - $errorBody")
-                throw S3Exception("Failed to delete object: ${response.status}", errorBody)
+                Log.e(TAG, "deleteObject failed: ${response.status}")
+                throw S3Exception("Failed to delete object: ${response.status}", errorBody, response.status.value)
             }
 
             Log.d(TAG, "deleteObject success: $key")
@@ -237,7 +237,7 @@ class S3Client(
             }
 
             if (!response.status.isSuccess()) {
-                throw S3Exception("Object not found: ${response.status}", "")
+                throw S3Exception("Failed to inspect object: ${response.status}", "", response.status.value)
             }
 
             S3ObjectMetadata(
@@ -281,8 +281,8 @@ class S3Client(
 
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "listObjects failed: ${response.status} - $errorBody")
-                throw S3Exception("Failed to list objects: ${response.status}", errorBody)
+                Log.e(TAG, "listObjects failed: ${response.status}")
+                throw S3Exception("Failed to list objects: ${response.status}", errorBody, response.status.value)
             }
 
             val xmlBody = response.bodyAsText()
@@ -291,7 +291,13 @@ class S3Client(
     }
 
     suspend fun objectExists(key: String): Boolean {
-        return headObject(key).isSuccess
+        return headObject(key).fold(
+            onSuccess = { true },
+            onFailure = { error ->
+                if (error is S3Exception && error.statusCode == 404) false
+                else throw error
+            },
+        )
     }
 
     fun getPublicUrl(key: String): String {
@@ -455,4 +461,5 @@ data class S3ListResult(
 class S3Exception(
     message: String,
     val responseBody: String,
+    val statusCode: Int? = null,
 ) : Exception(message)

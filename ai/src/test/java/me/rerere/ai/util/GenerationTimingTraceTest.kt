@@ -10,6 +10,22 @@ import org.junit.Test
 
 class GenerationTimingTraceTest {
     @Test
+    fun earlierAsrEventAndLaterStagesUseTheSameMonotonicOrigin() {
+        val logs = mutableListOf<String>()
+        val stopAt = System.nanoTime() - 30_000_000L
+        val trace = GenerationTimingTrace("voice_call_turn", logs::add, startedAt = stopAt)
+
+        trace.mark("asr_speech_stopped", atNanos = stopAt)
+        trace.mark("asr_final", atNanos = stopAt + 20_000_000L)
+        repeat(2) { trace.markOnce("audio_output_advancing") }
+
+        assertEquals(3, logs.size)
+        assertTrue(logs[0].contains("+0ms stage=asr_speech_stopped"))
+        assertTrue(logs[1].contains("+20ms stage=asr_final"))
+        assertEquals(1, logs.map { it.substringBefore(' ') }.distinct().size)
+    }
+
+    @Test
     fun logsOnlyFirstNonemptyTextPerStageWithoutRetainingOrPrintingItsContent() {
         val logs = mutableListOf<String>()
         val trace = GenerationTimingTrace("test", logs::add)

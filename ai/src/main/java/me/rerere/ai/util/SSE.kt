@@ -47,9 +47,14 @@ class SSEEventSource(
             val body = response.body
 
             if (!body.isEventStream() && !(allowMissingContentType && body.contentType() == null)) {
+                val contentType = body.contentType()?.let { "${it.type}/${it.subtype}" } ?: "missing"
                 listener.onFailure(
                     this,
-                    IllegalStateException("Invalid content-type: ${body.contentType()}"),
+                    ProviderResponseParseException(
+                        "Streaming response content type was invalid",
+                        IllegalStateException("Unexpected event stream content type"),
+                        safeContext = "content_type=$contentType",
+                    ),
                     response,
                 )
                 return

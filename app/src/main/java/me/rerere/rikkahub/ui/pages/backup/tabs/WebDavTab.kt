@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.ui.pages.backup.tabs
 
+import android.util.Log
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.View
 import me.rerere.hugeicons.stroke.ViewOff
@@ -55,6 +56,8 @@ import com.dokar.sonner.ToastType
 import kotlinx.coroutines.launch
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.WebDavConfig
+import me.rerere.rikkahub.data.sync.backupSyncDiagnostic
+import me.rerere.rikkahub.data.sync.backupSyncErrorMessage
 import me.rerere.rikkahub.data.sync.webdav.WebDavBackupItem
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.context.LocalToaster
@@ -66,6 +69,8 @@ import me.rerere.rikkahub.utils.onLoading
 import me.rerere.rikkahub.utils.onSuccess
 import me.rerere.rikkahub.utils.toLocalDateTime
 import java.time.Instant
+
+private const val TAG = "WebDavBackupSettings"
 
 @Composable
 fun WebDavTab(
@@ -239,11 +244,11 @@ fun WebDavTab(
                                 type = ToastType.Success
                             )
                         } catch (e: Exception) {
-                            e.printStackTrace()
+                            Log.e(TAG, e.backupSyncDiagnostic("connection_test"))
                             toaster.show(
                                 context.getString(
                                     R.string.backup_page_connection_failed,
-                                    e.message ?: ""
+                                    e.backupSyncErrorMessage()
                                 ),
                                 type = ToastType.Error
                             )
@@ -273,9 +278,9 @@ fun WebDavTab(
                                 type = ToastType.Success
                             )
                         }.onFailure {
-                            it.printStackTrace()
+                            Log.e(TAG, it.backupSyncDiagnostic("backup"))
                             toaster.show(
-                                it.message ?: context.getString(R.string.backup_page_unknown_error),
+                                it.backupSyncErrorMessage(),
                                 type = ToastType.Error
                             )
                         }
@@ -344,11 +349,11 @@ fun WebDavTab(
                                             )
                                             vm.loadBackupFileItems()
                                         }.onFailure { err ->
-                                            err.printStackTrace()
+                                            Log.e(TAG, err.backupSyncDiagnostic("delete"))
                                             toaster.show(
                                                 context.getString(
                                                     R.string.backup_page_delete_failed,
-                                                    err.message ?: ""
+                                                    err.backupSyncErrorMessage()
                                                 ),
                                                 type = ToastType.Error
                                             )
@@ -367,11 +372,11 @@ fun WebDavTab(
                                             showBackupFiles = false
                                             onShowRestartDialog()
                                         }.onFailure { err ->
-                                            err.printStackTrace()
+                                            Log.e(TAG, err.backupSyncDiagnostic("restore"))
                                             toaster.show(
                                                 context.getString(
                                                     R.string.backup_page_restore_failed,
-                                                    err.message ?: ""
+                                                    err.backupSyncErrorMessage()
                                                 ),
                                                 type = ToastType.Error
                                             )
@@ -388,7 +393,7 @@ fun WebDavTab(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = stringResource(R.string.backup_page_loading_failed, it.message ?: ""),
+                            text = stringResource(R.string.backup_page_loading_failed, it.backupSyncErrorMessage()),
                             color = MaterialTheme.colorScheme.error
                         )
                     }

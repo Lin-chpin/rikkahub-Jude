@@ -16,7 +16,9 @@ import me.rerere.tts.model.AudioChunk
 import me.rerere.tts.model.AudioFormat
 import me.rerere.tts.model.TTSRequest
 import me.rerere.tts.provider.TTSProvider
+import me.rerere.tts.provider.TTSProviderKind
 import me.rerere.tts.provider.TTSProviderSetting
+import me.rerere.tts.provider.createTTSProviderHttpException
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -169,9 +171,13 @@ class ElevenLabsTTSProvider : TTSProvider<TTSProviderSetting.ElevenLabs> {
             try {
                 call.execute().use { response ->
                     if (!response.isSuccessful) {
-                        val errorBody = response.body?.string().orEmpty()
-                        Log.e(TAG, "generateSpeech: ${response.code} ${response.message}, body=$errorBody")
-                        throw Exception("ElevenLabs TTS request failed: ${response.code} ${response.message}; body=$errorBody")
+                        val failure = createTTSProviderHttpException(
+                            TTSProviderKind.ELEVENLABS,
+                            response.code,
+                            response.body.string(),
+                        )
+                        Log.e(TAG, "TTS HTTP failure: ${failure.message}")
+                        throw failure
                     }
                     Log.i(TAG, "tts_timing trace=$timingId stage=response_headers status=${response.code}")
 

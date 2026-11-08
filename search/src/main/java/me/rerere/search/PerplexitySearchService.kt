@@ -60,11 +60,10 @@ object PerplexitySearchService : SearchService<SearchServiceOptions.PerplexityOp
     ): Result<SearchResult> = withContext(Dispatchers.IO) {
         runCatching {
             if (serviceOptions.apiKey.isBlank()) {
-                error("Perplexity API key is required")
+                missingSearchApiKey()
             }
 
-            val query = params["query"]?.jsonPrimitive?.content
-                ?: error("query is required")
+            val query = params.requireSearchStringArgument("query")
 
             val body = buildJsonObject {
                 put("query", JsonPrimitive(query))
@@ -81,7 +80,7 @@ object PerplexitySearchService : SearchService<SearchServiceOptions.PerplexityOp
                 }
             }
 
-            Log.i(TAG, "search: $body")
+            Log.i(TAG, "search request started resultSize=${commonOptions.resultSize}")
 
             val request = Request.Builder()
                 .url(PERPLEXITY_ENDPOINT)
@@ -114,7 +113,7 @@ object PerplexitySearchService : SearchService<SearchServiceOptions.PerplexityOp
                     )
                 )
             } else {
-                error("response failed #${response.code}: ${response.body?.string()}")
+                response.throwSearchHttpFailure("Perplexity search")
             }
         }
     }

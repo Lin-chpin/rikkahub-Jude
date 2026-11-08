@@ -9,7 +9,9 @@ import me.rerere.tts.model.AudioChunk
 import me.rerere.tts.model.AudioFormat
 import me.rerere.tts.model.TTSRequest
 import me.rerere.tts.provider.TTSProvider
+import me.rerere.tts.provider.TTSProviderKind
 import me.rerere.tts.provider.TTSProviderSetting
+import me.rerere.tts.provider.createTTSProviderHttpException
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -50,11 +52,7 @@ class OpenAITTSProvider : TTSProvider<TTSProviderSetting.OpenAI> {
             put("response_format", "mp3") // Default to MP3
         }
 
-        Log.i(
-            TAG,
-            "generateSpeech: url=$requestUrl, model=${providerSetting.model}, voice=${providerSetting.voice}, " +
-                "speechPath=${providerSetting.speechPath}"
-        )
+        Log.i(TAG, "generateSpeech: provider=openai_compatible text_chars=${request.text.length}")
 
         val httpRequest = Request.Builder()
             .url(requestUrl)
@@ -63,24 +61,18 @@ class OpenAITTSProvider : TTSProvider<TTSProviderSetting.OpenAI> {
             .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
-        val response = httpClient.newCall(httpRequest).execute()
-
-        if (!response.isSuccessful) {
-            val errorBody = response.body.string()
-            Log.e(
-                TAG,
-                "TTS request failed: ${response.code} ${response.message}, url=$requestUrl, " +
-                    "model=${providerSetting.model}, voice=${providerSetting.voice}, " +
-                    "speechPath=${providerSetting.speechPath}, body=$errorBody"
-            )
-            throw Exception(
-                "TTS request failed: ${response.code} ${response.message}; " +
-                    "url=$requestUrl; model=${providerSetting.model}; " +
-                    "speechPath=${providerSetting.speechPath}; body=$errorBody"
-            )
+        val audioData = httpClient.newCall(httpRequest).execute().use { response ->
+            if (!response.isSuccessful) {
+                val failure = createTTSProviderHttpException(
+                    TTSProviderKind.OPENAI_COMPATIBLE,
+                    response.code,
+                    response.body.string(),
+                )
+                Log.e(TAG, "TTS HTTP failure: ${failure.message}")
+                throw failure
+            }
+            response.body.bytes()
         }
-
-        val audioData = response.body.bytes()
 
         emit(
             AudioChunk(

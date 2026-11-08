@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.provider.Settings
+import android.util.Log
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
@@ -20,6 +21,8 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import kotlinx.coroutines.flow.MutableSharedFlow
 import me.rerere.rikkahub.RouteActivity
+
+private const val TAG = "VoiceCallFlow"
 
 internal object VoiceCallFloatingBallActions {
     enum class Action { RETURN_TO_CALL, CAPTURE_AND_SEND }
@@ -62,7 +65,9 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
     override fun onStop(owner: LifecycleOwner) = updateVisibility()
 
     fun setStatus(value: String) {
-        status = conciseStatus(value)
+        val nextStatus = voiceCallFloatingBallStatus(value)
+        if (status != nextStatus) Log.i(TAG, "floating ball status changed value=${nextStatus ?: "none"}")
+        status = nextStatus
         statusView?.apply {
             text = status.orEmpty()
             textSize = status?.let(::statusTextSize) ?: 12f
@@ -71,6 +76,7 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
     }
 
     fun setVisualFeedback(value: String, thumbnail: ByteArray?) {
+        Log.i(TAG, "floating ball feedback status=${value.ifBlank { "none" }} thumbnail=${thumbnail != null} bytes=${thumbnail?.size ?: 0}")
         setStatus(value)
         thumbnailBytes = thumbnail
         root?.let {
@@ -80,11 +86,13 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
     }
 
     fun hideForCapture() {
+        Log.i(TAG, "floating ball hide for capture")
         temporarilyHidden = true
         hide()
     }
 
     fun showAfterCapture() {
+        Log.i(TAG, "floating ball restore after capture")
         temporarilyHidden = false
         updateVisibility()
     }
@@ -92,7 +100,14 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
     private fun updateVisibility() {
         if (closed) return
         val appVisible = lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
-        if (appVisible || temporarilyHidden || !Settings.canDrawOverlays(appContext)) hide() else show()
+        val overlayPermission = Settings.canDrawOverlays(appContext)
+        val shouldShow = !appVisible && !temporarilyHidden && overlayPermission
+        if (shouldShow && bubble == null) {
+            Log.i(TAG, "floating ball visibility show appVisible=$appVisible temporarilyHidden=$temporarilyHidden permission=$overlayPermission")
+        } else if (!shouldShow && bubble != null) {
+            Log.i(TAG, "floating ball visibility hide appVisible=$appVisible temporarilyHidden=$temporarilyHidden permission=$overlayPermission")
+        }
+        if (shouldShow) show() else hide()
     }
 
     private fun textBubble(
@@ -176,9 +191,12 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
         try {
             windowManager.addView(root, params)
             bubble = root
-        } catch (_: WindowManager.BadTokenException) {
+            Log.i(TAG, "floating ball window added thumbnail=${thumbnailView != null} expanded=$expanded")
+        } catch (error: WindowManager.BadTokenException) {
+            Log.w(TAG, "floating ball add failed exception=${error::class.simpleName ?: "Exception"}")
             // Overlay permission may be revoked while sharing; the call remains available from its notification.
-        } catch (_: SecurityException) {
+        } catch (error: SecurityException) {
+            Log.w(TAG, "floating ball add failed exception=${error::class.simpleName ?: "Exception"}")
             // Overlay permission may be revoked while sharing; the call remains available from its notification.
         }
     }
@@ -207,17 +225,20 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
     private fun renderThumbnail(root: LinearLayout) {
         val bytes = thumbnailBytes
         if (bytes == null) {
+            if (thumbnailView != null) Log.i(TAG, "floating ball thumbnail removed")
             thumbnailView?.let(root::removeView)
             thumbnailView = null
             return
         }
+        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        Log.i(TAG, "floating ball thumbnail decode success=${bitmap != null} bytes=${bytes.size} size=${bitmap?.width}x${bitmap?.height}")
         if (thumbnailView != null) {
-            thumbnailView?.setImageBitmap(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+            thumbnailView?.setImageBitmap(bitmap)
             return
         }
         val density = appContext.resources.displayMetrics.density
         thumbnailView = ImageView(appContext).apply {
-            setImageBitmap(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+            setImageBitmap(bitmap)
             scaleType = ImageView.ScaleType.CENTER_CROP
             contentDescription = "本轮截图预览"
             background = GradientDrawable().apply {
@@ -229,20 +250,6 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
                 topMargin = (6 * density).toInt()
             }
         }.also { root.addView(it, 1) }
-    }
-
-    private fun conciseStatus(value: String): String? = when {
-        "发送失败" in value -> "发送失败"
-        "正在发送" in value -> "发送中"
-        "已发送" in value -> "已发送"
-        "已截图" in value -> "可以说话"
-        "AI 正在回复中" in value || "AI正在回复" in value -> "AI回复中"
-        "正在持续聆听" in value || "正在聆听" in value -> "正在聆听"
-        "聆听已静音" in value -> "已静音"
-        "正在连接 ASR" in value || "正在连接语音模型" in value -> "连接中"
-        "正在使用已配置的 ASR 识别" in value || "正在识图中" in value -> "识别中"
-        "正在截屏中" in value -> "截屏中"
-        else -> null
     }
 
     private fun statusTextSize(value: String): Float = if (value.length >= 5) 10f else 12f
@@ -259,6 +266,7 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
     }
 
     private fun hide() {
+        if (bubble != null) Log.i(TAG, "floating ball window removed")
         bubble?.let { view -> runCatching { windowManager.removeView(view) } }
         bubble = null
         root = null
@@ -272,4 +280,38 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
         lifecycle.removeObserver(this)
         hide()
     }
+}
+
+internal fun voiceCallFloatingBallStatus(value: String): String? {
+    val normalizedValue = value.lowercase()
+    // Keep active visual work visible; after sending, the live reply replaces the completed visual status.
+    val status = when {
+        "发送失败" in value -> "发送失败"
+        "正在截屏中" in value -> "截屏中"
+        "正在识图中" in value -> "识图中"
+        "正在识图并发送" in value || "正在发送" in value -> "发送中"
+        listOf("鉴权失败", "权限错误", "api key", "unauthorized", "forbidden", "auth_error", "401", "403")
+            .any { it in normalizedValue } -> "Key/权限错误"
+        listOf("额度", "请求受限", "限流", "quota", "rate limit", "rate_limited", "commit_throttled", "queue_overflow", "402", "429")
+            .any { it in normalizedValue } -> "额度/限流"
+        listOf(
+            "服务暂时不可用", "服务不可用", "服务端无法使用", "服务无法使用", "service unavailable",
+            "server unavailable", "http 5", "500", "502", "503", "504",
+        )
+            .any { it in normalizedValue } -> "服务不可用"
+        "ASR连接失败" in value -> "ASR失败"
+        listOf("asr错误", "asr realtime error", "scribe error", "websocket")
+            .any { it in normalizedValue } -> "ASR失败"
+        "聆听已静音" in value -> "已静音"
+        "AI 正在回复中" in value || "AI正在回复" in value -> "AI回复中"
+        "已发送" in value -> "已发送"
+        "正在连接 ASR" in value || "正在连接语音模型" in value -> "连接中"
+        "已累计" in value || "已截图" in value -> "可以说话"
+        "正在持续聆听" in value || "正在聆听" in value -> "正在聆听"
+        "正在使用已配置的 ASR 识别" in value -> "识别中"
+        "正在共享屏幕中" in value -> "共享屏幕中"
+        else -> null
+    }
+    val count = Regex("""\d+/\d+""").find(value)?.value
+    return listOfNotNull(status, count).joinToString("\n").takeIf { it.isNotBlank() }
 }

@@ -56,7 +56,8 @@ object BochaSearchService : SearchService<SearchServiceOptions.BochaOptions> {
         serviceOptions: SearchServiceOptions.BochaOptions
     ): Result<SearchResult> = withContext(Dispatchers.IO) {
         runCatching {
-            val query = params["query"]?.jsonPrimitive?.content ?: error("query is required")
+            val query = params.requireSearchStringArgument("query")
+            val apiKey = requireSearchApiKey(serviceOptions.apiKey)
 
             val body = buildJsonObject {
                 put("query", JsonPrimitive(query))
@@ -67,23 +68,19 @@ object BochaSearchService : SearchService<SearchServiceOptions.BochaOptions> {
             val request = Request.Builder()
                 .url("https://api.bochaai.com/v1/web-search")
                 .post(json.encodeToString(body).toRequestBody("application/json".toMediaType()))
-                .addHeader("Authorization", "Bearer ${serviceOptions.apiKey}")
+                .addHeader("Authorization", "Bearer $apiKey")
                 .addHeader("Content-Type", "application/json")
                 .build()
 
             val response = httpClient.newCall(request).execute()
             if (response.isSuccessful) {
                 val bodyRaw = response.body.string()
-                val bochaResponse = runCatching {
+                val bochaResponse = parseSearchResponse {
                     json.decodeFromString<BochaResponse>(bodyRaw)
-                }.onFailure {
-                    it.printStackTrace()
-                    println(bodyRaw)
-                    error("Failed to decode response: $bodyRaw")
-                }.getOrThrow()
+                }
 
                 if (bochaResponse.code != 200) {
-                    error("Bocha API error: ${bochaResponse.msg ?: "Unknown error"}")
+                    searchProviderReportedFailure(bochaResponse.code.toString())
                 }
 
                 return@withContext Result.success(
@@ -98,8 +95,7 @@ object BochaSearchService : SearchService<SearchServiceOptions.BochaOptions> {
                     )
                 )
             } else {
-                println(response.body.string())
-                error("response failed #${response.code}")
+                response.throwSearchHttpFailure("Bocha search")
             }
         }
     }

@@ -40,13 +40,14 @@ import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.HttpException
-import me.rerere.ai.util.withHttpStatus
+import me.rerere.ai.util.ProviderResponseParseException
+import me.rerere.ai.util.toHttpException
+import me.rerere.ai.util.safeFailureDiagnostic
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.encodeBase64
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.parseErrorDetail
-import me.rerere.ai.util.stringSafe
 import me.rerere.ai.util.toHeaders
 import me.rerere.common.http.await
 import me.rerere.common.http.withoutAutomaticReplay
@@ -80,7 +81,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
 
             val response = client.newCall(request).execute()
             if (!response.isSuccessful) {
-                error("Failed to get models: ${response.code} ${response.body?.string()}")
+                throw response.toHttpException()
             }
 
             val bodyStr = response.body?.string() ?: ""
@@ -122,8 +123,6 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        if (!params.suppressContentLogs) Log.i(TAG, "generateText: ${json.encodeToString(requestBody)}")
-
         client.newCall(request).await { response ->
             if (!response.isSuccessful) {
                 if (params.suppressContentLogs) {
@@ -131,7 +130,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     response.close()
                     throw failure
                 }
-                throw HttpException("Failed to get response: ${response.code} ${response.body?.string()}", response.code)
+                throw response.toHttpException()
             }
 
             val bodyStr = response.body?.string() ?: ""
@@ -177,12 +176,6 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        if (!params.suppressContentLogs) Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
-
-        requestBody["messages"]!!.jsonArray.forEach {
-            if (!params.suppressContentLogs) Log.i(TAG, "streamText: $it")
-        }
-
         val streamBlocks = ClaudeStreamBlocks()
         val listener = object : EventSourceListener() {
             override fun onEvent(
@@ -191,39 +184,51 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 type: String?,
                 data: String
             ) {
-                if (!params.suppressContentLogs) Log.d(TAG, "onEvent: type=$type, data=$data")
+                if (!params.suppressContentLogs) Log.d(TAG, "Claude stream event received (${data.length} chars)")
                 if (data == "[DONE]") {
                     return
                 }
+                if (type == "error") {
+                    val failure = try {
+                        json.parseToJsonElement(data).jsonObject["error"]?.parseErrorDetail()
+                            ?: HttpException("Claude API reported an error without details")
+                    } catch (error: Exception) {
+                        ProviderResponseParseException("Claude error event could not be parsed", error)
+                    }
+                    close(failure)
+                    return
+                }
 
-                val dataJson = json.parseToJsonElement(data).jsonObject
-                val deltaMessage = parseMessage(streamBlocks.accept(dataJson), params.suppressContentLogs)
-                val tokenUsage = parseTokenUsage(dataJson)
-                val messageChunk = MessageChunk(
-                    id = id ?: "",
-                    model = "",
-                    choices = listOf(
-                        UIMessageChoice(
-                            index = 0,
-                            delta = deltaMessage,
-                            message = null,
-                            finishReason = null
-                        )
-                    ),
-                    usage = tokenUsage
-                )
+                val dataJson: JsonObject
+                val messageChunk: MessageChunk
+                try {
+                    dataJson = json.parseToJsonElement(data).jsonObject
+                    val deltaMessage = parseMessage(streamBlocks.accept(dataJson), params.suppressContentLogs)
+                    val tokenUsage = parseTokenUsage(dataJson)
+                    messageChunk = MessageChunk(
+                        id = id ?: "",
+                        model = "",
+                        choices = listOf(
+                            UIMessageChoice(
+                                index = 0,
+                                delta = deltaMessage,
+                                message = null,
+                                finishReason = null
+                            )
+                        ),
+                        usage = tokenUsage
+                    )
+                } catch (error: Exception) {
+                    Log.w(TAG, "Claude stream response parse failed type=${error::class.simpleName}")
+                    close(ProviderResponseParseException("Claude response event could not be parsed", error))
+                    return
+                }
 
-                if (type != "error") trySendBlocking(messageChunk).getOrThrow()
+                trySendBlocking(messageChunk).getOrThrow()
                 when (type) {
                     "message_stop" -> {
                         if (!params.suppressContentLogs) Log.d(TAG, "Stream ended")
                         close()
-                    }
-
-                    "error" -> {
-                        val eventData = json.parseToJsonElement(data).jsonObject
-                        val error = eventData["error"]?.parseErrorDetail()
-                        close(error)
                     }
                 }
 
@@ -236,24 +241,12 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     close(failure)
                     return
                 }
-                var exception = t
-
-                t?.printStackTrace()
-                Log.e(TAG, "onFailure: ${t?.javaClass?.name} ${t?.message} / $response")
-
-                val bodyRaw = response?.body?.stringSafe()
-                try {
-                    if (!bodyRaw.isNullOrBlank()) {
-                        val bodyElement = Json.parseToJsonElement(bodyRaw)
-                        Log.i(TAG, "Error response: $bodyElement")
-                        exception = bodyElement.parseErrorDetail()
-                    }
-                } catch (e: Throwable) {
-                    Log.w(TAG, "onFailure: failed to parse from $bodyRaw")
-                    e.printStackTrace()
-                } finally {
-                    close(exception.withHttpStatus(response))
-                }
+                val failure = response?.takeIf { !it.isSuccessful }?.toHttpException(t)
+                    ?: t
+                    ?: IllegalStateException("Claude SSE request failed without an explicit cause")
+                response?.close()
+                Log.w(TAG, "Claude stream request failed: ${failure.safeFailureDiagnostic()}")
+                close(failure)
             }
 
             override fun onClosed(eventSource: EventSource) {
@@ -485,7 +478,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     put("data", encoded.base64)
                 })
             }.onFailure {
-                Log.w(TAG, "encode image failed: $url", it)
+                Log.w(TAG, "Claude image encoding failed: ${it.safeFailureDiagnostic()}")
                 put("type", "text")
                 put("text", "")
             }

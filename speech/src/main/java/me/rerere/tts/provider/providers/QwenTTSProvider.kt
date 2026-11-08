@@ -1,23 +1,49 @@
 package me.rerere.tts.provider.providers
 
 import android.content.Context
-import android.util.Base64
 import android.util.Log
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
 import me.rerere.tts.model.AudioChunk
 import me.rerere.tts.model.AudioFormat
 import me.rerere.tts.model.TTSRequest
 import me.rerere.tts.provider.TTSProvider
+import me.rerere.tts.provider.TTSProviderKind
 import me.rerere.tts.provider.TTSProviderSetting
+import me.rerere.tts.provider.TTSResponseParsingException
+import me.rerere.tts.provider.createTTSProviderHttpException
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.util.Base64
 import java.util.concurrent.TimeUnit
 
 private const val TAG = "QwenTTSProvider"
+
+internal fun parseQwenSseAudioData(data: String): Pair<ByteArray, Boolean>? {
+    try {
+        val root = Json.parseToJsonElement(data).jsonObject
+        val output = root["output"]?.jsonObject ?: error("Missing output object")
+        val audio = output["audio"]?.jsonObject ?: error("Missing audio object")
+        val encodedAudio = (audio["data"] as? JsonPrimitive)?.contentOrNull ?: error("Missing audio data")
+        if (encodedAudio.isBlank()) return null
+        val audioBytes = Base64.getDecoder().decode(encodedAudio.filterNot(Char::isWhitespace))
+        if (audioBytes.isEmpty()) error("Empty audio data")
+        val finishReason = (output["finish_reason"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+        return audioBytes to (finishReason == "stop")
+    } catch (error: kotlinx.coroutines.CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        throw TTSResponseParsingException(TTSProviderKind.QWEN, error)
+    }
+}
 
 class QwenTTSProvider : TTSProvider<TTSProviderSetting.Qwen> {
     private val httpClient = OkHttpClient.Builder()
@@ -38,8 +64,6 @@ class QwenTTSProvider : TTSProvider<TTSProviderSetting.Qwen> {
             })
         }
 
-        Log.i(TAG, "generateSpeech: $requestBody")
-
         val httpRequest = Request.Builder()
             .url("${providerSetting.baseUrl}/services/aigc/multimodal-generation/generation")
             .addHeader("Authorization", "Bearer ${providerSetting.apiKey}")
@@ -51,15 +75,21 @@ class QwenTTSProvider : TTSProvider<TTSProviderSetting.Qwen> {
         val response = httpClient.newCall(httpRequest).execute()
 
         if (!response.isSuccessful) {
-            val errorBody = response.body.string()
-            Log.e(TAG, "Qwen TTS request failed: ${response.code} ${response.message}, body: $errorBody")
-            throw Exception("Qwen TTS request failed: ${response.code} ${response.message}")
+            val failure = createTTSProviderHttpException(
+                TTSProviderKind.QWEN,
+                response.code,
+                response.body.string(),
+            )
+            Log.e(TAG, "TTS HTTP failure: ${failure.message}")
+            response.close()
+            throw failure
         }
 
         val reader = response.body.byteStream().bufferedReader()
 
         try {
             var currentData = StringBuilder()
+            var hasAudio = false
 
             reader.lineSequence().forEach { line ->
                 when {
@@ -68,9 +98,10 @@ class QwenTTSProvider : TTSProvider<TTSProviderSetting.Qwen> {
                     }
 
                     line.isEmpty() && currentData.isNotEmpty() -> {
-                        val result = parseSSEData(currentData.toString())
+                        val result = parseQwenSseAudioData(currentData.toString())
                         if (result != null) {
                             val (audioData, isLast) = result
+                            hasAudio = hasAudio || audioData.isNotEmpty()
                             emit(
                                 AudioChunk(
                                     data = audioData,
@@ -92,29 +123,10 @@ class QwenTTSProvider : TTSProvider<TTSProviderSetting.Qwen> {
                     }
                 }
             }
+            if (!hasAudio) throw TTSResponseParsingException(TTSProviderKind.QWEN)
         } finally {
             reader.close()
         }
     }
 
-    private fun parseSSEData(data: String): Pair<ByteArray, Boolean>? {
-        return try {
-            val json = JSONObject(data)
-            val output = json.optJSONObject("output") ?: return null
-            val audio = output.optJSONObject("audio") ?: return null
-            val audioBase64 = audio.optString("data", "")
-            val finishReason = output.optString("finish_reason", "")
-
-            if (audioBase64.isNotEmpty()) {
-                val audioData = Base64.decode(audioBase64, Base64.DEFAULT)
-                val isLast = finishReason == "stop"
-                Pair(audioData, isLast)
-            } else {
-                null
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to parse SSE data: $data", e)
-            null
-        }
-    }
 }

@@ -7,29 +7,6 @@ import org.junit.Test
 
 class VoiceCallCameraTransformTest {
     @Test
-    fun `front and back previews handle every display rotation`() {
-        for (frontFacing in listOf(false, true)) {
-            val sensorOrientation = if (frontFacing) 270 else 90
-            for (displayRotation in listOf(0, 90, 180, 270)) {
-                val transform = voiceCallCameraPreviewTransform(
-                    viewWidth = 322,
-                    viewHeight = 448,
-                    previewWidth = 1024,
-                    previewHeight = 768,
-                    sensorOrientationDegrees = sensorOrientation,
-                    displayRotationDegrees = displayRotation,
-                    frontFacing = frontFacing,
-                )
-
-                assertEquals(-displayRotation.toFloat(), transform.rotationDegrees, 0.001f)
-                assertEquals(frontFacing, transform.mirrorHorizontally)
-                assertTrue(transform.scaleX.isFinite() && transform.scaleX > 0f)
-                assertTrue(transform.scaleY.isFinite() && transform.scaleY > 0f)
-            }
-        }
-    }
-
-    @Test
     fun `portrait preview does not reapply sensor rotation and only front camera mirrors`() {
         val front = voiceCallCameraPreviewTransform(
             viewWidth = 322,

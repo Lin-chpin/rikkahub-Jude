@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.ui.pages.backup.tabs
 
+import android.util.Log
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.File01
 import me.rerere.hugeicons.stroke.FileImport
@@ -26,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import com.dokar.sonner.ToastType
 import kotlinx.coroutines.launch
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.data.sync.backupSyncDiagnostic
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.components.ui.StickyHeader
 import me.rerere.rikkahub.ui.context.LocalToaster
@@ -35,6 +37,8 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+
+private const val TAG = "BackupImportExport"
 
 @Composable
 fun ImportExportTab(
@@ -76,9 +80,9 @@ fun ImportExportTab(
                         type = ToastType.Success
                     )
                 }.onFailure { e ->
-                    e.printStackTrace()
+                    Log.e(TAG, e.backupSyncDiagnostic("local_export"))
                     toaster.show(
-                        context.getString(R.string.backup_page_restore_failed, e.message ?: ""),
+                        context.getString(R.string.backup_page_export_failed),
                         type = ToastType.Error
                     )
                 }
@@ -195,9 +199,12 @@ fun ImportExportTab(
                         onShowRestartDialog()
                     }
                 }.onFailure { e ->
-                    e.printStackTrace()
+                    Log.e(TAG, e.backupSyncDiagnostic("local_import"))
                     toaster.show(
-                        context.getString(R.string.backup_page_restore_failed, e.message ?: ""),
+                        context.getString(
+                            R.string.backup_page_restore_failed,
+                            context.getString(R.string.backup_page_unknown_error),
+                        ),
                         type = ToastType.Error
                     )
                 }

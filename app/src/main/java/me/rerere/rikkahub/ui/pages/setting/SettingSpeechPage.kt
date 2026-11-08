@@ -118,38 +118,6 @@ private fun TTSProviderSetting.normalizeKnownTtsProvider(): TTSProviderSetting {
     }
 }
 
-private fun describeTtsProvider(provider: TTSProviderSetting): String {
-    return when (provider) {
-        is TTSProviderSetting.OpenAI ->
-            "OpenAI(id=${provider.id}, baseUrl=${provider.baseUrl}, speechPath=${provider.speechPath}, " +
-                "model=${provider.model}, voice=${provider.voice})"
-
-        is TTSProviderSetting.Gemini ->
-            "Gemini(id=${provider.id}, baseUrl=${provider.baseUrl}, model=${provider.model}, voice=${provider.voiceName})"
-
-        is TTSProviderSetting.MiniMax ->
-            "MiniMax(id=${provider.id}, baseUrl=${provider.baseUrl}, model=${provider.model}, voice=${provider.voiceId})"
-
-        is TTSProviderSetting.Qwen ->
-            "Qwen(id=${provider.id}, baseUrl=${provider.baseUrl}, model=${provider.model}, voice=${provider.voice})"
-
-        is TTSProviderSetting.Groq ->
-            "Groq(id=${provider.id}, baseUrl=${provider.baseUrl}, model=${provider.model}, voice=${provider.voice})"
-
-        is TTSProviderSetting.XAI ->
-            "xAI(id=${provider.id}, baseUrl=${provider.baseUrl}, voice=${provider.voiceId}, language=${provider.language})"
-
-        is TTSProviderSetting.ElevenLabs ->
-            "ElevenLabs(id=${provider.id}, baseUrl=${provider.baseUrl}, model=${provider.model}, voiceId=${provider.voiceId})"
-
-        is TTSProviderSetting.MiMo ->
-            "MiMo(id=${provider.id}, baseUrl=${provider.baseUrl}, model=${provider.model}, voice=${provider.voice})"
-
-        is TTSProviderSetting.SystemTTS ->
-            "SystemTTS(id=${provider.id}, speechRate=${provider.speechRate}, pitch=${provider.pitch})"
-    }
-}
-
 @Composable
 fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
     val settings by vm.settings.collectAsStateWithLifecycle()
@@ -199,7 +167,7 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
 
         previewController.stop()
         previewingProviderId = normalizedProvider.id.toString()
-        Log.i(TAG, "Testing TTS provider: ${describeTtsProvider(normalizedProvider)}")
+        Log.i(TAG, "Testing TTS provider type=${normalizedProvider::class.simpleName}")
         previewController.setProvider(normalizedProvider)
         previewController.speak(
             testText.toChatTtsText(

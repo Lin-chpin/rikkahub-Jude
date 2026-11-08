@@ -66,9 +66,21 @@ internal fun sentinelFailureReply(
     val recognized = result?.get("vision_completed")?.jsonPrimitive?.booleanOrNull == true
     val reason = when (HeartbeatFailureClassifier.classify(error)) {
         HeartbeatRunReason.RATE_LIMITED -> "回复模型服务限流（请求过于频繁）"
+        HeartbeatRunReason.REQUEST_REJECTED -> "回复模型服务拒绝了本次请求，请检查参数与模型设置"
         HeartbeatRunReason.AUTHENTICATION_FAILED -> "回复模型服务鉴权失败"
+        HeartbeatRunReason.PAYMENT_REQUIRED -> "回复模型服务报告账户额度或付款问题"
+        HeartbeatRunReason.ACCESS_DENIED -> "回复模型服务拒绝访问，请检查账号及服务权限"
+        HeartbeatRunReason.RESOURCE_NOT_FOUND -> "回复模型服务未找到请求地址、模型或资源"
+        HeartbeatRunReason.SERVICE_REQUEST_TIMEOUT -> "回复模型服务报告请求超时"
+        HeartbeatRunReason.REQUEST_TOO_LARGE -> "回复模型服务拒绝了过大的请求，请减少输入内容"
+        HeartbeatRunReason.SERVER_ERROR -> "回复模型服务返回错误，具体内部原因无法确认"
+        HeartbeatRunReason.HTTP_ERROR -> "回复模型接口返回 HTTP ${HeartbeatFailureClassifier.httpStatusCode(error)}，具体原因无法从状态码确认"
+        HeartbeatRunReason.REQUEST_TIMEOUT -> "回复模型请求超时，具体阶段无法确认"
         HeartbeatRunReason.NETWORK_TIMEOUT -> "回复模型请求超时"
         HeartbeatRunReason.NETWORK_UNAVAILABLE -> "回复模型网络连接失败"
+        HeartbeatRunReason.NETWORK_TRANSPORT_FAILURE -> "回复模型连接中断，具体阶段无法确认"
+        HeartbeatRunReason.SECURE_CONNECTION_FAILURE -> "回复模型安全连接失败"
+        HeartbeatRunReason.CONTENT_POLICY_REJECTED -> "回复模型服务按内容策略拒绝了本次请求"
         else -> "回复生成失败"
     }
     val receipt = UIMessage(

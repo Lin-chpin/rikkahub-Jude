@@ -80,6 +80,7 @@ import me.rerere.hugeicons.stroke.VolumeHigh
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.event.AppEvent
 import me.rerere.rikkahub.data.event.AppEventBus
+import me.rerere.rikkahub.data.ai.toolExecutionFailureMessage
 import me.rerere.rikkahub.data.model.MemoryScope
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.voice.chatVoiceReplyError
@@ -176,6 +177,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
     } else {
         null
     }
+    val toolFailure = content.toolExecutionFailureMessage()
     val images = tool.output.filterIsInstance<UIMessagePart.Image>()
 
     val title = when (tool.toolName) {
@@ -221,7 +223,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
         ToolNames.SCRAPE_WEB -> arguments.getStringContent("url") != null
         ToolNames.TTS -> arguments.getStringContent("text") != null || voiceReplyError != null
         else -> false
-    } || isDenied || images.isNotEmpty()
+    } || isDenied || images.isNotEmpty() || toolFailure != null
 
     ControlledChainOfThoughtStep(
         expanded = expanded,
@@ -288,6 +290,13 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
         content = if (hasExtraContent) {
             {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    toolFailure?.let { failure ->
+                        Text(
+                            text = failure,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                     if (tool.toolName == ToolNames.MEMORY &&
                         memoryAction in listOf(MemoryActions.CREATE, MemoryActions.EDIT)
                     ) {
@@ -493,6 +502,7 @@ private fun SearchWebPreview(
     val items = content.jsonObject["items"]?.jsonArray ?: emptyList()
     val answer = content.getStringContent("answer")
     val query = arguments.getStringContent("query") ?: ""
+    val toolFailure = content.toolExecutionFailureMessage()
 
     LazyColumn(
         modifier = Modifier
@@ -502,6 +512,10 @@ private fun SearchWebPreview(
     ) {
         item {
             Text(stringResource(R.string.chat_message_tool_search_prefix, query))
+        }
+
+        toolFailure?.let { failure ->
+            item { Text(failure, color = MaterialTheme.colorScheme.error) }
         }
 
         if (answer != null) {
@@ -563,7 +577,7 @@ private fun SearchWebPreview(
                     }
                 }
             }
-        } else {
+        } else if (toolFailure == null) {
             item {
                 HighlightText(
                     code = JsonInstantPretty.encodeToString(content),
@@ -578,6 +592,7 @@ private fun SearchWebPreview(
 @Composable
 private fun ScrapeWebPreview(content: JsonElement) {
     val urls = content.jsonObject["urls"]?.jsonArray ?: emptyList()
+    val toolFailure = content.toolExecutionFailureMessage()
 
     LazyColumn(
         modifier = Modifier
@@ -586,12 +601,16 @@ private fun ScrapeWebPreview(content: JsonElement) {
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         item {
-            Text(
-                text = stringResource(
-                    R.string.chat_message_tool_scrape_prefix,
-                    urls.joinToString(", ") { it.getStringContent("url") ?: "" }
+            if (toolFailure != null) {
+                Text(toolFailure, color = MaterialTheme.colorScheme.error)
+            } else {
+                Text(
+                    text = stringResource(
+                        R.string.chat_message_tool_scrape_prefix,
+                        urls.joinToString(", ") { it.getStringContent("url") ?: "" }
+                    )
                 )
-            )
+            }
         }
 
         items(urls) { url ->

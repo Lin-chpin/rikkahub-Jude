@@ -210,6 +210,7 @@ internal class VoiceCallVisualRoundState {
                 capturedFrameCount = preparedRequests.sumOf { it.capturedFrameCount },
                 failedOcrCount = preparedRequests.sumOf { it.failedOcrCount },
                 recognizedDescriptions = descriptions,
+                ocrFailure = preparedRequests.firstNotNullOfOrNull { it.ocrFailure },
             )
             combined
         }

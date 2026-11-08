@@ -75,6 +75,7 @@ class SSEEventSourceTest {
                 .build()
         )
 
-        assertEquals("Invalid content-type: application/json; charset=utf-8", failure?.message)
+        assertEquals("Streaming response content type was invalid", failure?.message)
+        assertEquals("content_type=application/json", (failure as? ProviderResponseParseException)?.safeContext)
     }
 }

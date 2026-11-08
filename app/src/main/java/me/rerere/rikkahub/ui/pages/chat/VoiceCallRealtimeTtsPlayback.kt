@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.withTimeoutOrNull
 import me.rerere.ai.ui.VoiceCallAudioSegment
 import me.rerere.ai.util.GenerationTimingTrace
+import me.rerere.rikkahub.BuildConfig
 import me.rerere.rikkahub.data.files.FileFolders
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.voice.VoiceCallSpeechInput
@@ -27,6 +28,7 @@ import me.rerere.rikkahub.service.sanitizeRealtimeVoiceCallTextForSpeech
 import me.rerere.rikkahub.ui.hooks.CustomTtsState
 import me.rerere.tts.model.PlaybackStatus
 import me.rerere.tts.model.TTSResponse
+import java.util.concurrent.atomic.AtomicReference
 
 @Composable
 internal fun BindVoiceCallRealtimeTtsPlayback(
@@ -53,6 +55,7 @@ internal fun BindVoiceCallRealtimeTtsPlayback(
         var lastGenerationGate: String? = null
         while (state.replyPending) {
             val timing = GenerationTimingTrace("voice_call_tts")
+            val turnTiming = AtomicReference<GenerationTimingTrace?>()
             var messageId: String? = null
             val speechChannel = Channel<String>(Channel.UNLIMITED)
             var sentSpeechText = ""
@@ -64,6 +67,9 @@ internal fun BindVoiceCallRealtimeTtsPlayback(
             val playbackSessionId = tts.speakRealtimeDialogue(
                 text = speechChannel.receiveAsFlow(),
                 onAlignment = alignment::append,
+                onTiming = if (BuildConfig.DEBUG) {
+                    { stage -> turnTiming.get()?.markOnce(stage.logName) }
+                } else null,
                 onAudioReady = { response ->
                     recordFlow(
                         "实时 TTS音频回调 session=${tts.playbackSessionId.value} " +
@@ -214,6 +220,8 @@ internal fun BindVoiceCallRealtimeTtsPlayback(
                         val delta = speechText.substring(sentSpeechText.length)
                         if (delta.isNotEmpty()) {
                             if (sentSpeechText.isEmpty()) {
+                                turnTiming.set(input.timing)
+                                input.timing?.markOnce("tts_input_submitted", candidateId, delta.length)
                                 Log.i(
                                     "VoiceCallRealtimeTts",
                                     "First text available: playbackSession=$playbackSessionId " +

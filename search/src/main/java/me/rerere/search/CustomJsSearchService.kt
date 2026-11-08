@@ -58,8 +58,8 @@ object CustomJsSearchService : SearchService<SearchServiceOptions.CustomJsOption
         serviceOptions: SearchServiceOptions.CustomJsOptions
     ): Result<SearchResult> = withContext(Dispatchers.IO) {
         runCatching {
-            val query = params["query"]?.jsonPrimitive?.content ?: error("query is required")
-            val script = serviceOptions.searchScript.ifBlank { error("Search script is empty") }
+            val query = params.requireSearchStringArgument("query")
+            val script = serviceOptions.searchScript.ifBlank { missingSearchScript("search") }
 
             val resultJson = executeScript(
                 userScript = script,
@@ -76,8 +76,8 @@ object CustomJsSearchService : SearchService<SearchServiceOptions.CustomJsOption
         serviceOptions: SearchServiceOptions.CustomJsOptions
     ): Result<ScrapedResult> = withContext(Dispatchers.IO) {
         runCatching {
-            val script = serviceOptions.scrapeScript.ifBlank { error("Scrape script is empty") }
-            val urlsJson = params["urls"]?.toString() ?: error("urls is required")
+            val script = serviceOptions.scrapeScript.ifBlank { missingSearchScript("scrape") }
+            val urlsJson = params.requireSearchArgument("urls").toString()
 
             val resultJson = executeScript(
                 userScript = script,

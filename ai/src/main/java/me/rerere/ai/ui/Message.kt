@@ -861,6 +861,7 @@ sealed class UIMessageAnnotation {
         val audioSegments: List<VoiceCallAudioSegment> = emptyList(),
         val messageIds: Set<String> = emptySet(),
         val audioSegmentsByMessageId: Map<String, List<VoiceCallAudioSegment>> = emptyMap(),
+        val summary: String? = null,
         val pendingEndedEvent: Boolean = false,
     ) : UIMessageAnnotation()
 

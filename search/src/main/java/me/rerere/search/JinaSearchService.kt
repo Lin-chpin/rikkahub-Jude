@@ -65,7 +65,8 @@ object JinaSearchService : SearchService<SearchServiceOptions.JinaOptions> {
         serviceOptions: SearchServiceOptions.JinaOptions
     ): Result<SearchResult> = withContext(Dispatchers.IO) {
         runCatching {
-            val query = params["query"]?.jsonPrimitive?.content ?: error("query is required")
+            val query = params.requireSearchStringArgument("query")
+            val apiKey = requireSearchApiKey(serviceOptions.apiKey)
 
             val body = buildJsonObject {
                 put("q", query)
@@ -76,7 +77,7 @@ object JinaSearchService : SearchService<SearchServiceOptions.JinaOptions> {
             val request = Request.Builder()
                 .url(searchUrl)
                 .post(body.toString().toRequestBody())
-                .addHeader("Authorization", "Bearer ${serviceOptions.apiKey}")
+                .addHeader("Authorization", "Bearer $apiKey")
                 .addHeader("Accept", "application/json")
                 .addHeader("Content-Type", "application/json")
                 .build()
@@ -99,7 +100,7 @@ object JinaSearchService : SearchService<SearchServiceOptions.JinaOptions> {
                     )
                 )
             } else {
-                error("response failed #${response.code}")
+                response.throwSearchHttpFailure("Jina search")
             }
         }
     }
@@ -110,7 +111,8 @@ object JinaSearchService : SearchService<SearchServiceOptions.JinaOptions> {
         serviceOptions: SearchServiceOptions.JinaOptions
     ): Result<ScrapedResult> = withContext(Dispatchers.IO) {
         runCatching {
-            val url = params["url"]?.jsonPrimitive?.content ?: error("urls is required")
+            val url = params.requireSearchStringArgument("url")
+            val apiKey = requireSearchApiKey(serviceOptions.apiKey)
 
             val body = buildJsonObject {
                 put("url", url)
@@ -121,7 +123,7 @@ object JinaSearchService : SearchService<SearchServiceOptions.JinaOptions> {
             val request = Request.Builder()
                 .url(scrapeUrl)
                 .post(body.toString().toRequestBody())
-                .addHeader("Authorization", "Bearer ${serviceOptions.apiKey}")
+                .addHeader("Authorization", "Bearer $apiKey")
                 .addHeader("Accept", "application/json")
                 .addHeader("Content-Type", "application/json")
                 .addHeader("X-Return-Format", "markdown")
@@ -129,7 +131,7 @@ object JinaSearchService : SearchService<SearchServiceOptions.JinaOptions> {
 
             val response = httpClient.newCall(request).await()
             if (!response.isSuccessful) {
-                error("response failed for url $url #${response.code}")
+                response.throwSearchHttpFailure("Jina scrape")
             }
             val responseData = response.body.string().let {
                 json.decodeFromString<JinaScrapeResponse>(it)

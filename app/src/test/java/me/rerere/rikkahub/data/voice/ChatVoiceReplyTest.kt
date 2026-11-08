@@ -2,13 +2,23 @@ package me.rerere.rikkahub.data.voice
 
 import kotlinx.serialization.json.Json
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.util.HttpException
 import me.rerere.ai.ui.ChatVoiceAudioSegment
 import me.rerere.ai.ui.ChatVoiceReplySegment
 import me.rerere.ai.ui.ChatVoiceReplySegmentType
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.tts.provider.TTSProviderErrorCode
+import me.rerere.tts.provider.TTSProviderException
+import me.rerere.tts.provider.TTSProviderKind
+import me.rerere.tts.provider.TTSResponseParsingException
 import me.rerere.tts.provider.TTSProviderSetting
 import me.rerere.tts.provider.isElevenLabsV4Family
+import java.net.ConnectException
+import java.net.SocketException
+import java.io.IOException
+import java.net.SocketTimeoutException
+import javax.net.ssl.SSLException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -292,12 +302,67 @@ class ChatVoiceReplyTest {
         )
         assertEquals(
             ChatVoiceReplyErrorCode.BALANCE,
-            classifyChatVoiceReplyErrorText("HTTP 402: balance is insufficient").code,
+            classifyChatVoiceReplyError(HttpException("opaque", statusCode = 402)).code,
         )
         assertEquals(
             "未配置语音模型 API Key，请先填写 API Key。",
             ChatVoiceReplyError(ChatVoiceReplyErrorCode.MISSING_API_KEY).userMessage(),
         )
+        assertEquals(ChatVoiceReplyErrorCode.AUTHENTICATION, classifyChatVoiceReplyError(HttpException("opaque", 401)).code)
+        assertEquals(ChatVoiceReplyErrorCode.PERMISSION, classifyChatVoiceReplyError(HttpException("opaque", 403)).code)
+        assertEquals(ChatVoiceReplyErrorCode.RESOURCE_NOT_FOUND, classifyChatVoiceReplyError(HttpException("model not found", 404)).code)
+        assertEquals(ChatVoiceReplyErrorCode.RATE_LIMIT, classifyChatVoiceReplyError(HttpException("quota", 429)).code)
+        val providerRateLimit = classifyChatVoiceReplyError(
+            TTSProviderException(
+                TTSProviderKind.MINIMAX,
+                providerCode = TTSProviderErrorCode.RATE_LIMITED,
+            ),
+        )
+        assertEquals(ChatVoiceReplyErrorCode.RATE_LIMIT, providerRateLimit.code)
+        assertTrue(providerRateLimit.userMessage().contains("限制了请求频率或额度"))
+        assertTrue(!providerRateLimit.userMessage().contains("HTTP 429"))
+        assertEquals(ChatVoiceReplyErrorCode.SERVER_ERROR, classifyChatVoiceReplyError(HttpException("opaque", 503)).code)
+        assertEquals(ChatVoiceReplyErrorCode.REQUEST_TOO_LARGE, classifyChatVoiceReplyError(HttpException("opaque", 413)).code)
+        assertEquals(
+            ChatVoiceReplyErrorCode.BALANCE,
+            classifyChatVoiceReplyError(
+                TTSProviderException(
+                    TTSProviderKind.OPENAI_COMPATIBLE,
+                    statusCode = 401,
+                    providerCode = TTSProviderErrorCode.PAYMENT_ISSUE,
+                ),
+            ).code,
+        )
+        assertEquals(
+            ChatVoiceReplyErrorCode.MODEL_UNAVAILABLE,
+            classifyChatVoiceReplyError(
+                TTSProviderException(
+                    TTSProviderKind.ELEVENLABS,
+                    providerCode = TTSProviderErrorCode.MODEL_NOT_FOUND,
+                ),
+            ).code,
+        )
+        assertEquals(
+            ChatVoiceReplyErrorCode.RESPONSE_PARSING,
+            classifyChatVoiceReplyError(TTSResponseParsingException(TTSProviderKind.GEMINI)).code,
+        )
+        assertTrue(ChatVoiceReplyError(ChatVoiceReplyErrorCode.REQUEST_TOO_LARGE).userMessage().contains("内容过大"))
+        assertTrue(ChatVoiceReplyError(ChatVoiceReplyErrorCode.RESPONSE_PARSING).userMessage().contains("响应解析失败"))
+        assertEquals(
+            ChatVoiceReplyErrorCode.EMPTY_TEXT,
+            classifyChatVoiceReplyError(ChatVoiceReplyGenerationException(ChatVoiceReplyErrorCode.EMPTY_TEXT)).code,
+        )
+        assertEquals(ChatVoiceReplyErrorCode.UNKNOWN, classifyChatVoiceReplyError(IllegalStateException("operation timeout")).code)
+        assertEquals(ChatVoiceReplyErrorCode.UNKNOWN, classifyChatVoiceReplyError(IOException("connection closed")).code)
+        assertEquals(ChatVoiceReplyErrorCode.UNKNOWN, classifyChatVoiceReplyError(IOException("401 unauthorized rate limit")).code)
+        assertEquals(ChatVoiceReplyErrorCode.UNKNOWN, classifyChatVoiceReplyError(IOException("404 model not found")).code)
+        assertEquals(ChatVoiceReplyErrorCode.UNKNOWN, classifyChatVoiceReplyError(IOException("HTTP 503")).code)
+        assertEquals(ChatVoiceReplyErrorCode.TIMEOUT, classifyChatVoiceReplyError(SocketTimeoutException("read timed out")).code)
+        assertEquals(ChatVoiceReplyErrorCode.NETWORK, classifyChatVoiceReplyError(ConnectException("refused")).code)
+        assertTrue(classifyChatVoiceReplyError(SocketException("connection reset")).userMessage().contains("连接中断，具体阶段无法确认"))
+        assertEquals(ChatVoiceReplyErrorCode.NETWORK, classifyChatVoiceReplyError(SSLException("certificate rejected")).code)
+        assertTrue(ChatVoiceReplyError(ChatVoiceReplyErrorCode.AUDIO_STORAGE).userMessage().contains("保存到本地失败"))
+        assertTrue(ChatVoiceReplyError(ChatVoiceReplyErrorCode.UNKNOWN).userMessage().contains("无法确认"))
     }
 
     @Test
@@ -348,6 +413,26 @@ class ChatVoiceReplyTest {
         assertEquals(
             ChatVoiceReplyErrorCode.BALANCE,
             fallback.parts.filterIsInstance<UIMessagePart.Tool>().single().chatVoiceReplyError()?.code,
+        )
+    }
+
+    @Test
+    fun legacyVoiceToolFreeTextDoesNotGuessProviderFailureCause() {
+        val message = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Tool(
+                    toolCallId = "voice-legacy-error",
+                    toolName = CHAT_VOICE_REPLY_TOOL_NAME,
+                    input = "{}",
+                    output = listOf(UIMessagePart.Text("""{"error":"TTS request failed: 401 unauthorized"}""")),
+                ),
+            ),
+        )
+
+        assertEquals(
+            ChatVoiceReplyErrorCode.UNKNOWN,
+            message.parts.filterIsInstance<UIMessagePart.Tool>().single().chatVoiceReplyError()?.code,
         )
     }
 

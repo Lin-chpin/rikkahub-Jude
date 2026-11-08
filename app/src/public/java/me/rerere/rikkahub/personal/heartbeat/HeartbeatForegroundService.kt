@@ -384,7 +384,10 @@ class HeartbeatForegroundService : Service(), KoinComponent {
             } catch (error: Exception) {
                 val detail = if (privateRun) error.toPrivateHeartbeatDiagnosticDetail(
                     store?.readSentinelDiagnostics().generationFailureStage(runStartedAtMillis),
-                ) else error::class.simpleName
+                ) else buildString {
+                    append(error::class.simpleName ?: "Throwable")
+                    HeartbeatFailureClassifier.httpStatusCode(error)?.let { append(" http_status=$it") }
+                }
                 if (privateRun) Log.e(TAG, "Heartbeat generation failed $detail")
                 else Log.e(TAG, "Heartbeat generation failed", error)
                 Logging.log(TAG, "run=$runStartedAtMillis $detail")

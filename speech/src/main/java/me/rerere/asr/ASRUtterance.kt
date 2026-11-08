@@ -6,4 +6,5 @@ data class ASRUtterance(
     val text: String,
     val isFinal: Boolean,
     val isSpeechStarted: Boolean = false,
+    val isSpeechStopped: Boolean = false,
 )

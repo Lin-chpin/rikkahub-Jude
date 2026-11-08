@@ -56,7 +56,8 @@ object ZhipuSearchService : SearchService<SearchServiceOptions.ZhipuOptions> {
         serviceOptions: SearchServiceOptions.ZhipuOptions
     ): Result<SearchResult> = withContext(Dispatchers.IO) {
         runCatching {
-            val query = params["query"]?.jsonPrimitive?.content ?: error("query is required")
+            val query = params.requireSearchStringArgument("query")
+            val apiKey = requireSearchApiKey(serviceOptions.apiKey)
 
             val body = buildJsonObject {
                 put("search_query", JsonPrimitive(query))
@@ -67,19 +68,15 @@ object ZhipuSearchService : SearchService<SearchServiceOptions.ZhipuOptions> {
             val request = Request.Builder()
                 .url("https://open.bigmodel.cn/api/paas/v4/web_search")
                 .post(json.encodeToString(body).toRequestBody("application/json".toMediaType()))
-                .addHeader("Authorization", "Bearer ${serviceOptions.apiKey}")
+                .addHeader("Authorization", "Bearer $apiKey")
                 .build()
 
             val response = httpClient.newCall(request).execute()
             if (response.isSuccessful) {
-                val bodyRaw = response.body?.string() ?: error("Failed to get response body")
-                val response = runCatching {
+                val bodyRaw = response.body?.string() ?: missingSearchResponseField("body")
+                val response = parseSearchResponse {
                     json.decodeFromString<ZhipuDto>(bodyRaw)
-                }.onFailure {
-                    it.printStackTrace()
-                    println(bodyRaw)
-                    error("Failed to decode response: $bodyRaw")
-                }.getOrThrow()
+                }
 
                 return@withContext Result.success(
                     SearchResult(
@@ -92,8 +89,7 @@ object ZhipuSearchService : SearchService<SearchServiceOptions.ZhipuOptions> {
                         }
                     ))
             } else {
-                println(response.body?.string())
-                error("response failed #${response.code}")
+                response.throwSearchHttpFailure("Zhipu search")
             }
         }
     }

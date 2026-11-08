@@ -14,7 +14,10 @@ import me.rerere.tts.model.AudioChunk
 import me.rerere.tts.model.AudioFormat
 import me.rerere.tts.model.TTSRequest
 import me.rerere.tts.provider.TTSProvider
+import me.rerere.tts.provider.TTSProviderKind
 import me.rerere.tts.provider.TTSProviderSetting
+import me.rerere.tts.provider.TTSResponseParsingException
+import me.rerere.tts.provider.createTTSProviderSseFailure
 import me.rerere.tts.provider.isSpeech26Model
 import me.rerere.tts.provider.isSpeech28Model
 import okhttp3.MediaType.Companion.toMediaType
@@ -36,6 +39,26 @@ private data class MiniMaxResponseData(
 private data class MiniMaxResponse(
     val data: MiniMaxResponseData
 )
+
+internal data class MiniMaxAudioChunk(
+    val audioBytes: ByteArray,
+    val status: Int,
+    val ced: String,
+)
+
+internal fun decodeMiniMaxAudioChunk(data: String): MiniMaxAudioChunk {
+    try {
+        val decoded = Json { ignoreUnknownKeys = true }.decodeFromString<MiniMaxResponse>(data).data
+        val audioBytes = hexStringToBytes(decoded.audio)
+        if (audioBytes.isEmpty()) error("MiniMax response contained empty audio data")
+        return MiniMaxAudioChunk(audioBytes, decoded.status, decoded.ced)
+    } catch (error: kotlinx.coroutines.CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        if (error is TTSResponseParsingException) throw error
+        throw TTSResponseParsingException(TTSProviderKind.MINIMAX, error)
+    }
+}
 
 class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
     private val httpClient = OkHttpClient.Builder()
@@ -115,41 +138,35 @@ class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
             when (it) {
                 is SseEvent.Open -> Log.i(TAG, "tts_timing trace=$timingId stage=sse_open elapsedMs=${elapsedMs()}")
                 is SseEvent.Event -> {
-                    try {
-                        val data = json.decodeFromString<MiniMaxResponse>(it.data)
-
-                        // Convert hex string to bytes
-                        val audioBytes = hexStringToBytes(data.data.audio)
-                        if (!firstAudioReceived && audioBytes.isNotEmpty()) {
-                            firstAudioReceived = true
-                            Log.i(TAG, "tts_timing trace=$timingId stage=first_audio_bytes_received elapsedMs=${elapsedMs()} bytes=${audioBytes.size}")
-                        }
-                        if (audioBytes.isNotEmpty()) {
-                            audioChunkCount++
-                            totalAudioBytes += audioBytes.size
-                        }
-
-                        emit(
-                            AudioChunk(
-                                data = audioBytes,
-                                format = AudioFormat.MP3, // MiniMax returns MP3 format
-                                sampleRate = 32000, // Default sample rate from MiniMax
-                                isLast = false, // Will be set to true on last chunk
-                                metadata = mapOf(
-                                    "provider" to "minimax",
-                                    "model" to model,
-                                    "voice" to voiceId,
-                                    "status" to data.data.status.toString(),
-                                    "ced" to data.data.ced,
-                                    "timing_id" to timingId,
-                                )
+                    val chunk = try {
+                        decodeMiniMaxAudioChunk(it.data)
+                    } catch (error: TTSResponseParsingException) {
+                        Log.e(TAG, "TTS response parsing failed: provider=minimax cause_type=${error.cause?.javaClass?.simpleName ?: "unknown"}")
+                        throw error
+                    }
+                    if (!firstAudioReceived) {
+                        firstAudioReceived = true
+                        Log.i(TAG, "tts_timing trace=$timingId stage=first_audio_bytes_received elapsedMs=${elapsedMs()} bytes=${chunk.audioBytes.size}")
+                    }
+                    audioChunkCount++
+                    totalAudioBytes += chunk.audioBytes.size
+                    emit(
+                        AudioChunk(
+                            data = chunk.audioBytes,
+                            format = AudioFormat.MP3,
+                            sampleRate = 32000,
+                            isLast = false,
+                            metadata = mapOf(
+                                "provider" to "minimax",
+                                "model" to model,
+                                "voice" to voiceId,
+                                "status" to chunk.status.toString(),
+                                "ced" to chunk.ced,
+                                "timing_id" to timingId,
                             )
                         )
-                        hasEmittedAudio = true
-                    } catch (e: Exception) {
-                        Log.i(TAG, "tts_timing trace=$timingId stage=audio_chunk_decode_failed elapsedMs=${elapsedMs()} error=${e::class.simpleName}")
-                        Log.e(TAG, "Failed to process audio chunk", e)
-                    }
+                    )
+                    hasEmittedAudio = true
                 }
 
                 is SseEvent.Closed -> {
@@ -165,13 +182,29 @@ class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
                                 metadata = mapOf("provider" to "minimax")
                             )
                         )
+                    } else {
+                        throw TTSResponseParsingException(TTSProviderKind.MINIMAX)
                     }
                 }
 
                 is SseEvent.Failure -> {
-                    Log.i(TAG, "tts_timing trace=$timingId stage=sse_failed elapsedMs=${elapsedMs()} chunks=$audioChunkCount bytes=$totalAudioBytes error=${it.throwable?.javaClass?.simpleName ?: "unknown"}")
-                    Log.e(TAG, "SSE connection failed", it.throwable)
-                    throw it.throwable ?: Exception("MiniMax TTS streaming failed")
+                    if (it.responseFormatInvalid) {
+                        throw TTSResponseParsingException(TTSProviderKind.MINIMAX, it.throwable)
+                    }
+                    val failure = createTTSProviderSseFailure(
+                        TTSProviderKind.MINIMAX,
+                        it.response?.takeIf { response -> !response.isSuccessful }?.code,
+                        it.throwable,
+                        it.safeErrorCode,
+                        it.safeErrorType,
+                    )
+                    val causeTypes = generateSequence(failure as Throwable?) { it.cause }
+                        .take(4)
+                        .joinToString(">") { it::class.simpleName ?: "Throwable" }
+                    Log.i(TAG, "tts_timing trace=$timingId stage=sse_failed elapsedMs=${elapsedMs()} chunks=$audioChunkCount bytes=$totalAudioBytes cause_types=$causeTypes")
+                    Log.e(TAG, "TTS stream failure type=${failure::class.simpleName}" +
+                        (it.response?.takeIf { response -> !response.isSuccessful }?.code?.let { status -> " status=$status" } ?: ""))
+                    throw failure
                 }
             }
         }

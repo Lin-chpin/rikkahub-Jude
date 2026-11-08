@@ -54,7 +54,8 @@ object BraveSearchService : SearchService<SearchServiceOptions.BraveOptions> {
         serviceOptions: SearchServiceOptions.BraveOptions
     ): Result<SearchResult> = withContext(Dispatchers.IO) {
         runCatching {
-            val query = params["query"]?.jsonPrimitive?.content ?: error("query is required")
+            val query = params.requireSearchStringArgument("query")
+            val apiKey = requireSearchApiKey(serviceOptions.apiKey)
             val url = "https://api.search.brave.com/res/v1/web/search" +
                     "?q=${java.net.URLEncoder.encode(query, "UTF-8")}" +
                     "&count=${commonOptions.resultSize}"
@@ -62,7 +63,7 @@ object BraveSearchService : SearchService<SearchServiceOptions.BraveOptions> {
             val request = Request.Builder()
                 .url(url)
                 .addHeader("Accept", "application/json")
-                .addHeader("X-Subscription-Token", serviceOptions.apiKey)
+                .addHeader("X-Subscription-Token", apiKey)
                 .build()
 
             val response = httpClient.newCall(request).await()
@@ -85,7 +86,7 @@ object BraveSearchService : SearchService<SearchServiceOptions.BraveOptions> {
                     )
                 )
             } else {
-                error("Brave search failed with code ${response.code}: ${response.message}")
+                response.throwSearchHttpFailure("Brave search")
             }
         }
     }

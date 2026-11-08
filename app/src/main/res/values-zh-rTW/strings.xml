@@ -180,6 +180,7 @@
   <string name="backup_page_backup_items">備份項目</string>
   <string name="backup_page_backup_now">立即備份</string>
   <string name="backup_page_backup_success">備份成功</string>
+  <string name="backup_page_export_failed">本機備份匯出失敗，具體原因無法確認。</string>
   <string name="backup_page_chat_records">聊天記錄</string>
   <string name="backup_page_connection_failed">連線失敗: %s</string>
   <string name="backup_page_connection_success">連線成功</string>

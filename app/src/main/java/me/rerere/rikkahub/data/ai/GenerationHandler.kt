@@ -108,6 +108,8 @@ class GenerationHandler(
         requestSource: String = "Other",
         startNewAssistantMessage: Boolean = false,
         suppressContentLogs: Boolean = false,
+        onInputWarning: (Throwable) -> Unit = {},
+        voiceCallTiming: GenerationTimingTrace? = null,
     ): Flow<GenerationChunk> = flow {
         val provider = providerOverride ?: model.findProvider(settings.providers)
             ?: error("Provider not found")
@@ -159,63 +161,65 @@ class GenerationHandler(
                     "AIRequest", "source=$requestSource conversation=$conversationId step=${stepIndex + 1} event=start",
                 )
                 generateInternal(
-                    assistant = assistant,
-                    settings = settings,
-                    messages = messages,
-                    onUpdateMessages = {
-                        timing.markOnce("output_transforms_started")
-                        timing.firstText("text_before_transforms", it.lastOrNull())
-                        messages = it.transforms(
-                            transformers = outputTransformers,
-                            context = context,
-                            model = model,
-                            assistant = assistant,
-                            settings = settings
-                        )
-                        timing.firstText("text_after_transforms", messages.lastOrNull())
-                        timing.markOnce("output_transforms_finished")
-                        val visualMessages = messages.visualTransforms(
-                            transformers = outputTransformers,
-                            context = context,
-                            model = model,
-                            assistant = assistant,
-                            settings = settings,
-                        )
-                        timing.firstText("text_after_visual_transforms", visualMessages.lastOrNull())
-                        timing.markOnce("visual_transforms_finished")
-                        emit(GenerationChunk.Messages(visualMessages))
-                        timing.firstText("text_event_emitted", visualMessages.lastOrNull())
-                    },
-                    transformers = inputTransformers,
-                    model = model,
-                    providerImpl = providerImpl,
-                    provider = provider,
-                    tools = toolsInternal,
-                    memories = memories ?: emptyList(),
-                    includeMemoriesInPrompt = includeMemoriesInPrompt,
-                    stream = assistant.streamOutput,
-                    processingStatus = processingStatus,
-                    conversationSystemPrompt = conversationSystemPrompt,
-                    conversationContextSummary = conversationContextSummary,
-                    conversationModeInjectionIds = conversationModeInjectionIds,
-                    conversationLorebookIds = conversationLorebookIds,
-                    extraSystemPrompt = extraSystemPrompt,
-                    runtimeStateSystemPrompt = runtimeStateSystemPrompt,
-                    requestMessageParts = requestMessageParts.onlyWhile(requestMessagePartsEnabled),
-                    maxTokensOverride = maxTokensOverride,
-                    conversationId = conversationId,
-                    sessionIdOverride = sessionIdOverride,
-                    diagnosticTrace = if (provider is ProviderSetting.OpenAI && conversationId != null) {
-                        requestContextDiagnostics.begin(
-                            conversationId.toString(), requestSource,
-                            if (provider.useResponseApi) "Responses" else "ChatCompletions",
-                            "${provider.id}:${provider.baseUrl}:${provider.chatCompletionsPath}:${provider.responsesPath}:${provider.authType}",
-                        )
-                    } else null,
-                    startNewAssistantMessage = startNewAssistantMessagePending,
-                    suppressContentLogs = suppressContentLogs,
-                    timing = timing,
-                )
+                        assistant = assistant,
+                        settings = settings,
+                        messages = messages,
+                        onUpdateMessages = {
+                            timing.markOnce("output_transforms_started")
+                            timing.firstText("text_before_transforms", it.lastOrNull())
+                            messages = it.transforms(
+                                transformers = outputTransformers,
+                                context = context,
+                                model = model,
+                                assistant = assistant,
+                                settings = settings
+                            )
+                            timing.firstText("text_after_transforms", messages.lastOrNull())
+                            timing.markOnce("output_transforms_finished")
+                            val visualMessages = messages.visualTransforms(
+                                transformers = outputTransformers,
+                                context = context,
+                                model = model,
+                                assistant = assistant,
+                                settings = settings,
+                            )
+                            timing.firstText("text_after_visual_transforms", visualMessages.lastOrNull())
+                            timing.markOnce("visual_transforms_finished")
+                            emit(GenerationChunk.Messages(visualMessages))
+                            timing.firstText("text_event_emitted", visualMessages.lastOrNull())
+                        },
+                        transformers = inputTransformers,
+                        model = model,
+                        providerImpl = providerImpl,
+                        provider = provider,
+                        tools = toolsInternal,
+                        memories = memories ?: emptyList(),
+                        includeMemoriesInPrompt = includeMemoriesInPrompt,
+                        stream = assistant.streamOutput,
+                        processingStatus = processingStatus,
+                        onInputWarning = onInputWarning,
+                        conversationSystemPrompt = conversationSystemPrompt,
+                        conversationContextSummary = conversationContextSummary,
+                        conversationModeInjectionIds = conversationModeInjectionIds,
+                        conversationLorebookIds = conversationLorebookIds,
+                        extraSystemPrompt = extraSystemPrompt,
+                        runtimeStateSystemPrompt = runtimeStateSystemPrompt,
+                        requestMessageParts = requestMessageParts.onlyWhile(requestMessagePartsEnabled),
+                        maxTokensOverride = maxTokensOverride,
+                        conversationId = conversationId,
+                        sessionIdOverride = sessionIdOverride,
+                        diagnosticTrace = if (provider is ProviderSetting.OpenAI && conversationId != null) {
+                            requestContextDiagnostics.begin(
+                                conversationId.toString(), requestSource,
+                                if (provider.useResponseApi) "Responses" else "ChatCompletions",
+                                "${provider.id}:${provider.baseUrl}:${provider.chatCompletionsPath}:${provider.responsesPath}:${provider.authType}",
+                            )
+                        } else null,
+                        startNewAssistantMessage = startNewAssistantMessagePending,
+                        suppressContentLogs = suppressContentLogs,
+                        timing = timing,
+                        voiceCallTiming = voiceCallTiming,
+                    )
                 startNewAssistantMessagePending = false
                 if (suppressContentLogs) Logging.log(
                     "AIRequest", "source=$requestSource conversation=$conversationId step=${stepIndex + 1} event=complete",
@@ -339,14 +343,17 @@ class GenerationHandler(
 
                     else -> {
                         // Auto or Approved - execute the tool
+                        var failureStage = "resolution"
                         runCatching {
                             val toolDef = toolsInternal.find { toolDef -> toolDef.name == tool.toolName }
                                 ?: error("Tool ${tool.toolName} not found")
+                            failureStage = "argument_parsing"
                             val args = runCatching {
                                 json.parseToJsonElement(tool.input.ifBlank { "{}" })
                             }.getOrElse {
                                 error("Invalid tool arguments JSON for ${tool.toolName}: ${it.message}")
                             }
+                            failureStage = "execution"
                             if (toolDef.name == CHAT_VOICE_REPLY_TOOL_NAME) {
                                 Log.i(TAG, "generateText: executing voice tool")
                             } else {
@@ -356,25 +363,12 @@ class GenerationHandler(
                             executedTools += tool.copy(output = result)
                         }.onFailure {
                             if (it is CancellationException) throw it
-                            if (!suppressContentLogs) it.printStackTrace()
+                            val causeTypes = generateSequence(it as Throwable?) { cause -> cause.cause }
+                                .take(4)
+                                .joinToString(">") { cause -> cause::class.simpleName ?: "Throwable" }
+                            Log.e(TAG, "Tool failed name=${tool.toolName} stage=$failureStage causes=$causeTypes")
                             executedTools += tool.copy(
-                                output = listOf(
-                                    UIMessagePart.Text(
-                                        json.encodeToString(
-                                            buildJsonObject {
-                                                put(
-                                                    "error",
-                                                    JsonPrimitive(buildString {
-                                                        append("[${it.javaClass.name}]")
-                                                        if (!suppressContentLogs) {
-                                                            append(" ${it.message}\n${it.stackTraceToString()}")
-                                                        }
-                                                    })
-                                                )
-                                            }
-                                        )
-                                    )
-                                )
+                                output = listOf(UIMessagePart.Text(toolExecutionFailure(failureStage, it)))
                             )
                         }
                     }
@@ -426,6 +420,7 @@ class GenerationHandler(
         includeMemoriesInPrompt: Boolean,
         stream: Boolean,
         processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
+        onInputWarning: (Throwable) -> Unit = {},
         conversationSystemPrompt: String? = null,
         conversationContextSummary: String? = null,
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
@@ -440,6 +435,7 @@ class GenerationHandler(
         startNewAssistantMessage: Boolean = false,
         suppressContentLogs: Boolean = false,
         timing: GenerationTimingTrace,
+        voiceCallTiming: GenerationTimingTrace?,
     ) {
         val contextMessages = if (assistant.contextMessageLimitEnabled) {
             val limit = assistant.contextMessageSize.coerceIn(1, 512)
@@ -528,6 +524,7 @@ class GenerationHandler(
             conversationLorebookIds = conversationLorebookIds,
             systemPrompt = configuredSystemPrompt,
             processingStatus = processingStatus,
+            onWarning = onInputWarning,
         ).withRequestMessageParts(requestMessageParts)
             .withRuntimeContextInstruction(runtimeStateSystemPrompt)
 
@@ -569,6 +566,7 @@ class GenerationHandler(
             }
         )
         timing.mark("model_request_prepared")
+        voiceCallTiming?.markOnce("model_request_prepared")
         aiLoggingManager.addLog(
             AILogging.Generation(
                 params = params,
@@ -599,6 +597,15 @@ class GenerationHandler(
                     (choice.delta ?: choice.message)?.textCharacterCount() ?: 0
                 },
             )
+            voiceCallTiming?.firstText(
+                "model_first_text",
+                responseMessages.lastOrNull()?.id?.toString(),
+                chunk.choices.sumOf { choice ->
+                    (choice.delta ?: choice.message)?.parts.orEmpty().sumOf { part ->
+                        if (part is UIMessagePart.Text && part.text.isNotBlank()) part.text.length else 0
+                    }
+                },
+            )
             responseMessages = responseMessages.handleMessageChunk(chunk = chunk, model = model)
             chunk.usage?.let { usage ->
                 Log.i("PromptCacheUsage", "conversation=$conversationId model=${model.modelId} " +
@@ -620,6 +627,7 @@ class GenerationHandler(
             responseMessages.lastOrNull()?.textCharacterCount(),
         )
     }
+
     private fun String.toSystemPromptPart(section: String) = UIMessagePart.Text(
         text = this,
         metadata = buildJsonObject {

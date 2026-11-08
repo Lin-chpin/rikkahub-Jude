@@ -17,6 +17,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.ImageContent
 import io.modelcontextprotocol.kotlin.sdk.types.Implementation
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
+import kotlinx.serialization.SerializationException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -32,6 +33,8 @@ import kotlinx.serialization.json.JsonObject
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.AppScope
+import me.rerere.rikkahub.data.ai.ToolExecutionException
+import me.rerere.rikkahub.data.ai.mcp.transport.StreamableHttpError
 import me.rerere.rikkahub.data.ai.mcp.transport.SseClientTransport
 import me.rerere.rikkahub.data.ai.mcp.transport.StreamableHttpClientTransport
 import me.rerere.rikkahub.data.datastore.Settings
@@ -41,8 +44,16 @@ import me.rerere.rikkahub.data.files.saveUploadFromBytes
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.utils.JsonInstant
 import me.rerere.rikkahub.utils.checkDifferent
+import me.rerere.ai.util.safeFailureDiagnostic
 import okhttp3.OkHttpClient
+import java.io.IOException
+import java.net.ConnectException
+import java.net.NoRouteToHostException
+import java.net.SocketException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLException
 import kotlin.io.encoding.Base64
 import kotlin.time.Duration.Companion.seconds
 import kotlin.uuid.Uuid
@@ -51,6 +62,44 @@ private const val TAG = "McpManager"
 private const val MAX_RECONNECT_ATTEMPTS = 5
 private const val BASE_RECONNECT_DELAY_MS = 1000L
 private const val MAX_RECONNECT_DELAY_MS = 30000L
+
+internal fun Throwable.mcpConnectionMessage(): String {
+    val causes = generateSequence(this as Throwable?) { it.cause }.take(8).toList()
+    val transportError = causes.filterIsInstance<StreamableHttpError>().firstOrNull()
+    if (transportError?.responseFormatInvalid == true || causes.any { it is SerializationException }) {
+        return "MCP 服务响应解析失败。"
+    }
+    transportError?.code?.takeIf { it > 0 }?.let { status ->
+        return when (status) {
+            400 -> "MCP 服务拒绝了请求（HTTP 400）。"
+            401 -> "MCP 服务身份验证失败（HTTP 401）。"
+            402 -> "MCP 服务要求检查账户付款状态或额度（HTTP 402）。"
+            403 -> "MCP 服务拒绝访问（HTTP 403）。"
+            404 -> "MCP 服务地址或请求资源未找到（HTTP 404）。"
+            408 -> "MCP 服务报告请求超时（HTTP 408）。"
+            413 -> "MCP 请求过大（HTTP 413）。"
+            429 -> "MCP 服务限制了请求频率（HTTP 429）。"
+            in 500..599 -> "MCP 服务返回 HTTP $status 错误。"
+            else -> "MCP 服务返回 HTTP $status，具体原因无法确认。"
+        }
+    }
+    if (transportError != null) return "MCP 服务报告连接或请求失败，具体原因无法确认。"
+    if (causes.any { it is SocketTimeoutException }) return "连接 MCP 服务超时。"
+    if (causes.any { it is UnknownHostException }) return "无法解析 MCP 服务域名，请检查地址和网络。"
+    if (causes.any { it is SSLException }) return "无法建立 MCP 服务安全连接。"
+    if (causes.any { it is ConnectException || it is NoRouteToHostException }) {
+        return "无法连接 MCP 服务，请检查地址和网络。"
+    }
+    if (causes.any { it is SocketException }) return "MCP 服务连接中断，具体阶段无法确认。"
+    if (causes.any { it is IOException }) return "MCP 连接传输失败，具体原因无法确认。"
+    return "MCP 连接或初始化失败，具体原因无法确认。"
+}
+
+private fun Throwable.mcpConnectionDiagnostic(): String {
+    val causes = generateSequence(this as Throwable?) { it.cause }.take(8).toList()
+    val status = causes.filterIsInstance<StreamableHttpError>().firstNotNullOfOrNull { it.code }
+    return safeFailureDiagnostic() + status?.let { " http_status=$it" }.orEmpty()
+}
 
 class McpManager(
     private val settingsStore: SettingsStore,
@@ -99,14 +148,14 @@ class McpManager(
                         toAdd.forEach { cfg ->
                             appScope.launch {
                                 runCatching { addClient(cfg) }
-                                    .onFailure { it.printStackTrace() }
+                                    .onFailure { Log.w(TAG, "addClient failed serverId=${cfg.id} ${it.mcpConnectionDiagnostic()}") }
                             }
                         }
                         toRemove.forEach { cfg ->
                             appScope.launch { removeClient(cfg) }
                         }
                     }.onFailure {
-                        it.printStackTrace()
+                        Log.w(TAG, "update configs failed ${it.mcpConnectionDiagnostic()}")
                     }
                 }
         }
@@ -127,9 +176,9 @@ class McpManager(
     ): List<UIMessagePart> {
         val entry = clients.entries.find { it.key.id == serverId }
         val client = entry?.value
-            ?: return listOf(UIMessagePart.Text("Failed to execute tool, because no such mcp client for the tool"))
+            ?: throw ToolExecutionException("connection", "mcp_client_unavailable")
         val config = entry.key
-        if (!suppressContentLogs) Log.i(TAG, "callTool: $toolName / $args (server: ${config.commonOptions.name})")
+        if (!suppressContentLogs) Log.i(TAG, "callTool: $toolName (server: ${config.commonOptions.name})")
 
         if (client.transport == null) client.connect(getTransport(config))
         val result = client.callTool(
@@ -141,6 +190,20 @@ class McpManager(
             ),
             options = RequestOptions(timeout = 120.seconds),
         )
+        if (result.isError == true) {
+            val contentTypes = result.content
+                .groupingBy { it::class.simpleName ?: "Unknown" }
+                .eachCount()
+                .toSortedMap()
+                .entries
+                .joinToString(",") { (type, count) -> "$type:$count" }
+            Log.w(
+                TAG,
+                "MCP tool reported failure serverId=$serverId tool=$toolName " +
+                    "contentBlockCount=${result.content.size} contentBlockTypes=$contentTypes",
+            )
+            throw ToolExecutionException("remote_tool", "mcp_tool_reported_failure")
+        }
         return result.content.map {
             when(it) {
                 is TextContent -> UIMessagePart.Text(it.text)
@@ -235,8 +298,8 @@ class McpManager(
             reconnectAttempts[config.id] = 0 // 重置重连计数
             Log.i(TAG, "addClient: connected ${config.commonOptions.name}")
         }.onFailure {
-            it.printStackTrace()
-            setStatus(config = config, status = McpStatus.Error(it.message ?: it.javaClass.name))
+            Log.w(TAG, "addClient failed serverId=${config.id} ${it.mcpConnectionDiagnostic()}")
+            setStatus(config = config, status = McpStatus.Error(it.mcpConnectionMessage()))
         }
     }
 
@@ -310,7 +373,8 @@ class McpManager(
             runCatching {
                 sync(config)
             }.onFailure {
-                it.printStackTrace()
+                Log.w(TAG, "sync failed serverId=${config.id} ${it.mcpConnectionDiagnostic()}")
+                setStatus(config, McpStatus.Error(it.mcpConnectionMessage()))
             }
         }
     }
@@ -322,7 +386,7 @@ class McpManager(
             runCatching {
                 entry.value.close()
             }.onFailure {
-                it.printStackTrace()
+                Log.w(TAG, "close client failed serverId=${entry.key.id} ${it.mcpConnectionDiagnostic()}")
             }
             clients.remove(entry.key)
             syncingStatus.emit(syncingStatus.value.toMutableMap().apply { remove(entry.key.id) })
@@ -394,7 +458,9 @@ class McpManager(
         // 先关闭旧客户端
         val oldEntry = clients.entries.find { it.key.id == config.id }
         if (oldEntry != null) {
-            runCatching { oldEntry.value.close() }.onFailure { it.printStackTrace() }
+            runCatching { oldEntry.value.close() }.onFailure {
+                Log.w(TAG, "close client before reconnect failed serverId=${oldEntry.key.id} ${it.mcpConnectionDiagnostic()}")
+            }
             clients.remove(oldEntry.key)
         }
 

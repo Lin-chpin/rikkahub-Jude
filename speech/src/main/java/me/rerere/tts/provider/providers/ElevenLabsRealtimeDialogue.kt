@@ -15,8 +15,12 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import me.rerere.tts.model.AudioChunk
 import me.rerere.tts.model.AudioFormat
+import me.rerere.tts.provider.TTSProviderException
+import me.rerere.tts.provider.TTSProviderKind
 import me.rerere.tts.provider.TTSProviderSetting
+import me.rerere.tts.provider.TTSResponseParsingException
 import me.rerere.tts.provider.isElevenLabsV4Family
+import me.rerere.tts.provider.parseTTSProviderErrorDetails
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -101,11 +105,18 @@ internal fun generateElevenLabsRealtimeDialogue(
 
         override fun onMessage(webSocket: WebSocket, text: String) {
             val message = runCatching { JSONObject(text) }.getOrElse {
-                output.close(IOException("Invalid ElevenLabs dialogue response", it))
+                output.close(TTSResponseParsingException(TTSProviderKind.ELEVENLABS, it))
                 return
             }
             if (message.has("error") && !message.isNull("error")) {
-                output.close(IOException("ElevenLabs dialogue error: ${message.opt("error")}"))
+                val details = parseTTSProviderErrorDetails(text)
+                output.close(
+                    TTSProviderException(
+                        provider = TTSProviderKind.ELEVENLABS,
+                        providerCode = details.code,
+                        providerType = details.type,
+                    ),
+                )
                 return
             }
             message.optString("audio")
@@ -113,7 +124,7 @@ internal fun generateElevenLabsRealtimeDialogue(
                 ?.let { encoded ->
                     val audio = runCatching { Base64.decode(encoded, Base64.DEFAULT) }
                         .getOrElse {
-                            output.close(IOException("Invalid ElevenLabs dialogue audio", it))
+                            output.close(TTSResponseParsingException(TTSProviderKind.ELEVENLABS, it))
                             return
                         }
                     lastProgressAt.set(SystemClock.elapsedRealtime())
@@ -148,7 +159,21 @@ internal fun generateElevenLabsRealtimeDialogue(
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-            val error = response?.let { IOException("ElevenLabs dialogue WebSocket failed: ${it.code} ${it.message}", t) } ?: t
+            val error = response?.let {
+                val errorBody = runCatching { it.body?.string() }.getOrNull()
+                val details = parseTTSProviderErrorDetails(errorBody)
+                if (it.code in 400..599) {
+                    TTSProviderException(
+                        provider = TTSProviderKind.ELEVENLABS,
+                        statusCode = it.code,
+                        providerCode = details.code,
+                        providerType = details.type,
+                        cause = t,
+                    )
+                } else {
+                    TTSResponseParsingException(TTSProviderKind.ELEVENLABS, t)
+                }
+            } ?: t
             socketReady.completeExceptionally(error)
             output.close(error)
         }

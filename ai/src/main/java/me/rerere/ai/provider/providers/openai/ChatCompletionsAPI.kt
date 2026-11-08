@@ -42,7 +42,7 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.isEmptyUIMessage
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.HttpException
-import me.rerere.ai.util.withHttpStatus
+import me.rerere.ai.util.ProviderResponseParseException
 import me.rerere.ai.util.GenerationTimingTrace
 import me.rerere.ai.util.textCharacterCount
 import me.rerere.ai.util.configureReferHeaders
@@ -52,6 +52,8 @@ import me.rerere.ai.util.mergeCustomBody
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
 import me.rerere.ai.util.parseErrorDetail
+import me.rerere.ai.util.toHttpException
+import me.rerere.ai.util.safeFailureDiagnostic
 import me.rerere.ai.util.stringSafe
 import me.rerere.ai.util.toHeaders
 import me.rerere.common.http.await
@@ -101,8 +103,6 @@ class ChatCompletionsAPI(
             .configureReferHeaders(providerSetting.baseUrl)
         val request = authenticator.authenticate(requestBuilder, providerSetting).build()
 
-        if (!params.suppressContentLogs) Log.i(TAG, "generateText: ${json.encodeToString(requestBody)}")
-
         client.newCall(request).await { response ->
             if (!response.isSuccessful) {
                 if (params.suppressContentLogs) {
@@ -110,7 +110,7 @@ class ChatCompletionsAPI(
                     response.close()
                     throw failure
                 }
-                throw HttpException("Failed to get response: ${response.code} ${response.body?.string()}", response.code)
+                throw response.toHttpException()
             }
 
             val bodyStr = response.body?.string() ?: ""
@@ -168,23 +168,25 @@ class ChatCompletionsAPI(
             .configureReferHeaders(providerSetting.baseUrl)
         val request = authenticator.authenticate(requestBuilder, providerSetting).build()
 
-        if (!params.suppressContentLogs) Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
-
         // just for debugging response body
         // println(client.newCall(request).await().body?.string())
 
         val completedNormally = AtomicBoolean(false)
         val toolCalls = ChatCompletionToolCalls()
-        fun finishToolCalls() {
-            val tools = toolCalls.finish()
-            if (tools.isNotEmpty()) {
-                trySendBlocking(MessageChunk("", "", listOf(UIMessageChoice(
+        fun finishToolCalls(): MessageChunk? {
+            val tools = try {
+                toolCalls.finish()
+            } catch (error: Exception) {
+                throw ProviderResponseParseException("Chat Completions tool calls could not be parsed", error)
+            }
+            return if (tools.isNotEmpty()) {
+                MessageChunk("", "", listOf(UIMessageChoice(
                     index = 0,
                     delta = UIMessage(role = MessageRole.ASSISTANT, parts = tools),
                     message = null,
                     finishReason = null,
-                )))).getOrThrow()
-            }
+                )))
+            } else null
         }
         timing.mark("request_ready")
         val listener = object : EventSourceListener() {
@@ -196,7 +198,14 @@ class ChatCompletionsAPI(
             ) {
                 val normalizedData = data.trim()
                 if (normalizedData == "[DONE]") {
-                    finishToolCalls()
+                    val finalTools = try {
+                        finishToolCalls()
+                    } catch (error: ProviderResponseParseException) {
+                        completedNormally.set(true)
+                        close(error)
+                        return
+                    }
+                    finalTools?.let { trySendBlocking(it).getOrThrow() }
                     timing.mark("sse_done", characters = receivedCharacters)
                     if (!params.suppressContentLogs) Log.i(TAG, "stream completed: [DONE]")
                     completedNormally.set(true)
@@ -205,20 +214,26 @@ class ChatCompletionsAPI(
                 }
                 if (normalizedData.isBlank()) return
                 timing.markOnce("sse_first_event_received")
-                if (!params.suppressContentLogs) Log.d(TAG, "onEvent: $normalizedData")
-                normalizedData
-                    .split("\n")
-                    .filter { it.isNotBlank() }
-                    .map { json.parseToJsonElement(it).jsonObject }
-                    .forEach {
-                        if (it["error"] != null) {
-                            val error = it["error"]!!.parseErrorDetail()
-                            throw error
-                        }
-                        val id = it["id"]?.jsonPrimitive?.contentOrNull ?: ""
-                        val model = it["model"]?.jsonPrimitive?.contentOrNull ?: ""
-
-                        val choices = it["choices"]?.jsonArray ?: JsonArray(emptyList())
+                if (!params.suppressContentLogs) Log.d(TAG, "Chat Completions event received (${normalizedData.length} chars)")
+                val events = try {
+                    normalizedData.split("\n").filter { it.isNotBlank() }
+                        .map { json.parseToJsonElement(it).jsonObject }
+                } catch (error: Exception) {
+                    Log.w(TAG, "Chat Completions response event parse failed type=${error::class.simpleName}")
+                    completedNormally.set(true)
+                    close(ProviderResponseParseException("Chat Completions event could not be parsed", error))
+                    return
+                }
+                events.forEach { event ->
+                    if (event["error"] != null) {
+                        completedNormally.set(true)
+                        close(event["error"]!!.parseErrorDetail())
+                        return
+                    }
+                    val messageChunk = try {
+                        val id = event["id"]?.jsonPrimitive?.contentOrNull ?: ""
+                        val model = event["model"]?.jsonPrimitive?.contentOrNull ?: ""
+                        val choices = event["choices"]?.jsonArray ?: JsonArray(emptyList())
                         val choiceList = buildList {
                             if (choices.isNotEmpty()) {
                                 val choice = choices[0].jsonObject
@@ -245,25 +260,37 @@ class ChatCompletionsAPI(
                                 }
                             }
                         }
-                        val usage = parseTokenUsage(it["usage"] as? JsonObject, params)
-
-                        val messageChunk = MessageChunk(
+                        val usage = parseTokenUsage(event["usage"] as? JsonObject, params)
+                        MessageChunk(
                             id = id,
                             model = model,
                             choices = choiceList,
                             usage = usage
                         )
-                        val textCharacters = choiceList.sumOf {
-                            (it.delta ?: it.message)?.textCharacterCount() ?: 0
-                        }
-                        receivedCharacters += textCharacters
-                        timing.firstText("sse_text_received", messageChunk.id, textCharacters)
-                        // SSE callbacks run on OkHttp threads; wait for the collector instead of losing deltas.
-                        trySendBlocking(messageChunk).getOrThrow()
-                        if (choiceList.any { it.finishReason in listOf("tool_calls", "stop", "length", "content_filter") }) {
-                            finishToolCalls()
-                        }
+                        } catch (error: Exception) {
+                            Log.w(TAG, "Chat Completions response event parse failed type=${error::class.simpleName}")
+                            completedNormally.set(true)
+                            close(ProviderResponseParseException("Chat Completions response event could not be parsed", error))
+                            return
                     }
+                    val textCharacters = messageChunk.choices.sumOf {
+                        ((it.delta ?: it.message)?.textCharacterCount()) ?: 0
+                    }
+                    receivedCharacters += textCharacters
+                    timing.firstText("sse_text_received", messageChunk.id, textCharacters)
+                    // SSE callbacks run on OkHttp threads; wait for the collector instead of losing deltas.
+                    trySendBlocking(messageChunk).getOrThrow()
+                    if (messageChunk.choices.any { it.finishReason in listOf("tool_calls", "stop", "length", "content_filter") }) {
+                        val finalTools = try {
+                            finishToolCalls()
+                        } catch (error: ProviderResponseParseException) {
+                            completedNormally.set(true)
+                            close(error)
+                            return
+                        }
+                        finalTools?.let { trySendBlocking(it).getOrThrow() }
+                    }
+                }
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
@@ -277,26 +304,12 @@ class ChatCompletionsAPI(
                     close(failure)
                     return
                 }
-                var exception = t
-
-                t?.printStackTrace()
-                println("[onFailure] 发生错误: ${t?.javaClass?.name} ${t?.message} / $response")
-
-                val bodyRaw = response?.body?.stringSafe()
-                try {
-                    if (!bodyRaw.isNullOrBlank()) {
-                        val bodyElement = Json.parseToJsonElement(bodyRaw)
-                        println(bodyElement)
-                        exception = bodyElement.parseErrorDetail()
-                        Log.i(TAG, "onFailure: $exception")
-                    }
-                } catch (e: Throwable) {
-                    Log.w(TAG, "onFailure: failed to parse from $bodyRaw")
-                    e.printStackTrace()
-                    exception = e
-                } finally {
-                    close(exception.withHttpStatus(response))
-                }
+                val failure = response?.takeIf { !it.isSuccessful }?.toHttpException(t)
+                    ?: t
+                    ?: IllegalStateException("Chat Completions stream failed without an explicit cause")
+                response?.close()
+                Log.w(TAG, "Chat Completions stream request failed: ${failure.safeFailureDiagnostic()}")
+                close(failure)
             }
 
             override fun onClosed(eventSource: EventSource) {
@@ -443,7 +456,7 @@ class ChatCompletionsAPI(
                         put("thinking", buildJsonObject {
                             put("type", if (!level.isEnabled) "disabled" else "enabled")
                         })
-                        if (level.isEnabled) {
+                        if (level.isEnabled && level != ReasoningLevel.AUTO) {
                             put("reasoning_effort", level.toDeepSeekReasoningEffort())
                         }
                     }
@@ -625,7 +638,7 @@ class ChatCompletionsAPI(
                                             put("url", encodedImage.base64)
                                         })
                                     }.onFailure {
-                                        it.printStackTrace()
+                                        Log.w(TAG, "Chat Completions image encoding failed: ${it.safeFailureDiagnostic()}")
                                         put("type", "text")
                                         put("text", "")
                                     }
@@ -674,7 +687,7 @@ class ChatCompletionsAPI(
                                             put("url", encodedImage.base64)
                                         })
                                     }.onFailure {
-                                        it.printStackTrace()
+                                        Log.w(TAG, "Chat Completions image encoding failed: ${it.safeFailureDiagnostic()}")
                                         put("type", "text")
                                         put("text", "")
                                     }
@@ -797,8 +810,8 @@ class ChatCompletionsAPI(
 
     private fun ReasoningLevel.toDeepSeekReasoningEffort(): String {
         return when (this) {
+            ReasoningLevel.LOW -> "low"
             ReasoningLevel.XHIGH -> "max"
-            ReasoningLevel.OFF, ReasoningLevel.AUTO -> "high"
             else -> "high"
         }
     }

@@ -51,8 +51,11 @@ private const val MCP_RESUMPTION_TOKEN_HEADER = "Last-Event-ID"
 /**
  * Error class for Streamable HTTP transport errors.
  */
-public class StreamableHttpError(public val code: Int? = null, message: String? = null) :
-    Exception("Streamable HTTP error: $message")
+public class StreamableHttpError(
+    public val code: Int? = null,
+    public val responseFormatInvalid: Boolean = false,
+    cause: Throwable? = null,
+) : Exception("MCP transport failure", cause)
 
 /**
  * Client transport for Streamable HTTP: this implements the MCP Streamable HTTP transport specification.
@@ -143,7 +146,8 @@ public class StreamableHttpClientTransport(
         }
 
         if (!response.status.isSuccess()) {
-            val error = StreamableHttpError(response.status.value, response.bodyAsText())
+            response.bodyAsText()
+            val error = StreamableHttpError(response.status.value)
             _onError(error)
             throw error
         }
@@ -168,8 +172,7 @@ public class StreamableHttpClientTransport(
                 val body = response.bodyAsText()
                 if (response.contentType() == null && body.isBlank()) return
 
-                val ct = response.contentType()?.toString() ?: "<none>"
-                val error = StreamableHttpError(-1, "Unexpected content type: $$ct")
+                val error = StreamableHttpError(responseFormatInvalid = true)
                 _onError(error)
                 throw error
             }
@@ -210,9 +213,8 @@ public class StreamableHttpClientTransport(
         if (!response.status.isSuccess() && response.status != HttpStatusCode.MethodNotAllowed) {
             val error = StreamableHttpError(
                 response.status.value,
-                "Failed to terminate session: ${response.status.description}",
             )
-            Log.e(TAG, "Failed to terminate session", error)
+            Log.e(TAG, "Failed to terminate session http_status=${response.status.value}")
             _onError(error)
             throw error
         }
@@ -256,13 +258,20 @@ public class StreamableHttpClientTransport(
 
             // If server returns application/json, it means it doesn't support SSE for this session
             // This is valid per spec - server can choose to only use JSON responses
-            if (responseContentType?.match(ContentType.Application.Json) == true) {
+            if (responseStatus?.isSuccess() == true && responseContentType?.match(ContentType.Application.Json) == true) {
                 Log.i(TAG, "Server returned application/json for GET/SSE, using JSON-only mode.")
                 return
             }
 
-            _onError(e)
-            throw e
+            val failure = responseStatus?.let {
+                if (it.isSuccess()) {
+                    StreamableHttpError(responseFormatInvalid = true, cause = e)
+                } else {
+                    StreamableHttpError(code = it.value, cause = e)
+                }
+            } ?: e
+            _onError(failure)
+            throw failure
         }
 
         sseJob = scope.launch(CoroutineName("StreamableHttpTransport.collect#${hashCode()}")) {
@@ -303,7 +312,7 @@ public class StreamableHttpClientTransport(
                                 .onFailure(_onError)
                         }
 
-                    "error" -> _onError(StreamableHttpError(null, event.data))
+                    "error" -> _onError(StreamableHttpError())
                 }
             }
         } catch (_: CancellationException) {

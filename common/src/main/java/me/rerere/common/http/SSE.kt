@@ -3,6 +3,11 @@ package me.rerere.common.http
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -38,7 +43,42 @@ sealed class SseEvent {
      * @param throwable 异常信息
      * @param response 错误时的响应（可能为null）
      */
-    data class Failure(val throwable: Throwable?, val response: Response?) : SseEvent()
+    data class Failure(
+        val throwable: Throwable?,
+        val response: Response?,
+        val safeErrorCode: String? = null,
+        val safeErrorType: String? = null,
+        val responseFormatInvalid: Boolean = false,
+    ) : SseEvent()
+}
+
+internal data class SseHttpErrorDetails(val code: String? = null, val type: String? = null)
+
+private val safeProviderErrorValues = setOf(
+    "payment_issue", "payment_required", "insufficient_quota", "billing_hard_limit_reached",
+    "quota_exceeded", "rate_limit_exceeded", "rate_limited", "invalid_api_key",
+    "authentication_error", "auth_error", "unauthorized", "permission_denied", "forbidden",
+    "model_not_found", "model_unavailable", "voice_not_found", "invalid_request_error",
+    "invalid_request", "invalid_parameter", "bad_request", "payload_too_large",
+)
+
+internal fun parseSseHttpErrorDetails(body: String?): SseHttpErrorDetails {
+    val root = runCatching { Json.parseToJsonElement(body.orEmpty()).jsonObject }.getOrNull()
+        ?: return SseHttpErrorDetails()
+    val nested = sequenceOf(root["error"], root["detail"])
+        .mapNotNull { runCatching { it?.jsonObject }.getOrNull() }
+        .firstOrNull()
+    fun readString(value: JsonObject?, key: String): String? =
+        (value?.get(key) as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+    fun firstSafe(value: JsonObject?, vararg keys: String): String? = keys
+        .firstNotNullOfOrNull { key ->
+            readString(value, key)?.trim()?.lowercase()
+                ?.takeIf(safeProviderErrorValues::contains)
+        }
+    return SseHttpErrorDetails(
+        code = firstSafe(nested, "code", "status", "error_code") ?: firstSafe(root, "code", "error_code"),
+        type = firstSafe(nested, "type", "error_type") ?: firstSafe(root, "type", "error_type"),
+    )
 }
 
 
@@ -74,30 +114,25 @@ fun OkHttpClient.sseFlow(request: Request): Flow<SseEvent> {
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                // 连接发生错误时触发
-                val responseBody = runCatching {
-                    response?.body?.string()
-                }.getOrNull()
-                val detailedError = when {
-                    response != null -> IOException(
-                        buildString {
-                            append("SSE request failed: HTTP ")
-                            append(response.code)
-                            if (response.message.isNotBlank()) {
-                                append(" ")
-                                append(response.message)
-                            }
-                            if (!responseBody.isNullOrBlank()) {
-                                append(": ")
-                                append(responseBody)
-                            }
-                        },
-                        t
-                    )
-
+                val isHttpFailure = response != null && !response.isSuccessful
+                val responseBody = if (isHttpFailure) runCatching { response?.body?.string() }.getOrNull() else null
+                val details = parseSseHttpErrorDetails(responseBody)
+                val invalidContentType = response?.isSuccessful == true &&
+                    t is IllegalStateException && t.message.orEmpty().startsWith("Invalid content-type:")
+                val safeFailure = when {
+                    isHttpFailure -> IOException("SSE request failed: HTTP ${response?.code}", t)
+                    invalidContentType -> IOException("SSE response content type was invalid", t)
                     else -> t
                 }
-                trySend(SseEvent.Failure(detailedError, response))
+                trySend(
+                    SseEvent.Failure(
+                        safeFailure,
+                        response,
+                        details.code,
+                        details.type,
+                        responseFormatInvalid = invalidContentType,
+                    ),
+                )
                 channel.close()
             }
         }

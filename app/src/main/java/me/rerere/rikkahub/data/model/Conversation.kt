@@ -13,6 +13,7 @@ import me.rerere.rikkahub.data.datastore.DEFAULT_ASSISTANT_ID
 import java.time.Instant
 import kotlin.uuid.Uuid
 import me.rerere.rikkahub.data.voice.isStandaloneVoiceCallRecord
+import me.rerere.rikkahub.data.voice.voiceCallSummaryRecordsForGeneration
 
 @Serializable
 data class Conversation(
@@ -106,6 +107,25 @@ data class Conversation(
         }
     }
 
+    fun compressionCandidates(
+        visibleCandidates: List<MessageNode>,
+        keepRecentMessages: Int,
+        includeVisibleCandidates: Boolean,
+    ): List<MessageNode> {
+        val recoveryCandidates = if (compressedSummary.isNullOrBlank()) {
+            val activeIds = activeCompressedMessageNodeIds
+            messageNodes.filter { it.id in activeIds }
+        } else {
+            emptyList()
+        }
+        val olderVisibleCandidates = if (includeVisibleCandidates) {
+            visibleCandidates.dropLast(keepRecentMessages.coerceAtLeast(1))
+        } else {
+            emptyList()
+        }
+        return recoveryCandidates + olderVisibleCandidates
+    }
+
     /**
      * Applies an asynchronous compression result only while its summary base is still current.
      * New messages may be appended during compression, but another compression or summary edit wins.
@@ -117,6 +137,8 @@ data class Conversation(
         nodeIdsToCompress: Set<Uuid>,
         newAutoCompressConfig: AutoCompressConfig?,
     ): Conversation? {
+        if (newSummary.isNullOrBlank()) return null
+
         val normalized = normalizeCompressionState()
         if (
             normalized.compressedSummary != expectedSummary ||
@@ -333,12 +355,18 @@ fun Conversation.messagesForGeneration(messageRange: ClosedRange<Int>? = null): 
     } else {
         messageNodes
     }
+    val summarizedVoiceCallMessageIds = voiceCallSummaryRecordsForGeneration(messageRange)
+        .flatMapTo(mutableSetOf()) { it.messageIds }
     val visibleMessages = sourceNodes
         .filterNot { it.id in compressedMessageNodeIds }
         .filterNot { it.currentMessage.isStandaloneVoiceCallRecord() }
+        .filterNot { it.currentMessage.id.toString() in summarizedVoiceCallMessageIds }
         .map { it.currentMessage }
     return visibleMessages.ifEmpty {
-        sourceNodes.lastOrNull { !it.currentMessage.isStandaloneVoiceCallRecord() }
+        sourceNodes.lastOrNull {
+            !it.currentMessage.isStandaloneVoiceCallRecord() &&
+                it.currentMessage.id.toString() !in summarizedVoiceCallMessageIds
+        }
             ?.currentMessage?.let(::listOf).orEmpty()
     }
 }

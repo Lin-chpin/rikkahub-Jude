@@ -172,6 +172,7 @@
   <string name="backup_page_backup_items">백업 항목</string>
   <string name="backup_page_backup_now">지금 백업</string>
   <string name="backup_page_backup_success">백업 성공</string>
+  <string name="backup_page_export_failed">로컬 백업 내보내기에 실패했습니다. 구체적인 원인은 확인할 수 없습니다.</string>
   <string name="backup_page_chat_records">채팅 기록</string>
   <string name="backup_page_connection_failed">연결 실패: %s</string>
   <string name="backup_page_connection_success">연결 성공</string>

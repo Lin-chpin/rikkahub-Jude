@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.ui.pages.setting
 
+import android.util.Log
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Earth
@@ -58,6 +59,7 @@ import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.registry.ModelRegistry
+import me.rerere.ai.util.safeFailureDiagnostic
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.ai.prompts.DEFAULT_COMPRESS_PROMPT
 import me.rerere.rikkahub.data.ai.prompts.DEFAULT_OCR_PROMPT
@@ -978,7 +980,7 @@ private fun SeparateOpenAIModelSelector(
                 }
                 .sortedBy { it.modelId }
         }.onFailure {
-            it.printStackTrace()
+            Log.w("SettingModelPage", "listModels failed: ${it.safeFailureDiagnostic()}")
         }
     }
     val selectedFallback = remember(modelId, availableModels) {

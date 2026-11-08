@@ -26,6 +26,9 @@ import me.rerere.asr.ASRController
 import me.rerere.asr.ASRProviderSetting
 import me.rerere.asr.ASRState
 import me.rerere.asr.ASRStatus
+import me.rerere.asr.isExpectedAsrWebSocketClosure
+import me.rerere.asr.realtimeAsrErrorMessage
+import me.rerere.asr.realtimeAsrWebSocketClosedMessage
 import me.rerere.asr.appendAmplitude
 import me.rerere.asr.calculateRmsAmplitude
 import okhttp3.OkHttpClient
@@ -45,6 +48,9 @@ import kotlin.uuid.Uuid
 
 private const val TAG = "VolcengineASR"
 private const val MAX_WEBSOCKET_QUEUE_BYTES = 100_000L
+
+internal fun framePayloadFits(dataSize: Int, offset: Int, payloadSize: Int): Boolean =
+    dataSize >= 0 && offset >= 0 && offset <= dataSize && payloadSize >= 0 && payloadSize <= dataSize - offset
 
 class VolcengineASRController(
     private val context: Context,
@@ -125,17 +131,30 @@ class VolcengineASRController(
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 scope.launch {
                     if (this@VolcengineASRController.webSocket !== webSocket) return@launch
-                    Log.e(TAG, "Volcengine ASR websocket failed", t)
+                    val causeTypes = generateSequence(t as Throwable?) { it.cause }
+                        .take(6)
+                        .joinToString(">") { it::class.simpleName ?: "Throwable" }
+                    Log.e(TAG, "Volcengine ASR websocket failed http_status=${response?.code ?: "none"} cause_types=$causeTypes")
                     releaseRecorder()
-                    setError(t.message ?: "ASR websocket failed")
+                    setError(realtimeAsrErrorMessage("Volcengine ASR", response?.code, transportError = t))
                 }
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 scope.launch {
                     if (this@VolcengineASRController.webSocket !== webSocket) return@launch
+                    val previousStatus = _state.value.status
+                    this@VolcengineASRController.webSocket = null
                     releaseRecorder()
-                    _state.update { it.copy(status = ASRStatus.Idle, errorMessage = null) }
+                    when {
+                        previousStatus == ASRStatus.Error -> Unit
+                        isExpectedAsrWebSocketClosure(previousStatus == ASRStatus.Stopping, code) ->
+                            _state.update { it.copy(status = ASRStatus.Idle, errorMessage = null) }
+                        else -> {
+                            Log.w(TAG, "Volcengine ASR websocket closed code=$code")
+                            setError(realtimeAsrWebSocketClosedMessage("Volcengine ASR", code))
+                        }
+                    }
                 }
             }
         })
@@ -204,7 +223,11 @@ class VolcengineASRController(
     }
 
     private fun handleBinaryResponse(data: ByteArray) {
-        if (data.size < 4) return
+        if (data.size < 4) {
+            Log.w(TAG, "Invalid response frame header")
+            setError(realtimeAsrErrorMessage("Volcengine ASR", responseParsingFailed = true))
+            return
+        }
 
         val byte1 = data[1].toInt() and 0xFF
         val byte2 = data[2].toInt() and 0xFF
@@ -217,19 +240,32 @@ class VolcengineASRController(
         when (messageType) {
             0x09 -> {
                 val hasSequence = (messageFlags and 0x01) != 0
-                if (hasSequence) offset += 4
+                if (hasSequence) {
+                    if (offset + 4 > data.size) {
+                        setError(realtimeAsrErrorMessage("Volcengine ASR", responseParsingFailed = true))
+                        return
+                    }
+                    offset += 4
+                }
 
-                if (offset + 4 > data.size) return
+                if (offset + 4 > data.size) {
+                    setError(realtimeAsrErrorMessage("Volcengine ASR", responseParsingFailed = true))
+                    return
+                }
                 val payloadSize = ByteBuffer.wrap(data, offset, 4)
                     .order(ByteOrder.BIG_ENDIAN).int
                 offset += 4
 
-                if (payloadSize <= 0 || offset + payloadSize > data.size) return
+                if (payloadSize <= 0 || !framePayloadFits(data.size, offset, payloadSize)) {
+                    setError(realtimeAsrErrorMessage("Volcengine ASR", responseParsingFailed = true))
+                    return
+                }
 
                 var payload = data.copyOfRange(offset, offset + payloadSize)
                 if (compression == COMP_GZIP) {
                     payload = runCatching { gzipDecompress(payload) }.getOrElse {
-                        Log.w(TAG, "Gzip decompression failed", it)
+                        Log.w(TAG, "Gzip decompression failed cause=${it::class.simpleName}")
+                        setError(realtimeAsrErrorMessage("Volcengine ASR", responseParsingFailed = true))
                         return
                     }
                 }
@@ -237,7 +273,8 @@ class VolcengineASRController(
                 val json = runCatching {
                     JSONObject(String(payload, Charsets.UTF_8))
                 }.getOrElse {
-                    Log.w(TAG, "Failed to parse response JSON", it)
+                    Log.w(TAG, "Failed to parse response JSON cause=${it::class.simpleName}")
+                    setError(realtimeAsrErrorMessage("Volcengine ASR", responseParsingFailed = true))
                     return
                 }
 
@@ -259,21 +296,28 @@ class VolcengineASRController(
             }
 
             0x0F -> {
-                if (offset + 4 > data.size) return
-                offset += 4 // skip error code
+                if (offset + 4 > data.size) {
+                    setError(realtimeAsrErrorMessage("Volcengine ASR", responseParsingFailed = true))
+                    return
+                }
+                val errorCode = ByteBuffer.wrap(data, offset, 4)
+                    .order(ByteOrder.BIG_ENDIAN).int
+                offset += 4
 
-                if (offset + 4 > data.size) return
+                if (offset + 4 > data.size) {
+                    setError(realtimeAsrErrorMessage("Volcengine ASR", responseParsingFailed = true))
+                    return
+                }
                 val msgSize = ByteBuffer.wrap(data, offset, 4)
                     .order(ByteOrder.BIG_ENDIAN).int
                 offset += 4
 
-                val errorMsg = if (msgSize > 0 && offset + msgSize <= data.size) {
-                    String(data, offset, msgSize, Charsets.UTF_8)
-                } else {
-                    "Volcengine ASR error"
+                if (!framePayloadFits(data.size, offset, msgSize)) {
+                    setError(realtimeAsrErrorMessage("Volcengine ASR", responseParsingFailed = true))
+                    return
                 }
-                Log.e(TAG, "Volcengine ASR error: $errorMsg")
-                setError(errorMsg)
+                Log.e(TAG, "Volcengine ASR service reported error code=$errorCode")
+                setError("Volcengine ASR 服务报告识别失败（错误码 $errorCode），具体原因无法确认。")
             }
 
             else -> Log.v(TAG, "Ignored message type: $messageType")
@@ -327,8 +371,8 @@ class VolcengineASRController(
                 }
             } catch (e: Exception) {
                 if (isActive) {
-                    Log.e(TAG, "Audio recording failed", e)
-                    setError(e.message ?: "Audio recording failed")
+                    Log.e(TAG, "Audio recording failed cause=${e::class.simpleName}")
+                    setError("麦克风录音失败，请检查系统麦克风后重试。")
                 }
             } finally {
                 echoCanceler?.release()

@@ -48,11 +48,15 @@ import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.HttpException
-import me.rerere.ai.util.withHttpStatus
+import me.rerere.ai.util.ProviderResponseParseException
+import me.rerere.ai.util.toHttpException
+import me.rerere.ai.util.safeProviderIdentifier
+import me.rerere.ai.util.safeFailureDiagnostic
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.encodeBase64
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
+import me.rerere.ai.util.parseErrorDetail
 import me.rerere.ai.util.removeElements
 import me.rerere.ai.util.stringSafe
 import me.rerere.ai.util.toHeaders
@@ -156,11 +160,10 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             val response = client.newCall(request).await()
             if (response.isSuccessful) {
                 val body = response.body?.string() ?: error("empty body")
-                Log.d(TAG, "listModels: $body")
                 val bodyObject = json.parseToJsonElement(body).jsonObject
                 parseGoogleModelList(bodyObject)
             } else {
-                emptyList()
+                throw response.toHttpException()
             }
         }
 
@@ -200,7 +203,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     response.close()
                     throw failure
                 }
-                throw HttpException("Failed to get response: ${response.code} ${response.body?.string()}", response.code)
+                throw response.toHttpException()
             }
 
             val bodyStr = response.body?.string() ?: ""
@@ -214,7 +217,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 model = params.model.modelId,
                 choices = candidates.map { candidate ->
                     UIMessageChoice(
-                        message = parseMessage(candidate.jsonObject, params.suppressContentLogs),
+                        message = parseMessage(candidate.jsonObject),
                         index = 0,
                         finishReason = null,
                         delta = null
@@ -256,8 +259,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 .build()
         )
 
-        if (!params.suppressContentLogs) Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
-
         val listener = object : EventSourceListener() {
             override fun onEvent(
                 eventSource: EventSource,
@@ -265,14 +266,19 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 type: String?,
                 data: String
             ) {
-                if (!params.suppressContentLogs) Log.i(TAG, "onEvent: $data")
+                if (!params.suppressContentLogs) Log.d(TAG, "Google stream event received (${data.length} chars)")
 
-                try {
+                val result = try {
                     val jsonData = json.parseToJsonElement(data).jsonObject
+                    jsonData["error"]?.let { error ->
+                        close(error.parseErrorDetail())
+                        return
+                    }
                     val reason =
                         jsonData["promptFeedback"]?.jsonObject?.get("blockReason")?.jsonPrimitiveOrNull?.contentOrNull
                     if (reason != null) {
-                        close(RuntimeException("Prompt feedback: $reason"))
+                        close(HttpException("Google prompt was blocked", providerCode = reason.safeProviderIdentifier()))
+                        return
                     }
                     val candidates = jsonData["candidates"]?.jsonArray ?: return
                     if (candidates.isEmpty()) return
@@ -294,7 +300,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                                     groundingMetadata?.let { groundingMetadata ->
                                         put("groundingMetadata", groundingMetadata)
                                     }
-                                }, params.suppressContentLogs)
+                                })
                             }
 
                             UIMessageChoice(
@@ -307,11 +313,13 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                         usage = usage
                     )
 
-                    trySendBlocking(messageChunk).getOrThrow()
-                } catch (e: Exception) {
-                    if (!params.suppressContentLogs) e.printStackTrace()
-                    if (!params.suppressContentLogs) println("[onEvent] 解析错误: $data")
+                    messageChunk
+                } catch (error: Exception) {
+                    Log.w(TAG, "Google stream response parse failed type=${error::class.simpleName}")
+                    close(ProviderResponseParseException("Google response event could not be parsed", error))
+                    return
                 }
+                trySendBlocking(result).getOrThrow()
             }
 
             override fun onFailure(
@@ -325,33 +333,12 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     close(failure)
                     return
                 }
-                var exception = t
-
-                t?.printStackTrace()
-                println("[onFailure] 发生错误: ${t?.message}")
-
-                try {
-                    if (t == null && response != null) {
-                        val bodyStr = response.body.stringSafe()
-                        if (!bodyStr.isNullOrEmpty()) {
-                            val bodyElement = json.parseToJsonElement(bodyStr)
-                            println(bodyElement)
-                            if (bodyElement is JsonObject) {
-                                exception = Exception(
-                                    bodyElement["error"]?.jsonObject?.get("message")?.jsonPrimitive?.content
-                                        ?: "unknown"
-                                )
-                            }
-                        } else {
-                            exception = Exception("Unknown error: ${response.code}")
-                        }
-                    }
-                } catch (e: Throwable) {
-                    e.printStackTrace()
-                    exception = e
-                } finally {
-                    close(exception.withHttpStatus(response) ?: Exception("Stream failed"))
-                }
+                val failure = response?.takeIf { !it.isSuccessful }?.toHttpException(t)
+                    ?: t
+                    ?: IllegalStateException("Google SSE request failed without an explicit cause")
+                response?.close()
+                Log.w(TAG, "Google stream request failed: ${failure.safeFailureDiagnostic()}")
+                close(failure)
             }
 
             override fun onClosed(eventSource: EventSource) {
@@ -537,7 +524,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
-    private fun parseMessage(message: JsonObject, suppressContentLogs: Boolean = false): UIMessage {
+    private fun parseMessage(message: JsonObject): UIMessage {
         val role = googleRoleToCommonRole(
             message["role"]?.jsonPrimitive?.contentOrNull ?: "model"
         )
@@ -547,8 +534,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         } ?: emptyList()
 
         val groundingMetadata = message["groundingMetadata"]?.jsonObject
-        if (!suppressContentLogs) Log.i(TAG, "parseMessage: $groundingMetadata")
-        val annotations = parseSearchGroundingMetadata(groundingMetadata, suppressContentLogs)
+        val annotations = parseSearchGroundingMetadata(groundingMetadata)
 
         return UIMessage(
             role = role,
@@ -557,7 +543,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         )
     }
 
-    private fun parseSearchGroundingMetadata(jsonObject: JsonObject?, suppressContentLogs: Boolean = false): List<UIMessageAnnotation> {
+    private fun parseSearchGroundingMetadata(jsonObject: JsonObject?): List<UIMessageAnnotation> {
         if (jsonObject == null) return emptyList()
         val groundingChunks = jsonObject["groundingChunks"]?.jsonArray ?: emptyList()
         val chunks = groundingChunks.mapNotNull { chunk ->
@@ -569,7 +555,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 url = uri
             )
         }
-        if (!suppressContentLogs) Log.i(TAG, "parseSearchGroundingMetadata: $chunks")
         return chunks
     }
 
@@ -839,7 +824,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
-            error("Failed to generate image: ${response.code} ${response.body.string()}")
+            throw response.toHttpException()
         }
 
         val bodyStr = response.body.string()

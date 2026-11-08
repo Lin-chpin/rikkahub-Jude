@@ -26,6 +26,14 @@ class VoiceCallUtteranceGateTest {
         assertEquals(VoiceCallInputAction(true, "停"), gate.accept(ASRUtterance("b", "停", true)))
     }
 
+    @Test fun emptyFinalClearsAPartialWithoutSubmittingIt() {
+        val gate = VoiceCallUtteranceGate()
+        assertEquals(VoiceCallInputAction(true, null), gate.accept(ASRUtterance("a", "还没说完", false)))
+        assertEquals(VoiceCallInputAction(false, null), gate.accept(ASRUtterance("a", "", true)))
+        assertNull(gate.accept(ASRUtterance("a", "迟到结果", true)))
+        assertEquals("新问题", gate.accept(ASRUtterance("b", "新问题", true))?.submittedText)
+    }
+
     @Test fun repeatedWordsInDifferentUtterancesAreIndependentTurns() {
         val gate = VoiceCallUtteranceGate()
         assertEquals("你好", gate.accept(ASRUtterance("first", "你好", true))?.submittedText)

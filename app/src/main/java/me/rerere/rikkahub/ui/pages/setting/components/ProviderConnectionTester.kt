@@ -39,9 +39,11 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.util.safeFailureDiagnostic
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Connect
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.data.ai.chatErrorExplanation
 import me.rerere.rikkahub.ui.components.ai.ModelSelector
 import me.rerere.rikkahub.ui.theme.extendColors
 import me.rerere.rikkahub.utils.UiState
@@ -248,7 +250,7 @@ private fun TestResultItem(
                 }
             }
             is UiState.Error -> Text(
-                text = state.error.message ?: "Error",
+                text = state.error.chatErrorExplanation(),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.extendColors.red6,
                 maxLines = 2,
@@ -262,8 +264,8 @@ private fun TestResultItem(
 
     if (showErrorSheet && state is UiState.Error) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        val stackTrace = remember(state.error) {
-            state.error.stackTraceToString()
+        val safeDiagnostic = remember(state.error) {
+            state.error.safeFailureDiagnostic()
         }
         ModalBottomSheet(
             onDismissRequest = { showErrorSheet = false },
@@ -282,12 +284,12 @@ private fun TestResultItem(
                     style = MaterialTheme.typography.titleMedium
                 )
                 Text(
-                    text = state.error.message ?: "Error",
+                    text = state.error.chatErrorExplanation(),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.extendColors.red6
                 )
                 Text(
-                    text = stackTrace,
+                    text = safeDiagnostic,
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

@@ -35,6 +35,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
+import me.rerere.ai.util.toHttpException
 import me.rerere.ai.util.toHeaders
 import me.rerere.common.http.await
 import me.rerere.common.http.getByKey
@@ -77,7 +78,7 @@ class OpenAIProvider(
 
             val response = client.newCall(request).await()
             if (!response.isSuccessful) {
-                error("Failed to get models: ${response.code} ${response.body?.string()}")
+                throw response.toHttpException()
             }
 
             parseOpenAIModels(response.body?.string() ?: "")
@@ -95,7 +96,7 @@ class OpenAIProvider(
         val request = authenticator.authenticate(requestBuilder, providerSetting).build()
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
-            error("Failed to get balance: ${response.code} ${response.body?.string()}")
+            throw response.toHttpException()
         }
 
         val bodyStr = response.body.string()
@@ -174,7 +175,7 @@ class OpenAIProvider(
 
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
-            error("Failed to generate embedding: ${response.code} ${response.body?.string()}")
+            throw response.toHttpException()
         }
 
         val bodyStr = response.body?.string() ?: ""
@@ -226,7 +227,7 @@ class OpenAIProvider(
 
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
-            error("Failed to generate image: ${response.code} ${response.body?.string()}")
+            throw response.toHttpException()
         }
 
         val bodyStr = response.body?.string() ?: ""
@@ -294,7 +295,7 @@ class OpenAIProvider(
 
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
-            error("Failed to edit image: ${response.code} ${response.body?.string()}")
+            throw response.toHttpException()
         }
 
         val bodyStr = response.body?.string() ?: ""
@@ -333,7 +334,7 @@ class OpenAIProvider(
 
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
-            error("Failed to download generated image: ${response.code} ${response.body.string()}")
+            throw response.toHttpException()
         }
 
         val body = response.body

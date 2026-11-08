@@ -13,6 +13,7 @@ import me.rerere.tts.model.AudioFormat
 import me.rerere.tts.provider.TTSManager
 import me.rerere.tts.provider.TTSProviderSetting
 import me.rerere.tts.provider.isElevenLabsV4Family
+import kotlinx.coroutines.CancellationException
 
 class ChatVoiceReplyAudioGenerator(
     ttsManager: TTSManager,
@@ -40,19 +41,32 @@ class ChatVoiceReplyAudioGenerator(
         } else {
             splitVoiceCallAudioTaggingSegments(speechText).flatMap(chunker::split)
         }
-        if (chunks.isEmpty()) return emptyList()
+        if (chunks.isEmpty()) throw ChatVoiceReplyGenerationException(ChatVoiceReplyErrorCode.EMPTY_TEXT)
 
         val audioSegments = chunks.map { chunk ->
             val response = synthesizer.synthesize(provider, chunk)
-            check(response.audioData.isNotEmpty()) { "TTS response returned empty audio" }
-            val managedFile = filesManager.saveUploadFromBytes(
-                bytes = response.audioData,
-                displayName = "chat-voice-message",
-                mimeType = response.format.toMimeType(),
-            )
+            if (response.audioData.isEmpty()) {
+                throw ChatVoiceReplyGenerationException(ChatVoiceReplyErrorCode.EMPTY_AUDIO)
+            }
+            val managedFile = try {
+                filesManager.saveUploadFromBytes(
+                    bytes = response.audioData,
+                    displayName = "chat-voice-message",
+                    mimeType = response.format.toMimeType(),
+                )
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                throw ChatVoiceReplyGenerationException(ChatVoiceReplyErrorCode.AUDIO_STORAGE, error)
+            }
+            val audioUri = try {
+                filesManager.getFile(managedFile).toUri().toString()
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                throw ChatVoiceReplyGenerationException(ChatVoiceReplyErrorCode.AUDIO_STORAGE, error)
+            }
             ChatVoiceAudioSegment(
                 text = chunk.text,
-                audioUri = filesManager.getFile(managedFile).toUri().toString(),
+                audioUri = audioUri,
                 format = response.format.name,
                 sampleRate = response.sampleRate,
             )
@@ -60,6 +74,11 @@ class ChatVoiceReplyAudioGenerator(
         return listOf(ChatVoiceReplyAudioGroup(speechText, audioSegments))
     }
 }
+
+internal class ChatVoiceReplyGenerationException(
+    val errorCode: ChatVoiceReplyErrorCode,
+    cause: Throwable? = null,
+) : IllegalStateException(errorCode.name, cause)
 
 internal fun elevenLabsV4ChatVoiceReplyChunks(text: String): List<TtsChunk> {
     if (text.isBlank()) return emptyList()

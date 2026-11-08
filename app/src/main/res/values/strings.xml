@@ -229,6 +229,7 @@
   <string name="backup_page_backup_items">Backup Items</string>
   <string name="backup_page_backup_now">Backup Now</string>
   <string name="backup_page_backup_success">Backup successful</string>
+  <string name="backup_page_export_failed">Local backup export failed; the cause could not be determined.</string>
   <string name="backup_page_chat_records">Chat Records</string>
   <string name="backup_page_connection_failed">Connection failed: %s</string>
   <string name="backup_page_connection_success">Connection successful</string>

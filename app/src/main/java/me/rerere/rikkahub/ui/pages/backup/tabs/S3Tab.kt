@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.ui.pages.backup.tabs
 
+import android.util.Log
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.View
 import me.rerere.hugeicons.stroke.ViewOff
@@ -54,6 +55,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dokar.sonner.ToastType
 import kotlinx.coroutines.launch
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.data.sync.backupSyncDiagnostic
+import me.rerere.rikkahub.data.sync.backupSyncErrorMessage
 import me.rerere.rikkahub.data.sync.S3BackupItem
 import me.rerere.rikkahub.data.sync.s3.S3Config
 import me.rerere.rikkahub.ui.components.ui.CardGroup
@@ -66,6 +69,8 @@ import me.rerere.rikkahub.utils.onLoading
 import me.rerere.rikkahub.utils.onSuccess
 import me.rerere.rikkahub.utils.toLocalDateTime
 import java.time.Instant
+
+private const val TAG = "S3BackupSettings"
 
 @Composable
 fun S3Tab(
@@ -246,11 +251,11 @@ fun S3Tab(
                                 type = ToastType.Success
                             )
                         } catch (e: Exception) {
-                            e.printStackTrace()
+                            Log.e(TAG, e.backupSyncDiagnostic("connection_test"))
                             toaster.show(
                                 context.getString(
                                     R.string.backup_page_connection_failed,
-                                    e.message ?: ""
+                                    e.backupSyncErrorMessage()
                                 ),
                                 type = ToastType.Error
                             )
@@ -281,9 +286,9 @@ fun S3Tab(
                                 type = ToastType.Success
                             )
                         }.onFailure {
-                            it.printStackTrace()
+                            Log.e(TAG, it.backupSyncDiagnostic("backup"))
                             toaster.show(
-                                it.message ?: context.getString(R.string.backup_page_unknown_error),
+                                it.backupSyncErrorMessage(),
                                 type = ToastType.Error
                             )
                         }
@@ -352,11 +357,11 @@ fun S3Tab(
                                             )
                                             vm.loadS3BackupFileItems()
                                         }.onFailure { err ->
-                                            err.printStackTrace()
+                                            Log.e(TAG, err.backupSyncDiagnostic("delete"))
                                             toaster.show(
                                                 context.getString(
                                                     R.string.backup_page_delete_failed,
-                                                    err.message ?: ""
+                                                    err.backupSyncErrorMessage()
                                                 ),
                                                 type = ToastType.Error
                                             )
@@ -375,11 +380,11 @@ fun S3Tab(
                                             showBackupFiles = false
                                             onShowRestartDialog()
                                         }.onFailure { err ->
-                                            err.printStackTrace()
+                                            Log.e(TAG, err.backupSyncDiagnostic("restore"))
                                             toaster.show(
                                                 context.getString(
                                                     R.string.backup_page_restore_failed,
-                                                    err.message ?: ""
+                                                    err.backupSyncErrorMessage()
                                                 ),
                                                 type = ToastType.Error
                                             )
@@ -396,7 +401,7 @@ fun S3Tab(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = stringResource(R.string.backup_page_loading_failed, it.message ?: ""),
+                            text = stringResource(R.string.backup_page_loading_failed, it.backupSyncErrorMessage()),
                             color = MaterialTheme.colorScheme.error
                         )
                     }

@@ -31,6 +31,7 @@ import me.rerere.tts.model.CachedAudioSource
 import me.rerere.tts.provider.TTSManager
 import me.rerere.tts.provider.TTSProviderSetting
 import me.rerere.tts.controller.TtsController
+import me.rerere.tts.controller.TtsTimingStage
 import org.koin.compose.koinInject
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
@@ -111,6 +112,7 @@ interface CustomTtsState {
         onAudioReady: (suspend (TTSResponse) -> Unit)? = null,
         onAudioReadyWithChunk: (suspend (String, Int, Int, TTSResponse) -> Unit)? = null,
         emotion: String? = null,
+        onTiming: ((TtsTimingStage) -> Unit)? = null,
     )
 
     /** Streams live dialogue text through one provider WebSocket for the current reply. */
@@ -118,6 +120,7 @@ interface CustomTtsState {
         text: Flow<String>,
         onAudioReady: suspend (TTSResponse) -> Unit,
         onAlignment: ((String) -> Unit)? = null,
+        onTiming: ((TtsTimingStage) -> Unit)? = null,
     ): Long
 
     /** Prepares a text-free connection while a live call waits for user input. */
@@ -196,6 +199,7 @@ private class CustomTtsStateImpl(
         onAudioReady: (suspend (TTSResponse) -> Unit)?,
         onAudioReadyWithChunk: (suspend (String, Int, Int, TTSResponse) -> Unit)?,
         emotion: String?,
+        onTiming: ((TtsTimingStage) -> Unit)?,
     ) {
         beginPlaybackSession()
         val settings = settingsStore.settingsFlow.value
@@ -214,6 +218,7 @@ private class CustomTtsStateImpl(
                 }
             },
             emotion = emotion,
+            onTiming = onTiming,
         )
     }
 
@@ -221,13 +226,16 @@ private class CustomTtsStateImpl(
         text: Flow<String>,
         onAudioReady: suspend (TTSResponse) -> Unit,
         onAlignment: ((String) -> Unit)?,
+        onTiming: ((TtsTimingStage) -> Unit)?,
     ): Long {
         val sessionId = beginPlaybackSession()
         val englishOnly = settingsStore.settingsFlow.value.displaySetting.ttsEnglishOnly
+        val processed = if (englishOnly) text.map { it.keepEnglishOnlyForTts() } else text
         controller.speakRealtimeDialogue(
-            text = if (englishOnly) text.map { it.keepEnglishOnlyForTts() } else text,
+            text = processed,
             onAudioReady = onAudioReady,
             onAlignment = onAlignment,
+            onTiming = onTiming,
         )
         return sessionId
     }

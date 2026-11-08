@@ -3,6 +3,7 @@ package me.rerere.rikkahub.data.ai.mcp.transport
 import android.util.Log
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.sse.ClientSSESession
+import io.ktor.client.plugins.sse.SSEClientException
 import io.ktor.client.plugins.sse.sseSession
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.post
@@ -88,6 +89,14 @@ class SseClientTransport(
         } catch (e: Exception) {
             closeResources()
             initialized.store(false)
+            if (e is SSEClientException) {
+                e.response?.status?.let { status ->
+                    if (status.isSuccess()) {
+                        throw StreamableHttpError(responseFormatInvalid = true, cause = e)
+                    }
+                    throw StreamableHttpError(code = status.value, cause = e)
+                }
+            }
             throw e
         }
     }
@@ -108,10 +117,10 @@ class SseClientTransport(
             // Always consume the response body to properly release the connection
             // Without this, the unconsumed response can cause connection pool issues
             // that terminate the SSE stream sharing the same HttpClient
-            val bodyText = response.bodyAsText()
+            response.bodyAsText()
 
             if (!response.status.isSuccess()) {
-                error("Error POSTing to endpoint (HTTP ${response.status}): $bodyText")
+                throw StreamableHttpError(response.status.value)
             }
 
             Log.d(TAG, "Client successfully sent message via SSE")
@@ -133,7 +142,7 @@ class SseClientTransport(
 
                 when (event.event) {
                     "error" -> {
-                        val error = IllegalStateException("SSE error: ${event.data}")
+                        val error = StreamableHttpError()
                         _onError(error)
                         throw error
                     }

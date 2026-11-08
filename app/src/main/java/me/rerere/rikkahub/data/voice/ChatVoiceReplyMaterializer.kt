@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.data.voice
 
+import android.util.Log
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.ChatVoiceReplySegment
 import me.rerere.ai.ui.ChatVoiceReplySegmentType
@@ -10,6 +11,8 @@ import me.rerere.rikkahub.data.datastore.getSelectedTTSProvider
 import me.rerere.rikkahub.data.model.Conversation
 import kotlinx.coroutines.CancellationException
 import kotlin.uuid.Uuid
+
+private const val TAG = "ChatVoiceReply"
 
 class ChatVoiceReplyMaterializer(
     private val audioGenerator: ChatVoiceReplyAudioGenerator,
@@ -98,9 +101,11 @@ class ChatVoiceReplyMaterializer(
             }
         } catch (error: Throwable) {
             if (error is CancellationException) throw error
-            val voiceError = (error as? ChatVoiceReplyGenerationException)?.let { generationError ->
-                ChatVoiceReplyError(generationError.errorCode)
-            } ?: classifyChatVoiceReplyError(error)
+            val voiceError = classifyChatVoiceReplyError(error)
+            val causeTypes = generateSequence(error as Throwable?) { it.cause }
+                .take(8)
+                .joinToString(">") { it::class.simpleName ?: "Throwable" }
+            Log.w(TAG, "Audio materialization failed conversation=${conversation.id} code=${voiceError.code} causes=$causeTypes")
             onUpdate(
                 conversation.updateReplyMessage(replyMessage.id) { message ->
                     message
@@ -113,10 +118,6 @@ class ChatVoiceReplyMaterializer(
         onUpdate(materialized)
     }
 }
-
-private class ChatVoiceReplyGenerationException(
-    val errorCode: ChatVoiceReplyErrorCode,
-) : IllegalStateException()
 
 internal data class ChatVoiceReplyMaterializationTarget(
     val replyMessage: UIMessage,

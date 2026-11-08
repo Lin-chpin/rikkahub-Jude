@@ -10,6 +10,7 @@ import kotlinx.coroutines.withTimeout
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.util.HttpException
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -29,7 +30,7 @@ class HeartbeatSentinelReplyTest {
     )
 
     @Test fun rateLimitAfterObservationPreservesActualToolAndScreenshot() = runBlocking {
-        val failure = Exception("429 secret-response-body")
+        val failure = HttpException("secret-response-body", statusCode = 429)
         var delivered: UIMessage? = null
         val thrown = runCatching {
             preserveSentinelReplyOnFailure(messages(), screenshot, failure) { delivered = it }
@@ -45,6 +46,18 @@ class HeartbeatSentinelReplyTest {
         assertTrue(receipt.toText().contains("回复模型服务限流"))
         assertFalse(receipt.toText().contains("unfinished reply"))
         assertFalse(receipt.toText().contains("secret-response-body"))
+    }
+
+    @Test fun providerErrorCodeDoesNotInventAnHttpStatusInTheReceipt() {
+        val requestFailure = HttpException("opaque", providerCode = "invalid_request_error")
+        val requestReceipt = requireNotNull(sentinelFailureReply(messages(), screenshot, requestFailure))
+        assertTrue(requestReceipt.toText().contains("服务拒绝了本次请求"))
+        assertFalse(requestReceipt.toText().contains("HTTP 400"))
+
+        val serverFailure = HttpException("opaque", providerCode = "server_error")
+        val serverReceipt = requireNotNull(sentinelFailureReply(messages(), screenshot, serverFailure))
+        assertTrue(serverReceipt.toText().contains("服务返回错误"))
+        assertFalse(serverReceipt.toText().contains("HTTP 5xx"))
     }
 
     @Test fun missingOrUnexecutedSentinelDoesNotProduceAReceipt() {

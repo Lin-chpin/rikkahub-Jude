@@ -35,6 +35,9 @@ fun ConversationSummaryButton(
     onSummaryChange: (String?) -> Unit,
     modifier: Modifier = Modifier,
     onEditorVisibilityChange: (Boolean) -> Unit = {},
+    title: String = "滚动摘要",
+    statusLabel: String? = null,
+    allowClear: Boolean = true,
 ) {
     var editorVisible by rememberSaveable { mutableStateOf(false) }
     var editText by rememberSaveable(summary) {
@@ -52,7 +55,7 @@ fun ConversationSummaryButton(
 
     Tooltip(
         tooltip = {
-            Text("滚动摘要")
+            Text(title)
         }
     ) {
         IconButton(
@@ -64,7 +67,7 @@ fun ConversationSummaryButton(
         ) {
             Icon(
                 imageVector = HugeIcons.FileZip,
-                contentDescription = "滚动摘要",
+                contentDescription = title,
             )
         }
     }
@@ -77,9 +80,9 @@ fun ConversationSummaryButton(
                 Column(
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    Text("滚动摘要")
+                    Text(title)
                     Text(
-                        text = if (autoCompressEnabled) "自动更新" else "手动摘要",
+                        text = statusLabel ?: if (autoCompressEnabled) "自动更新" else "手动摘要",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -99,6 +102,7 @@ fun ConversationSummaryButton(
             },
             confirmButton = {
                 TextButton(
+                    enabled = allowClear || editText.isNotBlank(),
                     onClick = {
                         onSummaryChange(editText.ifBlank { null })
                         editorVisible = false
@@ -111,14 +115,16 @@ fun ConversationSummaryButton(
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    TextButton(
-                        onClick = {
-                            editText = ""
-                            onSummaryChange(null)
-                            editorVisible = false
-                        },
-                    ) {
-                        Text(stringResource(R.string.chat_page_conversation_system_prompt_clear))
+                    if (allowClear) {
+                        TextButton(
+                            onClick = {
+                                editText = ""
+                                onSummaryChange(null)
+                                editorVisible = false
+                            },
+                        ) {
+                            Text(stringResource(R.string.chat_page_conversation_system_prompt_clear))
+                        }
                     }
                     TextButton(
                         onClick = { editorVisible = false },

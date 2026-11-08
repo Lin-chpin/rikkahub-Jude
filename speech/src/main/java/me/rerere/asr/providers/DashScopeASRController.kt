@@ -27,6 +27,9 @@ import me.rerere.asr.ASRController
 import me.rerere.asr.ASRProviderSetting
 import me.rerere.asr.ASRState
 import me.rerere.asr.ASRStatus
+import me.rerere.asr.isExpectedAsrWebSocketClosure
+import me.rerere.asr.realtimeAsrErrorMessage
+import me.rerere.asr.realtimeAsrWebSocketClosedMessage
 import me.rerere.asr.appendAmplitude
 import me.rerere.asr.calculateRmsAmplitude
 import okhttp3.OkHttpClient
@@ -112,21 +115,29 @@ class DashScopeASRController(
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 scope.launch {
                     if (this@DashScopeASRController.webSocket !== webSocket) return@launch
-                    Log.e(TAG, "DashScope ASR websocket failed", t)
+                    val causeTypes = generateSequence(t as Throwable?) { it.cause }
+                        .take(6)
+                        .joinToString(">") { it::class.simpleName ?: "Throwable" }
+                    Log.e(TAG, "DashScope ASR websocket failed http_status=${response?.code ?: "none"} cause_types=$causeTypes")
                     releaseRecorder()
-                    setError(t.message ?: "ASR websocket failed")
+                    setError(realtimeAsrErrorMessage("DashScope", response?.code, transportError = t))
                 }
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 scope.launch {
                     if (this@DashScopeASRController.webSocket !== webSocket) return@launch
+                    val previousStatus = _state.value.status
+                    this@DashScopeASRController.webSocket = null
                     releaseRecorder()
-                    _state.update {
-                        it.copy(
-                            status = ASRStatus.Idle,
-                            errorMessage = null
-                        )
+                    when {
+                        previousStatus == ASRStatus.Error -> Unit
+                        isExpectedAsrWebSocketClosure(previousStatus == ASRStatus.Stopping, code) ->
+                            _state.update { it.copy(status = ASRStatus.Idle, errorMessage = null) }
+                        else -> {
+                            Log.w(TAG, "DashScope ASR websocket closed code=$code")
+                            setError(realtimeAsrWebSocketClosedMessage("DashScope", code))
+                        }
                     }
                 }
             }
@@ -210,8 +221,8 @@ class DashScopeASRController(
                 }
             } catch (e: Exception) {
                 if (isActive) {
-                    Log.e(TAG, "Audio recording failed", e)
-                    setError(e.message ?: "Audio recording failed")
+                    Log.e(TAG, "Audio recording failed cause=${e::class.simpleName}")
+                    setError("麦克风录音失败，请检查系统麦克风后重试。")
                 }
             } finally {
                 echoCanceler?.release()
@@ -226,16 +237,27 @@ class DashScopeASRController(
 
     private fun handleServerEvent(text: String) {
         val event = runCatching { JSONObject(text) }.getOrElse {
-            Log.w(TAG, "Invalid realtime event: $text", it)
+            Log.w(TAG, "Invalid realtime event JSON cause=${it::class.simpleName}")
+            setError(realtimeAsrErrorMessage("DashScope", responseParsingFailed = true))
             return
         }
 
-        when (val type = event.optString("type")) {
+        val type = event.optString("type").takeIf(String::isNotBlank) ?: run {
+            Log.w(TAG, "Realtime event missing type")
+            setError(realtimeAsrErrorMessage("DashScope", responseParsingFailed = true))
+            return
+        }
+        when (type) {
             "input_audio_buffer.speech_started" -> {
                 val itemId = event.optString("item_id")
                 if (itemId.isNotEmpty()) {
                     onUtterance?.invoke(ASRUtterance(itemId, "", false, isSpeechStarted = true))
                 }
+            }
+
+            "input_audio_buffer.speech_stopped" -> {
+                val itemId = event.optString("item_id")
+                if (itemId.isNotEmpty()) onUtterance?.invoke(ASRUtterance(itemId, "", false, isSpeechStopped = true))
             }
 
             "input_audio_buffer.committed" -> {
@@ -277,7 +299,14 @@ class DashScopeASRController(
 
             "error" -> {
                 val error = event.optJSONObject("error")
-                setError(error?.optString("message") ?: "ASR realtime error")
+                Log.w(TAG, "Realtime ASR server reported error code_present=${!error?.optString("code").isNullOrBlank()}")
+                setError(
+                    realtimeAsrErrorMessage(
+                        "DashScope",
+                        providerCode = error?.optString("code"),
+                        providerReportedFailure = true,
+                    ),
+                )
             }
 
             else -> {

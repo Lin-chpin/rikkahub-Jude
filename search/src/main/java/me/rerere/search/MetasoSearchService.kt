@@ -54,7 +54,8 @@ object MetasoSearchService : SearchService<SearchServiceOptions.MetasoOptions> {
         serviceOptions: SearchServiceOptions.MetasoOptions
     ): Result<SearchResult> = withContext(Dispatchers.IO) {
         runCatching {
-            val query = params["query"]?.jsonPrimitive?.content ?: error("query is required")
+            val query = params.requireSearchStringArgument("query")
+            val apiKey = requireSearchApiKey(serviceOptions.apiKey)
 
             val requestBody = buildJsonObject {
                 put("q", JsonPrimitive(query))
@@ -66,21 +67,17 @@ object MetasoSearchService : SearchService<SearchServiceOptions.MetasoOptions> {
             val request = Request.Builder()
                 .url("https://metaso.cn/api/v1/search")
                 .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
-                .addHeader("Authorization", "Bearer ${serviceOptions.apiKey}")
+                .addHeader("Authorization", "Bearer $apiKey")
                 .addHeader("Accept", "application/json")
                 .addHeader("Content-Type", "application/json")
                 .build()
 
             val response = httpClient.newCall(request).await()
             if (response.isSuccessful) {
-                val bodyRaw = response.body?.string() ?: error("Failed to get response body")
-                val searchResponse = runCatching {
+                val bodyRaw = response.body?.string() ?: missingSearchResponseField("body")
+                val searchResponse = parseSearchResponse {
                     json.decodeFromString<MetasoSearchResponse>(bodyRaw)
-                }.onFailure {
-                    it.printStackTrace()
-                    println("Failed to decode Metaso response: $bodyRaw")
-                    error("Failed to decode response: $bodyRaw")
-                }.getOrThrow()
+                }
 
                 return@withContext Result.success(
                     SearchResult(
@@ -94,9 +91,7 @@ object MetasoSearchService : SearchService<SearchServiceOptions.MetasoOptions> {
                     )
                 )
             } else {
-                val errorBody = response.body?.string()
-                println("Metaso search failed with code ${response.code}: $errorBody")
-                error("Search request failed with code ${response.code}: $errorBody")
+                response.throwSearchHttpFailure("Metaso search")
             }
         }
     }

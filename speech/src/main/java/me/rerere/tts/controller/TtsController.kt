@@ -29,13 +29,97 @@ import me.rerere.tts.model.AudioFormat
 import me.rerere.tts.model.TTSRequest
 import me.rerere.tts.model.TTSResponse
 import me.rerere.tts.provider.TTSManager
+import me.rerere.tts.provider.TTSProviderErrorCode
+import me.rerere.tts.provider.TTSProviderException
+import me.rerere.tts.provider.TTSResponseParsingException
 import me.rerere.tts.provider.TTSProviderSetting
 import me.rerere.tts.provider.forRealtimeCall
 import me.rerere.tts.provider.isElevenLabsV4Family
 import java.util.UUID
 import java.io.ByteArrayOutputStream
+import java.net.ConnectException
+import java.net.NoRouteToHostException
+import java.net.SocketException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import javax.net.ssl.SSLException
 
 private const val TAG = "TtsController"
+
+internal fun safeTtsErrorMessage(error: Throwable): String {
+    val causes = generateSequence(error as Throwable?) { it.cause }.take(8).toList()
+    if (causes.any { it is TTSResponseParsingException }) {
+        return "语音服务响应解析失败，请稍后重试。"
+    }
+    val providerFailure = causes.filterIsInstance<TTSProviderException>().firstOrNull()
+    if (providerFailure != null) {
+        when (providerFailure.providerCode ?: providerFailure.providerType) {
+            TTSProviderErrorCode.PAYMENT_ISSUE,
+            TTSProviderErrorCode.PAYMENT_REQUIRED,
+            TTSProviderErrorCode.INSUFFICIENT_QUOTA,
+            TTSProviderErrorCode.BILLING_HARD_LIMIT_REACHED,
+            TTSProviderErrorCode.QUOTA_EXCEEDED -> return "语音服务要求检查账户付款状态或可用额度。"
+            TTSProviderErrorCode.RATE_LIMIT_EXCEEDED,
+            TTSProviderErrorCode.RATE_LIMITED -> return "语音服务限制了请求频率，请稍后重试。"
+            TTSProviderErrorCode.INVALID_API_KEY,
+            TTSProviderErrorCode.AUTHENTICATION_ERROR,
+            TTSProviderErrorCode.AUTH_ERROR,
+            TTSProviderErrorCode.UNAUTHORIZED -> return "语音服务鉴权失败，请检查 API Key 或账号登录状态。"
+            TTSProviderErrorCode.PERMISSION_DENIED,
+            TTSProviderErrorCode.FORBIDDEN -> return "语音服务拒绝访问，请检查账号权限。"
+            TTSProviderErrorCode.MODEL_NOT_FOUND,
+            TTSProviderErrorCode.MODEL_UNAVAILABLE -> return "语音服务未找到所选模型，请检查模型配置。"
+            TTSProviderErrorCode.VOICE_NOT_FOUND -> return "语音服务未找到所选音色，请检查 Voice ID。"
+            TTSProviderErrorCode.PAYLOAD_TOO_LARGE -> return "语音请求内容过大，请缩短文本后重试。"
+            TTSProviderErrorCode.INVALID_REQUEST_ERROR,
+            TTSProviderErrorCode.INVALID_REQUEST,
+            TTSProviderErrorCode.INVALID_PARAMETER,
+            TTSProviderErrorCode.BAD_REQUEST -> return "语音服务拒绝了请求，请检查请求参数。"
+            null -> Unit
+        }
+        when (providerFailure.statusCode) {
+            400 -> return "语音服务拒绝了请求，请检查请求参数。"
+            401 -> return "语音服务鉴权失败，请检查 API Key 或账号登录状态。"
+            402 -> return "语音服务要求检查账户付款状态或可用额度。"
+            403 -> return "语音服务拒绝访问，请检查账号权限。"
+            404 -> return "语音服务未找到请求的资源，请检查模型或音色配置。"
+            408 -> return "语音请求超时，请稍后重试。"
+            413 -> return "语音请求内容过大，请缩短文本后重试。"
+            429 -> return "语音服务限制了请求频率，请稍后重试。"
+            in 500..599 -> return "语音服务返回服务端错误，请稍后重试。"
+            else -> return providerFailure.statusCode?.let { "语音服务返回 HTTP $it 错误。" }
+                ?: "语音服务返回了无法识别的错误，具体原因无法确认。"
+        }
+    }
+    if (causes.any { it is SocketTimeoutException }) return "语音请求超时，请稍后重试。"
+    if (causes.any { it is UnknownHostException }) return "无法解析语音服务域名，请检查服务地址和网络连接。"
+    if (causes.any { it is SSLException }) return "无法建立语音服务安全连接。"
+    if (causes.any { it is ConnectException || it is NoRouteToHostException }) {
+        return "无法建立语音服务连接，请检查网络和服务地址。"
+    }
+    if (causes.any { it is SocketException }) return "语音服务连接中断，具体阶段无法确认。"
+    if (causes.any { it is java.io.IOException }) return "语音请求传输过程中断，具体原因无法确认。"
+    return "语音合成或播放失败，具体原因无法确认。"
+}
+
+private fun safeTtsFailureContext(error: Throwable): String {
+    val causes = generateSequence(error as Throwable?) { it.cause }.take(8).toList()
+    val types = causes.joinToString(">") { it::class.simpleName ?: "Throwable" }
+    val frame = error.stackTrace.firstOrNull()?.let {
+        "${it.className}.${it.methodName}(${it.fileName}:${it.lineNumber})"
+    } ?: "unknown_location"
+    val providerFailure = causes.filterIsInstance<TTSProviderException>().firstOrNull()
+    val parsingFailure = causes.filterIsInstance<TTSResponseParsingException>().firstOrNull()
+    val structured = providerFailure?.let {
+        " provider=${it.provider.safeName} status=${it.statusCode ?: "none"}" +
+            " code=${it.providerCode?.safeValue ?: "none"} type=${it.providerType?.safeValue ?: "none"}"
+    } ?: parsingFailure?.let { " response_parse_provider=${it.provider.safeName}" }.orEmpty()
+    return "cause_types=$types at=$frame$structured"
+}
+
+private fun logTtsFailure(stage: String, error: Throwable) {
+    Log.e(TAG, "$stage ${safeTtsFailureContext(error)}")
+}
 
 /**
  * TTS 控制器（重构版）
@@ -69,6 +153,7 @@ class TtsController(
     private val cache = java.util.concurrent.ConcurrentHashMap<UUID, kotlinx.coroutines.Deferred<TTSResponse>>()
     private val audioReadyCallbacks = java.util.concurrent.ConcurrentHashMap<UUID, suspend (TTSResponse) -> Unit>()
     private val audioReadyWithChunkCallbacks = java.util.concurrent.ConcurrentHashMap<UUID, ChunkAudioCallback>()
+    private val timingCallbacks = java.util.concurrent.ConcurrentHashMap<UUID, (TtsTimingStage) -> Unit>()
     private var lastPrefetchedIndex: Int = -1
 
     // 行为参数
@@ -169,6 +254,7 @@ class TtsController(
         onAudioReady: (suspend (TTSResponse) -> Unit)? = null,
         onAudioReadyWithChunk: (suspend (TtsChunk, Int, Int, TTSResponse) -> Unit)? = null,
         emotion: String? = null,
+        onTiming: ((TtsTimingStage) -> Unit)? = null,
     ) {
         if (text.isBlank()) return
         val provider = currentProvider
@@ -211,6 +297,7 @@ class TtsController(
                 )
             }
         }
+        onTiming?.let { callback -> newChunks.forEach { timingCallbacks[it.id] = callback } }
         _totalChunks.update { queue.size }
         _error.update { null }
 
@@ -230,6 +317,7 @@ class TtsController(
         text: Flow<String>,
         onAudioReady: suspend (TTSResponse) -> Unit,
         onAlignment: ((String) -> Unit)? = null,
+        onTiming: ((TtsTimingStage) -> Unit)? = null,
     ) {
         val provider = (currentProvider as? TTSProviderSetting.ElevenLabs)?.forRealtimeCall()
         if (provider?.isElevenLabsV4Family() != true) {
@@ -268,13 +356,13 @@ class TtsController(
                 ).onEach { chunk ->
                     capture.append(chunk)?.let { onAlignment?.invoke(it) }
                 }
-                audio.play(audioFlow)
+                audio.play(audioFlow, onTiming)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
                 interruptedAtMs = audio.positionMs
-                Log.e(TAG, "Realtime dialogue playback error", error)
-                _error.update { error.message ?: "Realtime dialogue playback error" }
+                logTtsFailure("Realtime dialogue playback error", error)
+                _error.update { safeTtsErrorMessage(error) }
                 _playbackState.update {
                     it.copy(status = PlaybackStatus.Error, errorMessage = _error.value)
                 }
@@ -313,6 +401,7 @@ class TtsController(
         cache.clear()
         audioReadyCallbacks.clear()
         audioReadyWithChunkCallbacks.clear()
+        timingCallbacks.clear()
         lastPrefetchedIndex = -1
         _isSpeaking.update { false }
         _currentChunk.update { 0 }
@@ -345,8 +434,8 @@ class TtsController(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                Log.e(TAG, "Cached audio playback error", error)
-                _error.update { error.message ?: "Audio playback error" }
+                logTtsFailure("Cached audio playback error", error)
+                _error.update { safeTtsErrorMessage(error) }
                 _playbackState.update { it.copy(status = PlaybackStatus.Error, errorMessage = _error.value) }
             } finally {
                 _isSpeaking.update { false }
@@ -369,8 +458,8 @@ class TtsController(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.e(TAG, "Cached audio sequence playback error", e)
-                _error.update { e.message ?: "Audio playback error" }
+                logTtsFailure("Cached audio sequence playback error", e)
+                _error.update { safeTtsErrorMessage(e) }
             } finally {
                 _isSpeaking.update { false }
             }
@@ -417,6 +506,7 @@ class TtsController(
         cache.clear()
         audioReadyCallbacks.clear()
         audioReadyWithChunkCallbacks.clear()
+        timingCallbacks.clear()
         lastPrefetchedIndex = -1
         _isSpeaking.update { false }
         _currentChunk.update { 0 }
@@ -469,6 +559,7 @@ class TtsController(
                     prefetchFrom(chunk.index + 1)
 
                     val shouldStream = ttsManager.supportsStreaming(provider)
+                    val onTiming = timingCallbacks.remove(chunk.id)
 
                     // 播放
                     try {
@@ -481,7 +572,7 @@ class TtsController(
                                 if (sampleRate == null) sampleRate = audioChunk.sampleRate
                                 captured.write(audioChunk.data)
                             }
-                            audio.play(capturedFlow)
+                            audio.play(capturedFlow, onTiming)
                             val response = TTSResponse(
                                 audioData = captured.toByteArray(),
                                 format = format ?: me.rerere.tts.model.AudioFormat.MP3,
@@ -493,16 +584,17 @@ class TtsController(
                             }
                         } else {
                             val response = awaitOrCreate(chunk, provider)
+                            if (response.audioData.isNotEmpty()) onTiming?.invoke(TtsTimingStage.FirstAudio)
                             audioReadyCallbacks.remove(chunk.id)?.invoke(response)
                             audioReadyWithChunkCallbacks.remove(chunk.id)?.let { callback ->
                                 callback.callback(chunk, callback.chunkIndex, callback.totalChunks, response)
                             }
-                            audio.play(response)
+                            audio.play(response, onTiming = onTiming)
                         }
                     } catch (e: Exception) {
                         if (e is CancellationException) throw e
-                        Log.e(TAG, "Playback error", e)
-                        _error.update { e.message ?: "Audio playback error" }
+                        logTtsFailure("Playback error", e)
+                        _error.update { safeTtsErrorMessage(e) }
                     }
 
                     if (queue.isNotEmpty()) delay(chunkDelayMs)

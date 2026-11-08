@@ -18,6 +18,14 @@ class VoiceCallVisualContextTest {
     }
 
     @Test
+    fun `camera and screen sharing reject enabling the other active source`() {
+        assertTrue(voiceCallVisualSourceBlocked(VoiceCallVisualSource.CAMERA, cameraEnabled = false, screenActive = true))
+        assertTrue(voiceCallVisualSourceBlocked(VoiceCallVisualSource.SCREEN, cameraEnabled = true, screenActive = false))
+        assertFalse(voiceCallVisualSourceBlocked(VoiceCallVisualSource.CAMERA, cameraEnabled = false, screenActive = false))
+        assertFalse(voiceCallVisualSourceBlocked(VoiceCallVisualSource.SCREEN, cameraEnabled = false, screenActive = false))
+    }
+
+    @Test
     fun `visual sources become ordered request text without images`() {
         val parts = voiceCallVisualRequestParts(
             listOf(

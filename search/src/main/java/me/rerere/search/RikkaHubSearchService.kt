@@ -46,7 +46,8 @@ object RikkaHubSearchService : SearchService<SearchServiceOptions.RikkaHubOption
         serviceOptions: SearchServiceOptions.RikkaHubOptions
     ): Result<SearchResult> = withContext(Dispatchers.IO) {
         runCatching {
-            val query = params["query"]?.jsonPrimitive?.content ?: error("query is required")
+            val query = params.requireSearchStringArgument("query")
+            val apiKey = requireSearchApiKey(serviceOptions.apiKey)
             val body = buildJsonObject {
                 put("q", JsonPrimitive(query))
                 put("depth", JsonPrimitive(serviceOptions.depth))
@@ -57,11 +58,11 @@ object RikkaHubSearchService : SearchService<SearchServiceOptions.RikkaHubOption
             val request = Request.Builder()
                 .url("https://api.rikka-ai.com/v1/search")
                 .post(body.toString().toRequestBody())
-                .addHeader("Authorization", "Bearer ${serviceOptions.apiKey}")
+                .addHeader("Authorization", "Bearer $apiKey")
                 .addHeader("Content-Type", "application/json")
                 .build()
 
-            Log.i(TAG, "search: $query")
+            Log.i(TAG, "search request started")
 
             val response = httpClient.newCall(request).await()
             if (response.isSuccessful) {
@@ -82,7 +83,7 @@ object RikkaHubSearchService : SearchService<SearchServiceOptions.RikkaHubOption
                     )
                 )
             } else {
-                error("response failed #${response.code}: ${response.body?.string()}")
+                response.throwSearchHttpFailure("RikkaHub search")
             }
         }
     }

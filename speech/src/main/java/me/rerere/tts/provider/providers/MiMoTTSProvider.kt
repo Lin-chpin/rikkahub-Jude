@@ -14,7 +14,10 @@ import me.rerere.tts.model.AudioChunk
 import me.rerere.tts.model.AudioFormat
 import me.rerere.tts.model.TTSRequest
 import me.rerere.tts.provider.TTSProvider
+import me.rerere.tts.provider.TTSProviderKind
 import me.rerere.tts.provider.TTSProviderSetting
+import me.rerere.tts.provider.TTSResponseParsingException
+import me.rerere.tts.provider.createTTSProviderSseFailure
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -49,15 +52,22 @@ private data class MiMoAudio(
 )
 
 internal fun decodeMiMoAudioData(data: String): ByteArray? {
-    val payload = data.trim()
-    // [DONE] 表示流结束 不输出音频
-    if (payload == "[DONE]") return null
-    // 非 [DONE] 的 data 视为 JSON 片段 解析失败直接上抛
-    val chunk = mimoJson.decodeFromString<MiMoChunk>(payload)
-    val encoded = chunk.choices.firstOrNull()?.delta?.audio?.data ?: return null
-    // 空字符串视为无音频片段
-    if (encoded.isBlank()) return null
-    return Base64.getDecoder().decode(encoded)
+    try {
+        val payload = data.trim()
+        // [DONE] 表示流结束 不输出音频
+        if (payload == "[DONE]") return null
+        // 非 [DONE] 的 data 视为 JSON 片段 解析失败直接上抛
+        val chunk = mimoJson.decodeFromString<MiMoChunk>(payload)
+        val encoded = chunk.choices.firstOrNull()?.delta?.audio?.data ?: return null
+        // 空字符串视为无音频片段
+        if (encoded.isBlank()) return null
+        return Base64.getDecoder().decode(encoded)
+    } catch (error: kotlinx.coroutines.CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        if (error is TTSResponseParsingException) throw error
+        throw TTSResponseParsingException(TTSProviderKind.MIMO, error)
+    }
 }
 
 internal class MiMoSseProcessor(
@@ -90,7 +100,7 @@ internal class MiMoSseProcessor(
             is SseEvent.Closed -> {
                 // 如果整段流没有任何音频片段 直接报错
                 if (!hasAudio) {
-                    throw IllegalStateException("MiMo TTS returned no audio chunks")
+                    throw TTSResponseParsingException(TTSProviderKind.MIMO)
                 }
                 // 流关闭时补一个终结 chunk 便于播放器收尾
                 AudioChunk(
@@ -102,7 +112,16 @@ internal class MiMoSseProcessor(
                 )
             }
 
-            is SseEvent.Failure -> throw event.throwable ?: Exception("MiMo TTS streaming failed")
+            is SseEvent.Failure -> {
+                if (event.responseFormatInvalid) throw TTSResponseParsingException(TTSProviderKind.MIMO, event.throwable)
+                throw createTTSProviderSseFailure(
+                    TTSProviderKind.MIMO,
+                    event.response?.takeIf { !it.isSuccessful }?.code,
+                    event.throwable,
+                    event.safeErrorCode,
+                    event.safeErrorType,
+                )
+            }
         }
     }
 }

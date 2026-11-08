@@ -20,7 +20,7 @@ class HeartbeatFailureDiagnosticsTest {
     }
 
     @Test fun quotaCountersAndRetrySecondsAreNotMisclassifiedAsHttpStatuses() {
-        listOf(429 to HeartbeatRunReason.RATE_LIMITED, 500 to HeartbeatRunReason.GENERATION_FAILURE).forEach { (status, reason) ->
+        listOf(429 to HeartbeatRunReason.RATE_LIMITED, 500 to HeartbeatRunReason.SERVER_ERROR).forEach { (status, reason) ->
             Response.Builder().request(Request.Builder().url("https://example.com").build())
                 .protocol(Protocol.HTTP_1_1).code(status).message("error")
                 .header("Retry-After", "401").header("x-ratelimit-limit-tokens", "42900")

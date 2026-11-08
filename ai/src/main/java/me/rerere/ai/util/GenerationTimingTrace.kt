@@ -9,8 +9,8 @@ import java.util.concurrent.ConcurrentHashMap
 class GenerationTimingTrace(
     private val scope: String,
     private val emit: (String) -> Unit = { Log.i("GenerationTiming", it) },
+    private val startedAt: Long = System.nanoTime(),
 ) {
-    private val startedAt = System.nanoTime()
     private val traceId = startedAt.toString(16)
     private val recordedStages = ConcurrentHashMap.newKeySet<String>()
 
@@ -27,8 +27,8 @@ class GenerationTimingTrace(
         if (recordedStages.add(stage)) mark(stage, messageId, characters)
     }
 
-    fun mark(stage: String, messageId: String? = null, characters: Int? = null) {
-        val elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000
+    fun mark(stage: String, messageId: String? = null, characters: Int? = null, atNanos: Long = System.nanoTime()) {
+        val elapsedMillis = (atNanos - startedAt) / 1_000_000
         emit(
             "trace=$traceId scope=$scope +${elapsedMillis}ms stage=$stage " +
                 "messageId=${messageId ?: "none"} chars=${characters ?: 0}",

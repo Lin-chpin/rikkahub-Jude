@@ -52,6 +52,7 @@ import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.data.ai.chatErrorExplanation
+import me.rerere.ai.util.safeFailureDiagnostic
 import me.rerere.rikkahub.service.ChatError
 import me.rerere.rikkahub.service.ChatErrorSolution
 import me.rerere.rikkahub.ui.context.LocalNavController
@@ -124,7 +125,10 @@ fun ErrorCard(
     val checkTitleModelSettings = stringResource(R.string.chat_page_check_title_model_settings)
     val linkColor = MaterialTheme.colorScheme.primary
     var showDetails by remember(error.id) { mutableStateOf(false) }
-    val originalMessage = error.error.message ?: error.error.toString()
+    val safeMessage = buildString {
+        appendLine(error.error.chatErrorExplanation())
+        append(error.error.safeFailureDiagnostic())
+    }
 
     LaunchedEffect(error.id, showDetails) {
         if (!showDetails) {
@@ -139,7 +143,7 @@ fun ErrorCard(
             title = { Text("错误详情") },
             text = {
                 SelectionContainer {
-                    Text(originalMessage, modifier = Modifier.verticalScroll(rememberScrollState()))
+                    Text(safeMessage, modifier = Modifier.verticalScroll(rememberScrollState()))
                 }
             },
             confirmButton = {
@@ -212,7 +216,7 @@ fun ErrorCard(
                     scope.launch {
                         clipboard.setClipEntry(
                             ClipEntry(
-                                clipData = ClipData.newPlainText("Error", originalMessage)
+                                clipData = ClipData.newPlainText("Error", safeMessage)
                             )
                         )
                     }
@@ -221,7 +225,7 @@ fun ErrorCard(
             ) {
                 Icon(
                     imageVector = HugeIcons.Copy01,
-                    contentDescription = "复制原始错误信息",
+                    contentDescription = "复制错误说明",
                     tint = MaterialTheme.colorScheme.onErrorContainer,
                     modifier = Modifier.size(18.dp),
                 )

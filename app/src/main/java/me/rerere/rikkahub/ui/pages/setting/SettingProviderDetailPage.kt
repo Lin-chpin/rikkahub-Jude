@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.ui.pages.setting
 
+import android.util.Log
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Package01
 import me.rerere.hugeicons.stroke.Connect
@@ -10,6 +11,7 @@ import me.rerere.hugeicons.stroke.Tools
 import me.rerere.hugeicons.stroke.Share01
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.Cancel01
+import me.rerere.ai.util.safeFailureDiagnostic
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -390,7 +392,7 @@ private fun ModelList(
                 .sortedBy { it.modelId }
                 .toList()
         }.onFailure {
-            it.printStackTrace()
+            Log.w("SettingProviderDetailPage", "listModels failed: ${it.safeFailureDiagnostic()}")
         }
     }
     var expanded by rememberSaveable { mutableStateOf(true) }

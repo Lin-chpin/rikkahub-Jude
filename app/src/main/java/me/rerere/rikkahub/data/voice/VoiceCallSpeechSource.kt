@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.util.GenerationTimingTrace
 import kotlin.uuid.Uuid
 
 /** Transient speech input; generation and tagging finish independently of Room and UI updates. */
@@ -17,6 +18,7 @@ internal data class VoiceCallSpeechInput(
     val cancelled: Boolean = false,
     val tagMode: VoiceCallAudioTagMode = VoiceCallAudioTagMode.DISABLED,
     val tagFormat: VoiceCallAudioTagFormat? = null,
+    val timing: GenerationTimingTrace? = null,
 ) {
     fun displayText(): String = if (tagMode == VoiceCallAudioTagMode.REALTIME_MODEL) {
         message?.toText().orEmpty().withoutVoiceCallRealtimeEmotionMarker()
@@ -46,9 +48,10 @@ internal class VoiceCallSpeechSource {
         historyMessageIds: Set<Uuid>,
         tagMode: VoiceCallAudioTagMode,
         tagFormat: VoiceCallAudioTagFormat?,
+        timing: GenerationTimingTrace? = null,
     ): Reply {
         generationJob.ensureActive()
-        input.value = VoiceCallSpeechInput(generationJob = generationJob, tagMode = tagMode, tagFormat = tagFormat)
+        input.value = VoiceCallSpeechInput(generationJob = generationJob, tagMode = tagMode, tagFormat = tagFormat, timing = timing)
         return Reply(generationJob, historyMessageIds)
     }
 

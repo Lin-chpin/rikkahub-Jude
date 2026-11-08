@@ -6,7 +6,13 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import me.rerere.ai.util.ProviderResponseParseException
+import me.rerere.ai.util.HttpException
+import me.rerere.ai.util.toHttpException
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.util.KeyRoulette
 import okhttp3.Call
@@ -18,6 +24,73 @@ import okio.IOException
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resumeWithException
 import kotlin.uuid.Uuid
+
+internal fun Response.throwSearchHttpFailure(operation: String): Nothing {
+    val providerFailure = toHttpException()
+    close()
+    throw HttpException(
+        message = "$operation request failed",
+        statusCode = providerFailure.statusCode ?: code,
+        cause = providerFailure,
+        providerCode = providerFailure.providerCode,
+        providerType = providerFailure.providerType,
+    )
+}
+
+internal inline fun <T> parseSearchResponse(parse: () -> T): T = try {
+    parse()
+} catch (error: ProviderResponseParseException) {
+    throw error
+} catch (error: Exception) {
+    throw ProviderResponseParseException("Search service response format was invalid", error)
+}
+
+internal fun missingSearchResponseField(field: String): Nothing {
+    val cause = IllegalStateException("Missing required response field: $field")
+    throw ProviderResponseParseException("Search service response format was invalid", cause)
+}
+
+class SearchToolArgumentException(val argument: String) : IllegalArgumentException(
+    "Invalid or missing search tool argument: $argument",
+)
+
+internal fun JsonObject.requireSearchArgument(name: String): JsonElement =
+    this[name] ?: throw SearchToolArgumentException(name)
+
+internal fun JsonObject.requireSearchStringArgument(name: String): String {
+    val argument = requireSearchArgument(name) as? JsonPrimitive
+        ?: throw SearchToolArgumentException(name)
+    if (!argument.isString) throw SearchToolArgumentException(name)
+    return argument.contentOrNull ?: throw SearchToolArgumentException(name)
+}
+
+internal fun JsonObject.optionalSearchStringArgument(name: String): String? =
+    if (containsKey(name)) requireSearchStringArgument(name) else null
+
+internal fun searchConfigurationFailure(code: String): Nothing = throw HttpException(
+    message = "Search service configuration is incomplete",
+    providerCode = code.takeIf { it.matches(Regex("[A-Za-z0-9_-]{1,64}")) } ?: "configuration_error",
+    providerType = "configuration",
+)
+
+internal fun missingSearchApiKey(): Nothing = searchConfigurationFailure("missing_api_key")
+
+internal fun requireSearchApiKey(apiKey: String): String =
+    apiKey.takeIf { it.isNotBlank() } ?: missingSearchApiKey()
+
+internal fun missingSearchScript(scriptType: String): Nothing = searchConfigurationFailure(
+    when (scriptType) {
+        "search" -> "missing_search_script"
+        "scrape" -> "missing_scrape_script"
+        else -> "missing_script"
+    },
+)
+
+internal fun searchProviderReportedFailure(providerCode: String? = null): Nothing = throw HttpException(
+    message = "Search provider reported a request failure",
+    providerCode = providerCode?.takeIf { it.matches(Regex("[0-9]{1,10}")) },
+    providerType = "remote_service",
+)
 
 interface SearchService<T : SearchServiceOptions> {
     val name: String

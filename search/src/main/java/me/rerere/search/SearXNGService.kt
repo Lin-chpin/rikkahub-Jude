@@ -51,11 +51,9 @@ object SearXNGService : SearchService<SearchServiceOptions.SearXNGOptions> {
         serviceOptions: SearchServiceOptions.SearXNGOptions
     ): Result<SearchResult> = withContext(Dispatchers.IO) {
         runCatching {
-            require(serviceOptions.url.isNotBlank()) {
-                "SearXNG URL cannot be empty"
-            }
+            if (serviceOptions.url.isBlank()) searchConfigurationFailure("missing_service_url")
 
-            val query = params["query"]?.jsonPrimitive?.content ?: error("query is required")
+            val query = params.requireSearchStringArgument("query")
 
             // 构建查询URL
             val baseUrl = serviceOptions.url.trimEnd('/')
@@ -85,18 +83,14 @@ object SearXNGService : SearchService<SearchServiceOptions.SearXNGOptions> {
                 }
                 .build()
 
-            Log.i(TAG, "search: $url")
+            Log.i(TAG, "search request started")
 
             val response = httpClient.newCall(request).await()
             if (response.isSuccessful) {
                 val bodyRaw = response.body.string()
-                val searchResponse = runCatching {
+                val searchResponse = parseSearchResponse {
                     json.decodeFromString<SearXNGResponse>(bodyRaw)
-                }.onFailure {
-                    it.printStackTrace()
-                    println("SearXNG response body: $bodyRaw")
-                    error("Failed to decode SearXNG response: ${it.message}")
-                }.getOrThrow()
+                }
 
                 // 转换为标准格式，取前 N 个结果
                 val items = searchResponse.results
@@ -111,9 +105,7 @@ object SearXNGService : SearchService<SearchServiceOptions.SearXNGOptions> {
 
                 return@withContext Result.success(SearchResult(items = items))
             } else {
-                val errorBody = response.body?.string()
-                println("SearXNG API error: ${response.code} - $errorBody")
-                error("SearXNG request failed with status ${response.code}")
+                response.throwSearchHttpFailure("SearXNG search")
             }
         }
     }
