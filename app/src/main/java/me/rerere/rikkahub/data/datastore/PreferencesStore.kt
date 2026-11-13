@@ -288,11 +288,6 @@ class SettingsStore(
                 } else provider
             }.toMutableList()
             val assistants = it.assistants.ifEmpty { DEFAULT_ASSISTANTS }.toMutableList()
-            DEFAULT_ASSISTANTS.forEach { defaultAssistant ->
-                if (assistants.none { it.id == defaultAssistant.id }) {
-                    assistants.add(defaultAssistant.copy())
-                }
-            }
             val ttsProviders = it.ttsProviders.ifEmpty { DEFAULT_TTS_PROVIDERS }.toMutableList()
             DEFAULT_TTS_PROVIDERS.forEach { defaultTTSProvider ->
                 if (ttsProviders.none { provider -> provider.id == defaultTTSProvider.id }) {
@@ -837,7 +832,6 @@ private val DEFAULT_TTS_PROVIDERS = listOf(
     )
 )
 
-internal val DEFAULT_ASSISTANTS_IDS = DEFAULT_ASSISTANTS.map { it.id }
 
 val DEFAULT_MODE_INJECTIONS = listOf(
     PromptInjection.ModeInjection(

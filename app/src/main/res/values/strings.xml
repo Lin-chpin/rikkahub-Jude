@@ -80,6 +80,8 @@
   <string name="assistant_page_delete">Delete</string>
   <string name="assistant_page_delete_body">Delete Body</string>
   <string name="assistant_page_delete_dialog_text">Are you sure you want to delete this assistant? This action cannot be undone.</string>
+  <string name="assistant_page_cannot_delete_last_title">Cannot delete assistant</string>
+  <string name="assistant_page_cannot_delete_last_message">At least one assistant must remain. Create another assistant before deleting this one.</string>
   <string name="assistant_page_delete_header">Delete Header</string>
   <string name="assistant_page_enter_image_url">Enter Image URL</string>
   <string name="assistant_page_global_memory">Global Memory</string>

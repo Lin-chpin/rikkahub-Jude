@@ -80,6 +80,8 @@
   <string name="assistant_page_delete">删除</string>
   <string name="assistant_page_delete_body">删除 Body</string>
   <string name="assistant_page_delete_dialog_text">确定要删除这个助手吗？此操作无法撤销。</string>
+  <string name="assistant_page_cannot_delete_last_title">无法删除助手</string>
+  <string name="assistant_page_cannot_delete_last_message">至少需要保留一个助手。请先创建其他助手后再删除。</string>
   <string name="assistant_page_delete_header">删除 Header</string>
   <string name="assistant_page_enter_image_url">输入图片URL</string>
   <string name="assistant_page_global_memory">全局记忆</string>

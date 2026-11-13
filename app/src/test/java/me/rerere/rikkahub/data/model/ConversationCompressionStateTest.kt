@@ -142,6 +142,112 @@ class ConversationCompressionStateTest {
     }
 
     @Test
+    fun compressionRetainsCompleteUserTurnsWithParallelAndSerialToolSteps() {
+        val nodes = listOf(
+            messageNode("old question"),
+            MessageNode.of(UIMessage.assistant("old reply")),
+            messageNode("use tools"),
+            MessageNode.of(UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = listOf(
+                    UIMessagePart.Tool("call-1", "first_tool", "{}", output = listOf(UIMessagePart.Text("first result"))),
+                    UIMessagePart.Tool("call-2", "second_tool", "{}", output = listOf(UIMessagePart.Text("second result"))),
+                ),
+            )),
+            MessageNode.of(UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = listOf(UIMessagePart.Tool(
+                    "call-3", "next_tool", "{}", output = listOf(UIMessagePart.Text("next result")),
+                )),
+            )),
+            MessageNode.of(UIMessage.assistant("tool turn complete")),
+            messageNode("latest question"),
+            MessageNode.of(UIMessage.assistant("latest reply")),
+        )
+        val conversation = conversationOf(*nodes.toTypedArray())
+        val expectedCompressedCounts = mapOf(1 to 6, 2 to 6, 3 to 2, 4 to 2, 5 to 2, 6 to 2, 7 to 0, 8 to 0, 9 to 0)
+
+        expectedCompressedCounts.forEach { (keepRecent, compressedCount) ->
+            val candidates = conversation.compressionCandidates(nodes, keepRecent, includeVisibleCandidates = true)
+            assertEquals("keepRecent=$keepRecent", nodes.take(compressedCount), candidates)
+            if (candidates.isNotEmpty()) {
+                val compressed = conversation.withCompressionResultIfBaseUnchanged(
+                    expectedSummary = null,
+                    expectedCompressedNodeIds = emptySet(),
+                    newSummary = "older turns summarized",
+                    nodeIdsToCompress = candidates.mapTo(mutableSetOf()) { it.id },
+                    newAutoCompressConfig = null,
+                )!!
+                assertEquals(nodes.drop(compressedCount).map { it.currentMessage }, compressed.messagesForGeneration())
+                assertEquals(nodes, compressed.messageNodes)
+            }
+        }
+    }
+
+    @Test
+    fun compressionDoesNotSplitTheOnlyUserToolTurn() {
+        val nodes = listOf(
+            messageNode("say hello"),
+            MessageNode.of(UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = listOf(UIMessagePart.Tool(
+                    "voice-call", "text_to_speech", "{}", output = listOf(UIMessagePart.Text("accepted")),
+                )),
+            )),
+        )
+        val conversation = conversationOf(*nodes.toTypedArray())
+
+        assertEquals(emptyList<MessageNode>(), conversation.compressionCandidates(nodes, 1, true))
+        assertEquals(emptyList<MessageNode>(), conversation.compressionCandidates(nodes, 0, true))
+    }
+
+    @Test
+    fun compressionUsesTheSelectedMessageRoleAtTheCut() {
+        val oldUser = messageNode("old question")
+        val oldReply = MessageNode.of(UIMessage.assistant("old reply"))
+        val user = messageNode("current question")
+        val reply = MessageNode(
+            messages = listOf(UIMessage.user("unselected variant"), UIMessage.assistant("selected reply")),
+            selectIndex = 1,
+        )
+        val conversation = conversationOf(oldUser, oldReply, user, reply)
+
+        assertEquals(listOf(oldUser, oldReply), conversation.compressionCandidates(conversation.messageNodes, 1, true))
+    }
+
+    @Test
+    fun compressionDoesNotInventATurnBoundaryForAssistantOnlyHistory() {
+        val nodes = listOf(
+            MessageNode.of(UIMessage.assistant("opening")),
+            MessageNode.of(UIMessage.assistant("continuation")),
+        )
+        val conversation = conversationOf(*nodes.toTypedArray())
+
+        assertEquals(emptyList<MessageNode>(), conversation.compressionCandidates(nodes, 1, true))
+        assertEquals(emptyList<MessageNode>(), conversation.compressionCandidates(emptyList(), 1, true))
+    }
+
+    @Test
+    fun summaryRecoveryPreservesTheVisibleUserTurn() {
+        val hiddenUser = messageNode("old question")
+        val hiddenReply = MessageNode.of(UIMessage.assistant("old reply"))
+        val user = messageNode("current question")
+        val reply = MessageNode.of(UIMessage.assistant("current reply"))
+        val conversation = conversationOf(hiddenUser, hiddenReply, user, reply).copy(
+            compressedMessageNodeIds = setOf(hiddenUser.id, hiddenReply.id),
+        )
+
+        assertEquals(
+            listOf(hiddenUser, hiddenReply),
+            conversation.compressionCandidates(conversation.visibleMessageNodes, 1, includeVisibleCandidates = true),
+        )
+        assertEquals(
+            listOf(hiddenUser, hiddenReply),
+            conversation.compressionCandidates(conversation.visibleMessageNodes, 1, includeVisibleCandidates = false),
+        )
+    }
+
+    @Test
     fun normalizationKeepsLatestNodeVisibleWhenStoredIdsCoverEveryNode() {
         val first = messageNode("A")
         val second = messageNode("B")

@@ -119,7 +119,11 @@ data class Conversation(
             emptyList()
         }
         val olderVisibleCandidates = if (includeVisibleCandidates) {
-            visibleCandidates.dropLast(keepRecentMessages.coerceAtLeast(1))
+            val retainedStart = (visibleCandidates.size - keepRecentMessages.coerceAtLeast(1)).coerceAtLeast(0)
+            // 保留数量是下限；把切点退回用户轮次开头，避免拆开工具调用及其续轮。
+            val userTurnStart = visibleCandidates.take(retainedStart + 1)
+                .indexOfLast { it.currentMessage.role == MessageRole.USER }
+            visibleCandidates.take(userTurnStart.coerceAtLeast(0))
         } else {
             emptyList()
         }
