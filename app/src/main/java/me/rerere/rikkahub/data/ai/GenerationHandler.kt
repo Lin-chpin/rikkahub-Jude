@@ -501,6 +501,7 @@ class GenerationHandler(
                 }
             }
             val system = effectiveSystemPrompt + dynamicSystemPrompt
+            Log.i("CtxCache", "sysLen=${system.length} sysHash=${system.hashCode()}")
             if (system.isNotBlank()) {
                 val parts = if (provider is ProviderSetting.OpenAI && provider.useResponseApi) {
                     buildList {
