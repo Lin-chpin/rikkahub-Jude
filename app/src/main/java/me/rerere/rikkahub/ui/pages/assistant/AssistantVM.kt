@@ -19,6 +19,7 @@ import me.rerere.rikkahub.data.model.Lorebook
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.service.ChatService
+import kotlin.uuid.Uuid
 
 class AssistantVM(
     private val settingsStore: SettingsStore,
@@ -50,14 +51,17 @@ class AssistantVM(
 
     fun removeAssistant(assistant: Assistant) {
         viewModelScope.launch {
-            cleanupAssistantFiles(assistant)
+            var removed = false
+            settingsStore.update { current ->
+                val updated = current.withAssistantRemoved(assistant.id)
+                if (updated == null) current else {
+                    removed = true
+                    updated
+                }
+            }
+            if (!removed) return@launch
 
-            val settings = settings.value
-            settingsStore.update(
-                settings.copy(
-                    assistants = settings.assistants.filter { it.id != assistant.id }
-                )
-            )
+            cleanupAssistantFiles(assistant)
             memoryRepository.deleteMemories(MemoryScope.assistant(assistant.id))
             conversationRepo.getConversationsOfAssistant(assistant.id).first().forEach { conversation ->
                 chatService.deleteConversation(conversation)
@@ -94,4 +98,14 @@ class AssistantVM(
     }
 
     fun getMemories(assistant: Assistant) = memoryRepository.observeMemories(assistant.memoryScope)
+}
+
+internal fun Settings.withAssistantRemoved(assistantId: Uuid): Settings? {
+    val remainingAssistants = assistants.filter { it.id != assistantId }
+    if (remainingAssistants.isEmpty() || remainingAssistants.size == assistants.size) return null
+
+    return copy(
+        assistantId = if (this.assistantId == assistantId) remainingAssistants.first().id else this.assistantId,
+        assistants = remainingAssistants,
+    )
 }

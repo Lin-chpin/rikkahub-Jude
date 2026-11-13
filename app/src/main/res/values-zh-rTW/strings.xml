@@ -77,6 +77,8 @@
   <string name="assistant_page_delete">刪除</string>
   <string name="assistant_page_delete_body">刪除 Body</string>
   <string name="assistant_page_delete_dialog_text">確定要刪除這個助手嗎？此操作無法撤銷。</string>
+  <string name="assistant_page_cannot_delete_last_title">無法刪除助手</string>
+  <string name="assistant_page_cannot_delete_last_message">至少需要保留一個助手。請先建立其他助手後再刪除。</string>
   <string name="assistant_page_delete_header">刪除 Header</string>
   <string name="assistant_page_enter_image_url">輸入圖片URL</string>
   <string name="assistant_page_global_memory">全域記憶體</string>
