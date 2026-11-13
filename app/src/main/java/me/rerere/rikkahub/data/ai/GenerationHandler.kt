@@ -60,6 +60,7 @@ import me.rerere.rikkahub.utils.applyPlaceholders
 import java.util.Locale
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 private const val TAG = "GenerationHandler"
 
@@ -114,6 +115,7 @@ class GenerationHandler(
         val provider = providerOverride ?: model.findProvider(settings.providers)
             ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
+        val projectGeminiRelayToolHistory = shouldProjectGeminiRelayToolHistory(model, provider)
 
         var messages: List<UIMessage> = messages
         var startNewAssistantMessagePending = startNewAssistantMessage
@@ -216,6 +218,7 @@ class GenerationHandler(
                             )
                         } else null,
                         startNewAssistantMessage = startNewAssistantMessagePending,
+                        projectGeminiRelayToolHistory = projectGeminiRelayToolHistory,
                         suppressContentLogs = suppressContentLogs,
                         timing = timing,
                         voiceCallTiming = voiceCallTiming,
@@ -433,6 +436,7 @@ class GenerationHandler(
         sessionIdOverride: String? = null,
         diagnosticTrace: RequestContextDiagnostics.Trace? = null,
         startNewAssistantMessage: Boolean = false,
+        projectGeminiRelayToolHistory: Boolean = false,
         suppressContentLogs: Boolean = false,
         timing: GenerationTimingTrace,
         voiceCallTiming: GenerationTimingTrace?,
@@ -527,6 +531,9 @@ class GenerationHandler(
             onWarning = onInputWarning,
         ).withRequestMessageParts(requestMessageParts)
             .withRuntimeContextInstruction(runtimeStateSystemPrompt)
+            .let { requestMessages ->
+                if (projectGeminiRelayToolHistory) requestMessages.withToolHistoryAsText() else requestMessages
+            }
 
         var responseMessages = beginAssistantResponse(
             messages = messages,
@@ -707,3 +714,66 @@ class GenerationHandler(
         }
     }.flowOn(Dispatchers.IO)
 }
+
+internal fun shouldProjectGeminiRelayToolHistory(model: Model, provider: ProviderSetting): Boolean =
+    model.modelId.contains("gemini", ignoreCase = true) && !provider.isOfficialGeminiEndpoint()
+
+private fun ProviderSetting.isOfficialGeminiEndpoint(): Boolean = when (this) {
+    // Vertex requests use Google's hard-coded aiplatform.googleapis.com endpoint.
+    is ProviderSetting.Google -> vertexAI || baseUrl.isOfficialGeminiApiBaseUrl()
+    is ProviderSetting.OpenAI -> baseUrl.isOfficialGeminiApiBaseUrl()
+
+    else -> false
+}
+
+private fun String.isOfficialGeminiApiBaseUrl(): Boolean = toHttpUrlOrNull()?.let {
+    it.isHttps && it.port == 443 && it.host == "generativelanguage.googleapis.com"
+} == true
+
+internal fun List<UIMessage>.withToolHistoryAsText(): List<UIMessage> = map { message ->
+    val projectedParts = message.parts.flatMap { part ->
+        when (part) {
+            is UIMessagePart.Tool -> listOf(UIMessagePart.Text(part.toHistoryText()))
+            is UIMessagePart.ToolCall -> listOf(UIMessagePart.Text(
+                "[Historical tool call: ${part.toolName}; id=${part.toolCallId}]\n" +
+                    "Arguments: ${part.arguments.ifBlank { "[empty or incomplete]" }}"
+            ))
+            is UIMessagePart.ToolResult -> listOf(UIMessagePart.Text(
+                "[Historical tool result: ${part.toolName}; id=${part.toolCallId}]\n" +
+                    "Arguments: ${part.arguments}\nResult: ${part.content}"
+            ))
+            else -> listOf(part)
+        }
+    }
+    val isToolMessage = message.role == MessageRole.TOOL
+    val parts = if (isToolMessage && projectedParts.isNotEmpty()) {
+        listOf(UIMessagePart.Text("[Historical tool response]")) + projectedParts
+    } else {
+        projectedParts
+    }
+    val role = if (isToolMessage) MessageRole.ASSISTANT else message.role
+    if (parts == message.parts && role == message.role) message else message.copy(role = role, parts = parts)
+}
+
+private fun UIMessagePart.Tool.toHistoryText(): String = buildString {
+    append("[Historical tool call: $toolName; id=$toolCallId]\nArguments: ")
+    append(input.ifBlank { "[empty or incomplete]" })
+    if (output.isEmpty()) {
+        append("\nResult: no result was stored")
+    } else {
+        append("\nResult:\n")
+        append(output.joinToString("\n") { it.toToolResultText() })
+    }
+}
+
+private fun UIMessagePart.toToolResultText(): String = when (this) {
+    is UIMessagePart.Text -> text
+    is UIMessagePart.Image -> "[Image omitted from relay context; source=${url.relayMediaSource()}]"
+    is UIMessagePart.Video -> "[Video omitted from relay context; source=${url.relayMediaSource()}]"
+    is UIMessagePart.Audio -> "[Audio omitted from relay context; source=${url.relayMediaSource()}]"
+    is UIMessagePart.Document -> "[Document omitted from relay context; file=$fileName ($mime), source=${url.relayMediaSource()}]"
+    else -> "[${this::class.simpleName ?: "Non-text"} result omitted from relay context]"
+}
+
+private fun String.relayMediaSource(): String =
+    takeUnless { it.startsWith("data:") } ?: "embedded media not forwarded"
