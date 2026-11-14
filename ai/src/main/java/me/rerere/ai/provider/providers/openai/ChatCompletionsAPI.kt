@@ -101,9 +101,7 @@ class ChatCompletionsAPI(
             .suppressContentLogs(params.suppressContentLogs)
             .post(json.encodeToString(requestBody).also { s ->
     val cut = minOf(150000, s.length)
-  val recentText = if (assistant.enableRecentChatsReference) buildRecentChatsPrompt(assistant, conversationRepo) else ""
-Log.i("CtxCache", "sysLen=${system.length} sysHash=${system.hashCode()}")
-Log.i("CtxCache", "recentLen=${recentText.length} recent=${recentText.replace("\n", " ").take(500)}")
+    Log.i("CtxCache", "payloadLen=${s.length} prefixHash=${s.substring(0, cut).hashCode()}")
 }.toRequestBody("application/json".toMediaType()).withoutAutomaticReplay())
             .configureReferHeaders(providerSetting.baseUrl)
         val request = authenticator.authenticate(requestBuilder, providerSetting).build()
