@@ -100,7 +100,7 @@ class ChatCompletionsAPI(
             .headers(params.customHeaders.toHeaders())
             .suppressContentLogs(params.suppressContentLogs)
             .post(json.encodeToString(requestBody).also { s ->
-    val cut = minOf(150000, s.length)
+    val cut = minOf(20000, s.length)
     Log.i("CtxCache", "payloadLen=${s.length} prefixHash=${s.substring(0, cut).hashCode()}")
 }.toRequestBody("application/json".toMediaType()).withoutAutomaticReplay())
             .configureReferHeaders(providerSetting.baseUrl)
@@ -167,7 +167,7 @@ class ChatCompletionsAPI(
             .headers(params.customHeaders.toHeaders())
             .suppressContentLogs(params.suppressContentLogs)
             .post(json.encodeToString(requestBody).also { s ->
-    val cut = minOf(150000, s.length)
+    val cut = minOf(20000, s.length)
     Log.i("CtxCache", "payloadLen=${s.length} prefixHash=${s.substring(0, cut).hashCode()}")
 }.toRequestBody("application/json".toMediaType()).withoutAutomaticReplay())
             .addHeader("Content-Type", "application/json")
