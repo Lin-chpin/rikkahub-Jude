@@ -100,8 +100,8 @@ class ChatCompletionsAPI(
             .headers(params.customHeaders.toHeaders())
             .suppressContentLogs(params.suppressContentLogs)
             .post(json.encodeToString(requestBody).also { s ->
-    val cut = minOf(20000, s.length)
-    Log.i("CtxCache", "payloadLen=${s.length} prefixHash=${s.substring(0, cut).hashCode()}")
+    val h = { n: Int -> s.substring(0, minOf(n, s.length)).hashCode() }
+    Log.i("CtxCache", "len=${s.length} h20=${h(20000)} h50=${h(50000)} h80=${h(80000)}")
 }.toRequestBody("application/json".toMediaType()).withoutAutomaticReplay())
             .configureReferHeaders(providerSetting.baseUrl)
         val request = authenticator.authenticate(requestBuilder, providerSetting).build()
@@ -167,8 +167,8 @@ class ChatCompletionsAPI(
             .headers(params.customHeaders.toHeaders())
             .suppressContentLogs(params.suppressContentLogs)
             .post(json.encodeToString(requestBody).also { s ->
-    val cut = minOf(20000, s.length)
-    Log.i("CtxCache", "payloadLen=${s.length} prefixHash=${s.substring(0, cut).hashCode()}")
+    val h = { n: Int -> s.substring(0, minOf(n, s.length)).hashCode() }
+    Log.i("CtxCache", "len=${s.length} h20=${h(20000)} h50=${h(50000)} h80=${h(80000)}")
 }.toRequestBody("application/json".toMediaType()).withoutAutomaticReplay())
             .addHeader("Content-Type", "application/json")
             .configureReferHeaders(providerSetting.baseUrl)
