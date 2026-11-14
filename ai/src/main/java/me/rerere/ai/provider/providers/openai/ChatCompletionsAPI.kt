@@ -99,7 +99,10 @@ class ChatCompletionsAPI(
             .url("${providerSetting.baseUrl}${providerSetting.chatCompletionsPath}")
             .headers(params.customHeaders.toHeaders())
             .suppressContentLogs(params.suppressContentLogs)
-            .post(json.encodeToString(requestBody).also { Log.i("CtxCache", "payloadLen=${it.length} payloadHash=${it.hashCode()}") }.toRequestBody("application/json".toMediaType()).withoutAutomaticReplay())
+            .post(json.encodeToString(requestBody).also { s ->
+    val cut = minOf(150000, s.length)
+    Log.i("CtxCache", "payloadLen=${s.length} prefixHash=${s.substring(0, cut).hashCode()}")
+}.toRequestBody("application/json".toMediaType()).withoutAutomaticReplay())
             .configureReferHeaders(providerSetting.baseUrl)
         val request = authenticator.authenticate(requestBuilder, providerSetting).build()
 
@@ -163,7 +166,10 @@ class ChatCompletionsAPI(
             .url("${providerSetting.baseUrl}${providerSetting.chatCompletionsPath}")
             .headers(params.customHeaders.toHeaders())
             .suppressContentLogs(params.suppressContentLogs)
-            .post(json.encodeToString(requestBody).also { Log.i("CtxCache", "payloadLen=${it.length} payloadHash=${it.hashCode()}") }.toRequestBody("application/json".toMediaType()).withoutAutomaticReplay())
+            .post(json.encodeToString(requestBody).also { s ->
+    val cut = minOf(150000, s.length)
+    Log.i("CtxCache", "payloadLen=${s.length} prefixHash=${s.substring(0, cut).hashCode()}")
+}.toRequestBody("application/json".toMediaType()).withoutAutomaticReplay())
             .addHeader("Content-Type", "application/json")
             .configureReferHeaders(providerSetting.baseUrl)
         val request = authenticator.authenticate(requestBuilder, providerSetting).build()
