@@ -101,16 +101,16 @@ class ChatCompletionsAPI(
             .headers(params.customHeaders.toHeaders())
             .suppressContentLogs(params.suppressContentLogs)
             .post(json.encodeToString(requestBody).also { s ->
-    val p = lastPayloadForDiff
-    if (p != null) {
-        val m = minOf(p.length, s.length)
-        var i = 0
-        while (i < m && p[i] == s[i]) i++
-        Log.i("CtxCache", "splitAt=$i prevLen=${p.length} nowLen=${s.length}")
-        Log.i("CtxCache", "P=" + p.substring(maxOf(0, i - 80), minOf(p.length, i + 80)))
-        Log.i("CtxCache", "N=" + s.substring(maxOf(0, i - 20), minOf(s.length, i + 160)))
-    }
-    lastPayloadForDiff = s
+   val p = lastPayloadForDiff
+if (p != null) {
+    val m = minOf(p.length, s.length)
+    var i = 0
+    while (i < m && p[i] == s[i]) i++
+    var j = 0
+    while (j < m - i && p[p.length - 1 - j] == s[s.length - 1 - j]) j++
+    Log.i("CtxCache", "splitAt=$i suffix=$j prevLen=${p.length} nowLen=${s.length} toolsAt=${s.indexOf("tools")} msgAt=${s.indexOf("messages")}")
+}
+lastPayloadForDiff = s
 }.toRequestBody("application/json".toMediaType()).withoutAutomaticReplay())
             .configureReferHeaders(providerSetting.baseUrl)
         val request = authenticator.authenticate(requestBuilder, providerSetting).build()
@@ -177,15 +177,15 @@ class ChatCompletionsAPI(
             .suppressContentLogs(params.suppressContentLogs)
             .post(json.encodeToString(requestBody).also { s ->
     val p = lastPayloadForDiff
-    if (p != null) {
-        val m = minOf(p.length, s.length)
-        var i = 0
-        while (i < m && p[i] == s[i]) i++
-        Log.i("CtxCache", "splitAt=$i prevLen=${p.length} nowLen=${s.length}")
-        Log.i("CtxCache", "P=" + p.substring(maxOf(0, i - 80), minOf(p.length, i + 80)))
-        Log.i("CtxCache", "N=" + s.substring(maxOf(0, i - 20), minOf(s.length, i + 160)))
-    }
-    lastPayloadForDiff = s
+if (p != null) {
+    val m = minOf(p.length, s.length)
+    var i = 0
+    while (i < m && p[i] == s[i]) i++
+    var j = 0
+    while (j < m - i && p[p.length - 1 - j] == s[s.length - 1 - j]) j++
+    Log.i("CtxCache", "splitAt=$i suffix=$j prevLen=${p.length} nowLen=${s.length} toolsAt=${s.indexOf("tools")} msgAt=${s.indexOf("messages")}")
+}
+lastPayloadForDiff = s
 }.toRequestBody("application/json".toMediaType()).withoutAutomaticReplay())
             .addHeader("Content-Type", "application/json")
             .configureReferHeaders(providerSetting.baseUrl)
