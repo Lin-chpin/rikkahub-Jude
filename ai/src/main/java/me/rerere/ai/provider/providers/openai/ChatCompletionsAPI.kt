@@ -362,7 +362,7 @@ lastPayloadForDiff = s
         val host = providerSetting.baseUrl.toHttpUrl().host
         val modelAbilities = (params.model.abilities + ModelRegistry.MODEL_ABILITIES.getData(params.model.modelId)).toSet()
         return buildJsonObject {
-           
+           put("model", params.model.modelId)
 
             if (isModelAllowTemperature(params.model)) {
                 if (params.temperature != null) put("temperature", params.temperature)
