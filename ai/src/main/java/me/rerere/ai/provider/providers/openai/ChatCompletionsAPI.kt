@@ -74,6 +74,7 @@ import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
 import kotlin.time.Clock
 
+private var lastPayloadForDiff: String? = null
 private const val TAG = "ChatCompletionsAPI"
 
 class ChatCompletionsAPI(
@@ -100,8 +101,17 @@ class ChatCompletionsAPI(
             .headers(params.customHeaders.toHeaders())
             .suppressContentLogs(params.suppressContentLogs)
             .post(json.encodeToString(requestBody).also { s ->
-    val h = { n: Int -> s.substring(0, minOf(n, s.length)).hashCode() }
-    Log.i("CtxCache", "len=${s.length} h20=${h(20000)} h50=${h(50000)} h80=${h(80000)}")
+    val p = lastPayloadForDiff
+    if (p != null) {
+        val m = minOf(p.length, s.length)
+        var i = 0
+        while (i < m && p[i] == s[i]) i++
+        Log.i("CtxCache", "splitAt=$i prevLen=${p.length} nowLen=${s.length}")
+        Log.i("CtxCache", "P=" + p.substring(maxOf(0, i - 80), minOf(p.length, i + 80)))
+        Log.i("CtxCache", "N=" + s.substring(maxOf(0, i - 20), minOf(s.length, i + 160)))
+    }
+    lastPayloadForDiff = s
+}
 }.toRequestBody("application/json".toMediaType()).withoutAutomaticReplay())
             .configureReferHeaders(providerSetting.baseUrl)
         val request = authenticator.authenticate(requestBuilder, providerSetting).build()
@@ -167,8 +177,17 @@ class ChatCompletionsAPI(
             .headers(params.customHeaders.toHeaders())
             .suppressContentLogs(params.suppressContentLogs)
             .post(json.encodeToString(requestBody).also { s ->
-    val h = { n: Int -> s.substring(0, minOf(n, s.length)).hashCode() }
-    Log.i("CtxCache", "len=${s.length} h20=${h(20000)} h50=${h(50000)} h80=${h(80000)}")
+    val p = lastPayloadForDiff
+    if (p != null) {
+        val m = minOf(p.length, s.length)
+        var i = 0
+        while (i < m && p[i] == s[i]) i++
+        Log.i("CtxCache", "splitAt=$i prevLen=${p.length} nowLen=${s.length}")
+        Log.i("CtxCache", "P=" + p.substring(maxOf(0, i - 80), minOf(p.length, i + 80)))
+        Log.i("CtxCache", "N=" + s.substring(maxOf(0, i - 20), minOf(s.length, i + 160)))
+    }
+    lastPayloadForDiff = s
+}
 }.toRequestBody("application/json".toMediaType()).withoutAutomaticReplay())
             .addHeader("Content-Type", "application/json")
             .configureReferHeaders(providerSetting.baseUrl)
