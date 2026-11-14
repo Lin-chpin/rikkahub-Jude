@@ -111,7 +111,6 @@ class ChatCompletionsAPI(
         Log.i("CtxCache", "N=" + s.substring(maxOf(0, i - 20), minOf(s.length, i + 160)))
     }
     lastPayloadForDiff = s
-}
 }.toRequestBody("application/json".toMediaType()).withoutAutomaticReplay())
             .configureReferHeaders(providerSetting.baseUrl)
         val request = authenticator.authenticate(requestBuilder, providerSetting).build()
@@ -187,7 +186,6 @@ class ChatCompletionsAPI(
         Log.i("CtxCache", "N=" + s.substring(maxOf(0, i - 20), minOf(s.length, i + 160)))
     }
     lastPayloadForDiff = s
-}
 }.toRequestBody("application/json".toMediaType()).withoutAutomaticReplay())
             .addHeader("Content-Type", "application/json")
             .configureReferHeaders(providerSetting.baseUrl)
