@@ -109,6 +109,7 @@ if (p != null) {
     var j = 0
     while (j < m - i && p[p.length - 1 - j] == s[s.length - 1 - j]) j++
     Log.i("CtxCache", "splitAt=$i suffix=$j prevLen=${p.length} nowLen=${s.length} toolsAt=${s.indexOf("tools")} msgAt=${s.indexOf("messages")}")
+    Log.i("CtxCache", "tail=" + s.substring(maxOf(0, s.length - 411)))
 }
 lastPayloadForDiff = s
 }.toRequestBody("application/json".toMediaType()).withoutAutomaticReplay())
@@ -184,6 +185,7 @@ if (p != null) {
     var j = 0
     while (j < m - i && p[p.length - 1 - j] == s[s.length - 1 - j]) j++
     Log.i("CtxCache", "splitAt=$i suffix=$j prevLen=${p.length} nowLen=${s.length} toolsAt=${s.indexOf("tools")} msgAt=${s.indexOf("messages")}")
+    Log.i("CtxCache", "tail=" + s.substring(maxOf(0, s.length - 411)))
 }
 lastPayloadForDiff = s
 }.toRequestBody("application/json".toMediaType()).withoutAutomaticReplay())
