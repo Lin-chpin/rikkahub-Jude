@@ -93,6 +93,7 @@ class SettingsStore(
         val CUSTOM_THEMES = stringPreferencesKey("custom_themes")
         val DISPLAY_SETTING = stringPreferencesKey("display_setting")
         val DEVELOPER_MODE = booleanPreferencesKey("developer_mode")
+        val SEND_SESSION_ID_FOR_API_KEY = booleanPreferencesKey("send_session_id_for_api_key")
 
         // 模型选择
         val ENABLE_WEB_SEARCH = booleanPreferencesKey("enable_web_search")
@@ -174,6 +175,7 @@ class SettingsStore(
     private fun readSettings(preferences: Preferences): Settings =
             Settings(
                 enableWebSearch = preferences[ENABLE_WEB_SEARCH] == true,
+                sendSessionIdForApiKey = preferences[SettingsStore.SEND_SESSION_ID_FOR_API_KEY] ?: false,
                 favoriteModels = preferences[FAVORITE_MODELS]?.let {
                     JsonInstant.decodeFromString(it)
                 } ?: emptyList(),
@@ -493,6 +495,7 @@ private fun persistSettings(preferences: MutablePreferences, settings: Settings)
         preferences[SettingsStore.DISPLAY_SETTING] = JsonInstant.encodeToString(settings.displaySetting)
 
         preferences[SettingsStore.ENABLE_WEB_SEARCH] = settings.enableWebSearch
+        preferences[SettingsStore.SEND_SESSION_ID_FOR_API_KEY] = settings.sendSessionIdForApiKey
         preferences[SettingsStore.FAVORITE_MODELS] = JsonInstant.encodeToString(settings.favoriteModels)
         preferences[SettingsStore.SELECT_MODEL] = settings.chatModelId.toString()
         preferences[SettingsStore.TITLE_MODEL] = settings.titleModelId.toString()
