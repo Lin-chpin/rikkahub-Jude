@@ -547,6 +547,8 @@ Log.i("CtxCache", "recentLen=${recentText.length} recent=${recentText.take(500)}
         if (responseMessages.lastOrNull()?.id != messages.lastOrNull()?.id) {
             timing.mark("assistant_response_started", responseMessages.last().id.toString(), 0)
         }
+         val effectiveSessionId = sessionIdOverride?.takeIf { it.isNotBlank() }
+                 ?: conversationId?.toString()
         val params = TextGenerationParams(
             model = model,
             temperature = assistant.temperature,
@@ -560,8 +562,7 @@ Log.i("CtxCache", "recentLen=${recentText.length} recent=${recentText.take(500)}
             customHeaders = buildList {
                 addAll(assistant.customHeaders)
                 addAll(model.customHeaders)
-                val effectiveSessionId = sessionIdOverride?.takeIf { it.isNotBlank() }
-                    ?: conversationId?.toString()
+              
               if (provider is ProviderSetting.OpenAI &&
     effectiveSessionId != null &&
     (provider.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION ||
