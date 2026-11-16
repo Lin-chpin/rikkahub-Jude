@@ -610,6 +610,7 @@ data class Settings(
     val usageReminderConfig: UsageReminderConfig = UsageReminderConfig(),
     val usageReminderState: UsageReminderState = UsageReminderState(),
     val sponsorAlertDismissedAt: Int = 0,
+     val sendSessionIdForApiKey: Boolean = false,
 ) {
     companion object {
         // 构造一个用于初始化的settings, 但它不能用于保存，防止使用初始值存储
