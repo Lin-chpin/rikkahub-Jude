@@ -85,6 +85,20 @@ fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
                         },
                     )
                     item(
+    headlineContent = { Text("发送会话标识") },
+    supportingContent = {
+        Text("为每个会话自动附加 session-id 请求头与 user 字段，可能提升缓存命中率（实验性）")
+    },
+    trailingContent = {
+        Switch(
+            checked = settings.sendSessionIdForApiKey,
+            onCheckedChange = {
+                vm.updateSettings(settings.copy(sendSessionIdForApiKey = it))
+            }
+        )
+    },
+)
+                    item(
                         headlineContent = { Text(stringResource(R.string.setting_display_page_send_on_enter_title)) },
                         supportingContent = { Text(stringResource(R.string.setting_display_page_send_on_enter_desc)) },
                         trailingContent = {
