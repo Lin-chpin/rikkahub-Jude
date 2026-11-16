@@ -562,18 +562,22 @@ Log.i("CtxCache", "recentLen=${recentText.length} recent=${recentText.take(500)}
                 addAll(model.customHeaders)
                 val effectiveSessionId = sessionIdOverride?.takeIf { it.isNotBlank() }
                     ?: conversationId?.toString()
-                if (provider is ProviderSetting.OpenAI &&
-                    provider.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION &&
-                    effectiveSessionId != null
-                ) {
+              if (provider is ProviderSetting.OpenAI &&
+    effectiveSessionId != null &&
+    (provider.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION ||
+        settings.sendSessionIdForApiKey)
+) {
                     removeAll { it.name.equals("session-id", ignoreCase = true) }
                     add(CustomHeader("session-id", effectiveSessionId))
                 }
             },
-            customBody = buildList {
-                addAll(assistant.customBodies)
-                addAll(model.customBodies)
-            }
+           customBody = buildList {
+    addAll(assistant.customBodies)
+    addAll(model.customBodies)
+    if (settings.sendSessionIdForApiKey && effectiveSessionId != null) {
+        add(CustomBody("user", JsonPrimitive(effectiveSessionId)))
+    }
+}
         )
         timing.mark("model_request_prepared")
         voiceCallTiming?.markOnce("model_request_prepared")
