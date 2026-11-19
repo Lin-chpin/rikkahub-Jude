@@ -74,7 +74,6 @@ import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
 import kotlin.time.Clock
 
-private var lastPayloadForDiff: String? = null
 private const val TAG = "ChatCompletionsAPI"
 
 class ChatCompletionsAPI(
@@ -100,19 +99,7 @@ class ChatCompletionsAPI(
             .url("${providerSetting.baseUrl}${providerSetting.chatCompletionsPath}")
             .headers(params.customHeaders.toHeaders())
             .suppressContentLogs(params.suppressContentLogs)
-            .post(json.encodeToString(requestBody).also { s ->
-   val p = lastPayloadForDiff
-if (p != null) {
-    val m = minOf(p.length, s.length)
-    var i = 0
-    while (i < m && p[i] == s[i]) i++
-    var j = 0
-    while (j < m - i && p[p.length - 1 - j] == s[s.length - 1 - j]) j++
-    Log.i("CtxCache", "splitAt=$i suffix=$j prevLen=${p.length} nowLen=${s.length} toolsAt=${s.indexOf("tools")} msgAt=${s.indexOf("messages")}")
-    Log.i("CtxCache", "tail=" + s.substring(maxOf(0, s.length - 411)))
-}
-lastPayloadForDiff = s
-}.toRequestBody("application/json".toMediaType()).withoutAutomaticReplay())
+            .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()).withoutAutomaticReplay())
             .configureReferHeaders(providerSetting.baseUrl)
         val request = authenticator.authenticate(requestBuilder, providerSetting).build()
 
@@ -176,19 +163,7 @@ lastPayloadForDiff = s
             .url("${providerSetting.baseUrl}${providerSetting.chatCompletionsPath}")
             .headers(params.customHeaders.toHeaders())
             .suppressContentLogs(params.suppressContentLogs)
-            .post(json.encodeToString(requestBody).also { s ->
-    val p = lastPayloadForDiff
-if (p != null) {
-    val m = minOf(p.length, s.length)
-    var i = 0
-    while (i < m && p[i] == s[i]) i++
-    var j = 0
-    while (j < m - i && p[p.length - 1 - j] == s[s.length - 1 - j]) j++
-    Log.i("CtxCache", "splitAt=$i suffix=$j prevLen=${p.length} nowLen=${s.length} toolsAt=${s.indexOf("tools")} msgAt=${s.indexOf("messages")}")
-    Log.i("CtxCache", "tail=" + s.substring(maxOf(0, s.length - 411)))
-}
-lastPayloadForDiff = s
-}.toRequestBody("application/json".toMediaType()).withoutAutomaticReplay())
+            .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()).withoutAutomaticReplay())
             .addHeader("Content-Type", "application/json")
             .configureReferHeaders(providerSetting.baseUrl)
         val request = authenticator.authenticate(requestBuilder, providerSetting).build()
