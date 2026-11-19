@@ -501,9 +501,6 @@ class GenerationHandler(
                 }
             }
             val system = effectiveSystemPrompt + dynamicSystemPrompt
-            val recentText = if (assistant.enableRecentChatsReference) buildRecentChatsPrompt(assistant, conversationRepo) else ""
-Log.i("CtxCache", "sysLen=${system.length} sysHash=${system.hashCode()}")
-Log.i("CtxCache", "recentLen=${recentText.length} recent=${recentText.take(500)}")
             if (system.isNotBlank()) {
                 val parts = if (provider is ProviderSetting.OpenAI && provider.useResponseApi) {
                     buildList {
