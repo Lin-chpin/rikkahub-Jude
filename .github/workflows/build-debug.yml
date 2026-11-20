@@ -26,7 +26,7 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - uses: android-actions/setup-android@v3
+      - {uses: android-actions/setup-android@v3, with: {packages: 'platform-tools platforms;android-37'}}
 
       - name: Create CI-only Google Services configuration
         run: |
