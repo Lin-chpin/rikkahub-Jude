@@ -865,6 +865,7 @@ private fun TTSProviderItem(
                             is TTSProviderSetting.XAI -> "xAI"
                             is TTSProviderSetting.ElevenLabs -> "ElevenLabs"
                             is TTSProviderSetting.MiMo -> "MiMo"
+                            is TTSProviderSetting.FishAudio -> stringResource(R.string.setting_tts_page_provider_fish_audio)
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

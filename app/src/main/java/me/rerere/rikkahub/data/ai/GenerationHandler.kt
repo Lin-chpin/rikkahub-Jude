@@ -544,6 +544,33 @@ class GenerationHandler(
         if (responseMessages.lastOrNull()?.id != messages.lastOrNull()?.id) {
             timing.mark("assistant_response_started", responseMessages.last().id.toString(), 0)
         }
+        val effectiveSessionId = sessionIdOverride?.takeIf { it.isNotBlank() }
+            ?: conversationId?.toString()
+        val appendMessagesToRequestEnd = shouldOptimizeGeminiRelayCache(
+            enabled = settings.sendSessionIdForApiKey,
+            provider = provider,
+            model = model,
+        )
+        val headers = buildList {
+            addAll(assistant.customHeaders)
+            addAll(model.customHeaders)
+            if (provider is ProviderSetting.OpenAI &&
+                provider.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION &&
+                effectiveSessionId != null
+            ) {
+                removeAll { it.name.equals("session-id", ignoreCase = true) }
+                add(CustomHeader("session-id", effectiveSessionId))
+            }
+        }
+        val body = buildList {
+            addAll(assistant.customBodies)
+            addAll(model.customBodies)
+        }
+        val geminiCacheOverrides = if (appendMessagesToRequestEnd) {
+            addGeminiRelayCacheSessionId(headers, body, effectiveSessionId)
+        } else {
+            GeminiRelayCacheOverrides(headers, body)
+        }
         val params = TextGenerationParams(
             model = model,
             temperature = assistant.temperature,
@@ -554,23 +581,9 @@ class GenerationHandler(
             onRequestPrepared = diagnosticTrace?.let { it::request },
             onTokenUsage = diagnosticTrace?.let { it::usage },
             reasoningLevel = assistant.reasoningLevel,
-            customHeaders = buildList {
-                addAll(assistant.customHeaders)
-                addAll(model.customHeaders)
-                val effectiveSessionId = sessionIdOverride?.takeIf { it.isNotBlank() }
-                    ?: conversationId?.toString()
-                if (provider is ProviderSetting.OpenAI &&
-                    provider.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION &&
-                    effectiveSessionId != null
-                ) {
-                    removeAll { it.name.equals("session-id", ignoreCase = true) }
-                    add(CustomHeader("session-id", effectiveSessionId))
-                }
-            },
-            customBody = buildList {
-                addAll(assistant.customBodies)
-                addAll(model.customBodies)
-            }
+            customHeaders = geminiCacheOverrides.headers,
+            customBody = geminiCacheOverrides.body,
+            appendMessagesToRequestEnd = appendMessagesToRequestEnd,
         )
         timing.mark("model_request_prepared")
         voiceCallTiming?.markOnce("model_request_prepared")

@@ -14,9 +14,33 @@ import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 class RequestDiagnosticsCallbackTest {
+    @Test
+    fun `messages are moved after custom fields only when explicitly requested`() {
+        val api = ChatCompletionsAPI(OkHttpClient(), KeyRoulette.default())
+        val provider = ProviderSetting.OpenAI()
+        val messages = listOf(UIMessage.user("hello"))
+        val params = TextGenerationParams(
+            model = Model(modelId = "vendor/Gemini-2.5"),
+            customBody = listOf(CustomBody("vendor_option", JsonPrimitive(true))),
+        )
+
+        val regular = api.buildChatCompletionRequest(messages, params, provider)
+        val optimized = api.buildChatCompletionRequest(
+            messages,
+            params.copy(appendMessagesToRequestEnd = true),
+            provider,
+        )
+
+        assertNotEquals(regular.keys.toList(), optimized.keys.toList())
+        assertEquals("messages", optimized.keys.last())
+        assertEquals(JsonPrimitive(true), optimized["vendor_option"])
+        assertEquals(regular["messages"], optimized["messages"])
+    }
+
     @Test
     fun `diagnostics observe final merged requests even when content logging is suppressed`() {
         val provider = ProviderSetting.OpenAI()

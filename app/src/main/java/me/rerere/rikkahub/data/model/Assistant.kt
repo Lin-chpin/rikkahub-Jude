@@ -218,6 +218,13 @@ data class Lorebook(
     val enabled: Boolean = true,
     val entries: List<PromptInjection.RegexInjection> = emptyList(),
     val responseRegexes: List<AssistantRegex> = emptyList(),
+    val folderId: Uuid? = null,
+)
+
+@Serializable
+data class LorebookFolder(
+    val id: Uuid = Uuid.random(),
+    val name: String = "",
 )
 
 /**

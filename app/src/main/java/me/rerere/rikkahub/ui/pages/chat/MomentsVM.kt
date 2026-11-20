@@ -16,7 +16,6 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.core.MessageRole
-import me.rerere.ai.provider.Modality
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.ai.GenerationChunk
@@ -28,6 +27,7 @@ import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.voice.supportsImageInput
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.memoryScope
 import me.rerere.rikkahub.data.repository.ConversationRepository
@@ -85,6 +85,12 @@ class MomentsVM(
     fun toggleUserLike(momentId: Uuid) {
         viewModelScope.launch {
             momentRepository.toggleUserLike(momentId)
+        }
+    }
+
+    fun deleteUserMoment(assistantId: Uuid, momentId: Uuid) {
+        viewModelScope.launch {
+            momentRepository.deleteUserMoment(assistantId, momentId)
         }
     }
 
@@ -249,7 +255,7 @@ class MomentsVM(
             ?: return MomentReactionGeneration.ModelUnavailable
         val requiresOcrFallback = moment.imageUris.isNotEmpty() &&
             moment.imageDescription.isBlank() &&
-            Modality.IMAGE !in model.inputModalities
+            !model.supportsImageInput()
         if (requiresOcrFallback && !settings.hasConfiguredVisionOcrModel()) {
             return MomentReactionGeneration.VisionModelSetupRequired
         }
@@ -504,10 +510,9 @@ private data class MomentsProcessOutcome(
         get() = issue == null || issue == MomentsProcessIssue.NO_VISIBLE_COMMENT
 }
 
-private fun Settings.hasConfiguredVisionOcrModel(): Boolean {
+internal fun Settings.hasConfiguredVisionOcrModel(): Boolean {
     val configuredModelSupportsImages = ocrModelId?.let(::findModelById)
-        ?.inputModalities
-        ?.contains(Modality.IMAGE) == true
+        ?.supportsImageInput() == true
     val customOcrModelConfigured = ocrOpenAIConfig.enabled && ocrOpenAIConfig.modelId.isNotBlank()
     return configuredModelSupportsImages || customOcrModelConfigured
 }

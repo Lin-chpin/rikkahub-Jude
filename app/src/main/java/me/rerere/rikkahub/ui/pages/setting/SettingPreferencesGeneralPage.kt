@@ -85,6 +85,20 @@ fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
                         },
                     )
                     item(
+                        headlineContent = { Text(stringResource(R.string.gemini_relay_cache_optimization_title)) },
+                        supportingContent = {
+                            Text(stringResource(R.string.gemini_relay_cache_optimization_desc))
+                        },
+                        trailingContent = {
+                            Switch(
+                                checked = settings.sendSessionIdForApiKey,
+                                onCheckedChange = {
+                                    vm.updateSettings(settings.copy(sendSessionIdForApiKey = it))
+                                }
+                            )
+                        },
+                    )
+                    item(
                         headlineContent = { Text(stringResource(R.string.setting_display_page_send_on_enter_title)) },
                         supportingContent = { Text(stringResource(R.string.setting_display_page_send_on_enter_desc)) },
                         trailingContent = {

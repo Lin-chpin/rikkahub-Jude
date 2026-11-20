@@ -197,6 +197,7 @@ object LorebookSerializer : ExportSerializer<Lorebook> {
                 .decodeFromJsonElement<Lorebook>(exportData.data)
                 .copy(
                     id = Uuid.random(),
+                    folderId = null,
                     entries = ExportSerializer.DefaultJson
                         .decodeFromJsonElement<Lorebook>(exportData.data)
                         .entries.map { it.copy(id = Uuid.random()) }

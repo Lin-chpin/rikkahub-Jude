@@ -211,7 +211,8 @@ fun VoiceCallOverlay(
         voiceCallAudioTagFormat != null
     val fullDuplex = !isHistory && selectedTtsProvider is TTSProviderSetting.ElevenLabs &&
         selectedTtsProvider.isElevenLabsV4Family() && selectedTtsProvider.fullDuplex
-    val useRealtimeSocketTts = selectedTtsProvider?.isElevenLabsV4Family() == true
+    val useRealtimeSocketTts = selectedTtsProvider?.isElevenLabsV4Family() == true ||
+        selectedTtsProvider is TTSProviderSetting.FishAudio
     // v3 keeps one tagged HTTP request; both v4 models stream one reply over TTD WebSocket.
     val useWholeReplyTts = !useRealtimeSocketTts && selectedTtsProvider is TTSProviderSetting.ElevenLabs &&
         !selectedTtsProvider.isElevenLabsV4() && voiceCallAudioTagFormat != null

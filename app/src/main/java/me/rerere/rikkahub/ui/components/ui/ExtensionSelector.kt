@@ -70,6 +70,13 @@ fun ExtensionSelector(
     } else {
         assistant.lorebookIds
     }
+    val saveLorebookIds: (Set<kotlin.uuid.Uuid>) -> Unit = { ids ->
+        if (useConversationInjections) {
+            onUpdateConversation(conversation.copy(lorebookIds = ids))
+        } else {
+            onUpdate(assistant.copy(lorebookIds = ids))
+        }
+    }
 
     val pagerState = rememberPagerState { 4 }
     val scope = rememberCoroutineScope()
@@ -176,18 +183,16 @@ fun ExtensionSelector(
                     if (settings.lorebooks.isNotEmpty()) {
                         LorebooksContent(
                             lorebooks = settings.lorebooks,
+                            folders = settings.lorebookFolders,
                             selectedIds = selectedLorebookIds,
                             onToggle = { id, checked ->
-                                val newIds = if (checked) {
-                                    selectedLorebookIds + id
-                                } else {
-                                    selectedLorebookIds - id
-                                }
-                                if (useConversationInjections) {
-                                    onUpdateConversation(conversation.copy(lorebookIds = newIds))
-                                } else {
-                                    onUpdate(assistant.copy(lorebookIds = newIds))
-                                }
+                                saveLorebookIds(
+                                    updateLorebookSelectionIds(selectedLorebookIds, setOf(id), checked)
+                                )
+                            },
+                            onSelectFolder = { ids ->
+                                val updatedIds = updateLorebookSelectionIds(selectedLorebookIds, ids, checked = true)
+                                if (updatedIds != selectedLorebookIds) saveLorebookIds(updatedIds)
                             },
                             onManage = onNavigateToPrompts,
                         )
@@ -227,3 +232,9 @@ fun ExtensionSelector(
         }
     }
 }
+
+internal fun updateLorebookSelectionIds(
+    selectedIds: Set<kotlin.uuid.Uuid>,
+    changedIds: Set<kotlin.uuid.Uuid>,
+    checked: Boolean,
+): Set<kotlin.uuid.Uuid> = if (checked) selectedIds + changedIds else selectedIds - changedIds

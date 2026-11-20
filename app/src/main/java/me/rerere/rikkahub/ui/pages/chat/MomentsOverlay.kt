@@ -60,6 +60,7 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -73,6 +74,7 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.MessageAdd01
+import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.model.Assistant
@@ -217,6 +219,7 @@ fun MomentsOverlay(
                                 assistantName = assistantName,
                                 userName = userName,
                                 userAvatar = userAvatar,
+                                onDelete = { vm.deleteUserMoment(assistantId, entry.moment.id) },
                                 onLike = { vm.toggleUserLike(entry.moment.id) },
                                 onComment = { content -> vm.addComment(entry.moment.id, content) },
                             )
@@ -444,6 +447,7 @@ private fun MomentItem(
     assistantName: String,
     userName: String,
     userAvatar: Avatar,
+    onDelete: () -> Unit,
     onLike: () -> Unit,
     onComment: (String) -> Unit,
 ) {
@@ -452,6 +456,7 @@ private fun MomentItem(
     val authorName = if (isUser) userName else assistantName
     val authorAvatar = if (isUser) userAvatar else assistant.avatar
     var commentDialogVisible by remember { mutableStateOf(false) }
+    var deleteDialogVisible by remember { mutableStateOf(false) }
 
     Row(
         modifier = Modifier
@@ -493,6 +498,14 @@ private fun MomentItem(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(modifier = Modifier.weight(1f))
+                if (isUser) {
+                    MomentIconAction(
+                        contentDescription = stringResource(R.string.moments_delete_action),
+                        onClick = { deleteDialogVisible = true },
+                    ) { color, modifier ->
+                        Icon(HugeIcons.Delete01, contentDescription = null, modifier = modifier, tint = color)
+                    }
+                }
                 MomentIconAction(
                     selected = moment.userLiked,
                     contentDescription = "Like",
@@ -523,6 +536,22 @@ private fun MomentItem(
                 onComment(it)
                 commentDialogVisible = false
             }
+        )
+    }
+    if (deleteDialogVisible) {
+        AlertDialog(
+            onDismissRequest = { deleteDialogVisible = false },
+            title = { Text(stringResource(R.string.moments_delete_title)) },
+            text = { Text(stringResource(R.string.moments_delete_confirmation)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    deleteDialogVisible = false
+                    onDelete()
+                }) { Text(stringResource(R.string.moments_delete_action)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteDialogVisible = false }) { Text(stringResource(R.string.cancel)) }
+            },
         )
     }
 }

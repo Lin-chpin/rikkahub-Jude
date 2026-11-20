@@ -1,0 +1,78 @@
+name: Build and test public debug
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-debug-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Create CI-only Google Services configuration
+        run: |
+          cat > app/google-services.json <<'JSON'
+          {
+            "project_info": {
+              "project_number": "000000000000",
+              "project_id": "rikkahub-ci-placeholder",
+              "storage_bucket": "rikkahub-ci-placeholder.appspot.com"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:000000000000:android:00000000000001",
+                  "android_client_info": { "package_name": "me.rerere.rikkahub.jude" }
+                },
+                "oauth_client": [],
+                "api_key": [{ "current_key": "AIzaSyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }],
+                "services": { "appinvite_service": { "other_platform_oauth_client": [] } }
+              },
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:000000000000:android:00000000000002",
+                  "android_client_info": { "package_name": "me.rerere.rikkahub.jude.debug" }
+                },
+                "oauth_client": [],
+                "api_key": [{ "current_key": "AIzaSyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }],
+                "services": { "appinvite_service": { "other_platform_oauth_client": [] } }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          JSON
+
+      - name: Test AI module
+        run: ./gradlew :ai:testDebugUnitTest --stacktrace --no-daemon
+
+      - name: Test public app
+        run: ./gradlew :app:testPublicDebugUnitTest --stacktrace --no-daemon
+
+      - name: Build public debug APK
+        run: ./gradlew :app:assemblePublicDebug --stacktrace --no-daemon
+
+      - name: Upload public debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-public-debug
+          path: app/build/outputs/apk/public/debug/*.apk
+          retention-days: 7

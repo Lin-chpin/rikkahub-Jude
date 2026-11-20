@@ -67,6 +67,18 @@ class AnonymousQuestionBoxVM(
         viewModelScope.launch { repository.addUserAnswer(question.id, content) }
     }
 
+    fun deleteQuestion(scopeId: Uuid, questionId: Uuid) {
+        viewModelScope.launch {
+            repository.deleteQuestions(
+                scopeId = scopeId,
+                questionId = questionId,
+                keyword = "",
+                latest = false,
+                limit = 1,
+            )
+        }
+    }
+
     fun processDue(
         scopeId: Uuid,
         assistant: Assistant,

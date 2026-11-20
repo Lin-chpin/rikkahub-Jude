@@ -160,6 +160,11 @@
   <string name="anonymous_question_box_publish">发布问题</string>
   <string name="anonymous_question_box_refresh">刷新</string>
   <string name="anonymous_question_box_answer">回答这个问题</string>
+  <string name="anonymous_question_box_delete">删除问题</string>
+  <string name="anonymous_question_box_delete_confirmation">删除这组问答及其所有回复？</string>
+  <string name="moments_delete_action">删除动态</string>
+  <string name="moments_delete_title">删除这条朋友圈？</string>
+  <string name="moments_delete_confirmation">这条动态和它的评论会一起删除。</string>
   <string name="anonymous_question_box_submit">提交</string>
   <string name="anonymous_question_box_user">用户问题</string>
   <string name="anonymous_question_box_assistant">AI 问题</string>
@@ -573,6 +578,24 @@
   <string name="prompt_page_add">Add</string>
   <string name="prompt_page_add_entry">Add Entry</string>
   <string name="prompt_page_add_lorebook">Add Lorebook</string>
+  <string name="prompt_page_add_folder">Add folder</string>
+  <string name="prompt_page_folder">Folder</string>
+  <string name="prompt_page_folder_name">Folder name</string>
+  <string name="prompt_page_lorebook_ungrouped">Uncategorized</string>
+  <string name="prompt_page_move_to_folder">Move to folder</string>
+  <string name="prompt_page_add_books_to_folder">Select uncategorized lorebooks to add to this folder</string>
+  <string name="prompt_page_select_books_to_remove">Select lorebooks to move out of this folder</string>
+  <string name="prompt_page_select_all">Select all</string>
+  <string name="prompt_page_clear_selection">Clear selection</string>
+  <string name="prompt_page_no_lorebooks_to_add">No uncategorized lorebooks to add</string>
+  <string name="prompt_page_add_selected_to_folder">Add %1$d to %2$s</string>
+  <string name="prompt_page_remove_selected_from_folder">Move %1$d out of this folder</string>
+  <string name="prompt_page_rename_folder">Rename folder</string>
+  <string name="prompt_page_delete_folder">Delete folder</string>
+  <string name="prompt_page_delete_folder_message">“%1$s” will be deleted. Its lorebooks will move to Uncategorized.</string>
+  <string name="prompt_page_folder_count_format">%1$d lorebooks</string>
+  <string name="prompt_page_collapse">Collapse folder</string>
+  <string name="prompt_page_expand">Expand folder</string>
   <string name="prompt_page_add_mode_injection">Add Mode Injection</string>
   <string name="prompt_page_cancel">Cancel</string>
   <string name="prompt_page_case_sensitive">Case Sensitive</string>
@@ -1120,6 +1143,7 @@
   <string name="setting_tts_page_pitch_description">Control the pitch of speech (0.1 - 2.0, 1.0 is normal)</string>
   <string name="setting_tts_page_provider_gemini">Gemini</string>
   <string name="setting_tts_page_provider_openai">OpenAI</string>
+  <string name="setting_tts_page_provider_fish_audio">Fish Audio</string>
   <string name="setting_tts_page_provider_system">System TTS</string>
   <string name="setting_tts_page_provider_type">Provider Type</string>
   <string name="setting_tts_page_provider_type_description">Select the TTS provider type</string>
@@ -1134,6 +1158,11 @@
   <string name="setting_tts_page_voice_description">Voice to use for speech synthesis</string>
   <string name="setting_tts_page_voice_id">Voice ID</string>
   <string name="setting_tts_page_voice_id_description">Voice ID for speech synthesis</string>
+  <string name="setting_tts_page_fish_audio_api_key_description">Enter your API key as provided; no prefix is needed.</string>
+  <string name="setting_tts_page_fish_audio_voice_id_description">Enter the plain voice ID from Fish Audio.</string>
+  <string name="setting_tts_page_fish_audio_model_description">Choose the standard model or the free developer model.</string>
+  <string name="setting_tts_page_fish_audio_free_developer_model">free developer model</string>
+  <string name="setting_tts_page_fish_audio_speed_description">0.5–2.0. 1.0 is normal speed.</string>
   <string name="setting_tts_page_voice_name">Voice Name</string>
   <string name="setting_tts_page_voice_name_description">Name of the voice</string>
   <string name="setting_tts_page_voice_name_placeholder">Kore</string>
@@ -1276,5 +1305,7 @@
   <string name="liquid_glass_blur_unsupported">Background blur requires Android 12 or later.</string>
   <string name="liquid_glass_preview_assistant">See the frosted background</string>
   <string name="liquid_glass_preview_user">Adjust both sliders</string>
+  <string name="gemini_relay_cache_optimization_title">Gemini relay cache optimization</string>
+  <string name="gemini_relay_cache_optimization_desc">Enable experimental cache optimization for Gemini relays. Turn it off if it does not help.</string>
 </resources>
 

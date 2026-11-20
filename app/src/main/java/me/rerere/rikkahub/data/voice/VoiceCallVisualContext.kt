@@ -10,9 +10,11 @@ import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.model.Assistant
 import kotlin.io.encoding.Base64
 
-internal fun Model.supportsVoiceCallImages(): Boolean =
+internal fun Model.supportsImageInput(): Boolean =
     Modality.IMAGE in inputModalities ||
         Modality.IMAGE in ModelRegistry.MODEL_INPUT_MODALITIES.getData(modelId)
+
+internal fun Model.supportsVoiceCallImages(): Boolean = supportsImageInput()
 
 internal fun Settings.hasConfiguredVoiceCallOcr(): Boolean {
     val separateOcr = ocrOpenAIConfig
@@ -21,11 +23,11 @@ internal fun Settings.hasConfiguredVoiceCallOcr(): Boolean {
     }
 
     val ocrModel = ocrModelId?.let(::findModelById) ?: return false
-    return ocrModel.supportsVoiceCallImages() && ocrModel.findProvider(providers)?.enabled == true
+    return ocrModel.supportsImageInput() && ocrModel.findProvider(providers)?.enabled == true
 }
 
 internal fun Settings.canUseVoiceCallVisuals(assistant: Assistant): Boolean =
-    findModelById(assistant.chatModelId ?: chatModelId)?.supportsVoiceCallImages() == true ||
+    findModelById(assistant.chatModelId ?: chatModelId)?.supportsImageInput() == true ||
         hasConfiguredVoiceCallOcr()
 
 internal fun VoiceCallVisualFrame.toVoiceCallRequestImagePart(): UIMessagePart.Image {

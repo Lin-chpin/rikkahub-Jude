@@ -179,6 +179,7 @@ fun TTSProviderConfigure(
                         is TTSProviderSetting.XAI -> "xAI"
                         is TTSProviderSetting.ElevenLabs -> "ElevenLabs"
                         is TTSProviderSetting.MiMo -> "MiMo"
+                        is TTSProviderSetting.FishAudio -> "Fish Audio"
                     },
                     onValueChange = {},
                     readOnly = true,
@@ -207,6 +208,7 @@ fun TTSProviderConfigure(
                                         TTSProviderSetting.XAI::class -> "xAI"
                                         TTSProviderSetting.ElevenLabs::class -> "ElevenLabs"
                                         TTSProviderSetting.MiMo::class -> "MiMo"
+                                        TTSProviderSetting.FishAudio::class -> "Fish Audio"
                                         else -> providerClass.simpleName ?: "Unknown"
                                     }
                                 )
@@ -259,6 +261,11 @@ fun TTSProviderConfigure(
                                         name = "MiMo TTS"
                                     )
 
+                                    TTSProviderSetting.FishAudio::class -> TTSProviderSetting.FishAudio(
+                                        id = setting.id,
+                                        name = "Fish Audio TTS"
+                                    )
+
                                     else -> setting
                                 }
                                 onValueChange(newSetting)
@@ -295,7 +302,104 @@ fun TTSProviderConfigure(
             is TTSProviderSetting.XAI -> XAITTSConfiguration(setting, onValueChange)
             is TTSProviderSetting.ElevenLabs -> ElevenLabsTTSConfiguration(setting, onValueChange)
             is TTSProviderSetting.MiMo -> MiMoTTSConfiguration(setting, onValueChange)
+            is TTSProviderSetting.FishAudio -> FishAudioTTSConfiguration(setting, onValueChange)
         }
+    }
+}
+
+@Composable
+private fun FishAudioTTSConfiguration(
+    setting: TTSProviderSetting.FishAudio,
+    onValueChange: (TTSProviderSetting) -> Unit,
+) {
+    var modelExpanded by remember { mutableStateOf(false) }
+
+    FormItem(
+        label = { Text(stringResource(R.string.setting_tts_page_api_key)) },
+        description = { Text(stringResource(R.string.setting_tts_page_fish_audio_api_key_description)) },
+    ) {
+        OutlinedTextField(
+            value = setting.apiKey,
+            onValueChange = { onValueChange(setting.copy(apiKey = it)) },
+            modifier = Modifier.fillMaxWidth(),
+            isError = setting.apiKey.isBlank(),
+            placeholder = { Text("Paste API key") },
+        )
+    }
+
+    FormItem(
+        label = { Text(stringResource(R.string.setting_tts_page_voice_id)) },
+        description = { Text(stringResource(R.string.setting_tts_page_fish_audio_voice_id_description)) },
+    ) {
+        OutlinedTextField(
+            value = setting.voiceId,
+            onValueChange = { onValueChange(setting.copy(voiceId = it)) },
+            modifier = Modifier.fillMaxWidth(),
+            isError = setting.voiceId.isBlank(),
+            placeholder = { Text("Voice ID") },
+        )
+    }
+
+    FormItem(
+        label = { Text(stringResource(R.string.setting_tts_page_model)) },
+        description = { Text(stringResource(R.string.setting_tts_page_fish_audio_model_description)) },
+    ) {
+        val selectedLabel = if (setting.model == "s2.1-pro-free") {
+            "${setting.model} (${stringResource(R.string.setting_tts_page_fish_audio_free_developer_model)})"
+        } else setting.model
+        ExposedDropdownMenuBox(
+            expanded = modelExpanded,
+            onExpandedChange = { modelExpanded = !modelExpanded },
+        ) {
+            OutlinedTextField(
+                value = selectedLabel,
+                onValueChange = {},
+                readOnly = true,
+                modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelExpanded) },
+            )
+            ExposedDropdownMenu(
+                expanded = modelExpanded,
+                onDismissRequest = { modelExpanded = false },
+            ) {
+                TTSProviderSetting.FishAudio.MODEL_OPTIONS.forEach { model ->
+                    DropdownMenuItem(
+                        text = {
+                            if (model == "s2.1-pro-free") {
+                                Column {
+                                    Text(model)
+                                    Text(
+                                        text = stringResource(R.string.setting_tts_page_fish_audio_free_developer_model),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            } else Text(model)
+                        },
+                        onClick = {
+                            onValueChange(setting.copy(model = model))
+                            modelExpanded = false
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    FormItem(
+        label = { Text(stringResource(R.string.setting_tts_page_speed)) },
+        description = { Text(stringResource(R.string.setting_tts_page_fish_audio_speed_description)) },
+    ) {
+        OutlinedNumberInput(
+            value = setting.speed,
+            onValueChange = { speed ->
+                if (speed in TTSProviderSetting.FishAudio.MIN_SPEED..TTSProviderSetting.FishAudio.MAX_SPEED) {
+                    onValueChange(setting.copy(speed = speed))
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            label = stringResource(R.string.setting_tts_page_speed),
+        )
     }
 }
 

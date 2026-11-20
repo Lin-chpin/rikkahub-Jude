@@ -69,6 +69,9 @@ interface MomentDAO {
     @Query("DELETE FROM moments WHERE id = :id")
     suspend fun deleteMoment(id: String)
 
+    @Query("DELETE FROM moments WHERE id = :id AND assistant_id = :assistantId AND author = 'user'")
+    suspend fun deleteUserMoment(assistantId: String, id: String): Int
+
     @Query("SELECT * FROM moment_comments WHERE moment_id = :momentId ORDER BY created_at ASC")
     fun observeComments(momentId: String): Flow<List<MomentCommentEntity>>
 

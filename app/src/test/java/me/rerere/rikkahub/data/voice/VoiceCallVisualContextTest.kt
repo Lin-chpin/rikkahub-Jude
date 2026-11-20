@@ -38,8 +38,19 @@ class VoiceCallVisualContextTest {
         assertTrue(text.contains("第2张（屏幕共享画面）：页面标题"))
         assertFalse(parts.any { it is UIMessagePart.Image })
         assertTrue(voiceCallVisualRequestParts(emptyList()).isEmpty())
-        assertFalse(Model(modelId = "custom-text-only").supportsVoiceCallImages())
-        assertTrue(Model(modelId = "custom-vision", inputModalities = listOf(Modality.IMAGE)).supportsVoiceCallImages())
+        assertFalse(Model(modelId = "custom-text-only").supportsImageInput())
+        assertTrue(Model(modelId = "custom-vision", inputModalities = listOf(Modality.IMAGE)).supportsImageInput())
+    }
+
+    @Test
+    fun `registered DeepSeek image aliases override stale saved model capabilities`() {
+        val savedTextOnly = Model(modelId = "deepseek-flash", inputModalities = listOf(Modality.TEXT))
+        val compatibilityAlias = Model(modelId = "deepseek-v4-flash", inputModalities = listOf(Modality.TEXT))
+        val customTextOnly = Model(modelId = "custom-text-only", inputModalities = listOf(Modality.TEXT))
+
+        assertTrue(savedTextOnly.supportsImageInput())
+        assertTrue(compatibilityAlias.supportsImageInput())
+        assertFalse(customTextOnly.supportsImageInput())
     }
 
     @Test

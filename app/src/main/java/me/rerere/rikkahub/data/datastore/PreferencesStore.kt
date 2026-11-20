@@ -43,6 +43,7 @@ import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.model.InjectionPosition
 import me.rerere.rikkahub.data.model.Lorebook
+import me.rerere.rikkahub.data.model.LorebookFolder
 import me.rerere.rikkahub.data.model.PromptInjection
 import me.rerere.rikkahub.data.model.QuickMessage
 import me.rerere.rikkahub.data.model.Tag
@@ -93,6 +94,7 @@ class SettingsStore(
         val CUSTOM_THEMES = stringPreferencesKey("custom_themes")
         val DISPLAY_SETTING = stringPreferencesKey("display_setting")
         val DEVELOPER_MODE = booleanPreferencesKey("developer_mode")
+        val SEND_SESSION_ID_FOR_API_KEY = booleanPreferencesKey("send_session_id_for_api_key")
 
         // 模型选择
         val ENABLE_WEB_SEARCH = booleanPreferencesKey("enable_web_search")
@@ -149,6 +151,7 @@ class SettingsStore(
         // 提示词注入
         val MODE_INJECTIONS = stringPreferencesKey("mode_injections")
         val LOREBOOKS = stringPreferencesKey("lorebooks")
+        val LOREBOOK_FOLDERS = stringPreferencesKey("lorebook_folders")
         val QUICK_MESSAGES = stringPreferencesKey("quick_messages")
 
         // 备份提醒
@@ -174,6 +177,7 @@ class SettingsStore(
     private fun readSettings(preferences: Preferences): Settings =
             Settings(
                 enableWebSearch = preferences[ENABLE_WEB_SEARCH] == true,
+                sendSessionIdForApiKey = preferences[SEND_SESSION_ID_FOR_API_KEY] ?: false,
                 favoriteModels = preferences[FAVORITE_MODELS]?.let {
                     JsonInstant.decodeFromString(it)
                 } ?: emptyList(),
@@ -256,6 +260,9 @@ class SettingsStore(
                 lorebooks = preferences[LOREBOOKS]?.let {
                     JsonInstant.decodeFromString(it)
                 } ?: emptyList(),
+                lorebookFolders = preferences[LOREBOOK_FOLDERS]?.let {
+                    JsonInstant.decodeFromString(it)
+                } ?: emptyList(),
                 quickMessages = preferences[QUICK_MESSAGES]?.let {
                     JsonInstant.decodeFromString(it)
                 } ?: emptyList(),
@@ -310,6 +317,8 @@ class SettingsStore(
             val validMcpServerIds = settings.mcpServers.map { it.id }.toSet()
             val validModeInjectionIds = settings.modeInjections.map { it.id }.toSet()
             val validLorebookIds = settings.lorebooks.map { it.id }.toSet()
+            val lorebookFolders = settings.lorebookFolders.distinctBy { it.id }
+            val validLorebookFolderIds = lorebookFolders.map { it.id }.toSet()
             val validQuickMessageIds = settings.quickMessages.map { it.id }.toSet()
             val asrProviders = settings.asrProviders.distinctBy { it.id }
             settings.copy(
@@ -357,7 +366,10 @@ class SettingsStore(
                     settings.providers.flatMap { it.models }.any { it.id == uuid }
                 },
                 modeInjections = settings.modeInjections.distinctBy { it.id },
-                lorebooks = settings.lorebooks.distinctBy { it.id },
+                lorebooks = settings.lorebooks.distinctBy { it.id }.map { book ->
+                    book.copy(folderId = book.folderId?.takeIf { it in validLorebookFolderIds })
+                },
+                lorebookFolders = lorebookFolders,
                 quickMessages = settings.quickMessages.distinctBy { it.id },
             )
         }
@@ -493,6 +505,7 @@ private fun persistSettings(preferences: MutablePreferences, settings: Settings)
         preferences[SettingsStore.DISPLAY_SETTING] = JsonInstant.encodeToString(settings.displaySetting)
 
         preferences[SettingsStore.ENABLE_WEB_SEARCH] = settings.enableWebSearch
+        preferences[SettingsStore.SEND_SESSION_ID_FOR_API_KEY] = settings.sendSessionIdForApiKey
         preferences[SettingsStore.FAVORITE_MODELS] = JsonInstant.encodeToString(settings.favoriteModels)
         preferences[SettingsStore.SELECT_MODEL] = settings.chatModelId.toString()
         preferences[SettingsStore.TITLE_MODEL] = settings.titleModelId.toString()
@@ -543,6 +556,7 @@ private fun persistSettings(preferences: MutablePreferences, settings: Settings)
         } ?: preferences.remove(SettingsStore.SELECTED_ASR_PROVIDER)
         preferences[SettingsStore.MODE_INJECTIONS] = JsonInstant.encodeToString(settings.modeInjections)
         preferences[SettingsStore.LOREBOOKS] = JsonInstant.encodeToString(settings.lorebooks)
+        preferences[SettingsStore.LOREBOOK_FOLDERS] = JsonInstant.encodeToString(settings.lorebookFolders)
         preferences[SettingsStore.QUICK_MESSAGES] = JsonInstant.encodeToString(settings.quickMessages)
         preferences[SettingsStore.BACKUP_REMINDER_CONFIG] = JsonInstant.encodeToString(settings.backupReminderConfig)
         preferences[SettingsStore.LAUNCH_COUNT] = settings.launchCount
@@ -604,12 +618,14 @@ data class Settings(
     val selectedASRProviderId: Uuid? = null,
     val modeInjections: List<PromptInjection.ModeInjection> = DEFAULT_MODE_INJECTIONS,
     val lorebooks: List<Lorebook> = emptyList(),
+    val lorebookFolders: List<LorebookFolder> = emptyList(),
     val quickMessages: List<QuickMessage> = emptyList(),
     val backupReminderConfig: BackupReminderConfig = BackupReminderConfig(),
     val launchCount: Int = 0,
     val usageReminderConfig: UsageReminderConfig = UsageReminderConfig(),
     val usageReminderState: UsageReminderState = UsageReminderState(),
     val sponsorAlertDismissedAt: Int = 0,
+    val sendSessionIdForApiKey: Boolean = false,
 ) {
     companion object {
         // 构造一个用于初始化的settings, 但它不能用于保存，防止使用初始值存储

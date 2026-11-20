@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
@@ -41,6 +42,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FloatingToolbarDefaults.ScreenOffset
 import androidx.compose.material3.FloatingToolbarDefaults.floatingToolbarVerticalNestedScroll
@@ -65,6 +67,7 @@ import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -88,6 +91,7 @@ import me.rerere.rikkahub.data.export.rememberExporter
 import me.rerere.rikkahub.data.export.rememberImporter
 import me.rerere.rikkahub.data.model.InjectionPosition
 import me.rerere.rikkahub.data.model.Lorebook
+import me.rerere.rikkahub.data.model.LorebookFolder
 import me.rerere.rikkahub.data.model.PromptInjection
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.ExportDialog
@@ -152,7 +156,7 @@ fun PromptPage(vm: PromptVM = koinViewModel()) {
                 0 -> ModeInjectionTab(
                     modeInjections = settings.modeInjections,
                     voiceDirectorPrompt = settings.elevenLabsVoiceDirectorPrompt,
-                    onUpdate = { vm.updateSettings(settings.copy(modeInjections = it)) },
+                    onUpdate = vm::updateModeInjections,
                     onVoiceDirectorPromptUpdate = {
                         vm.updateSettings(settings.copy(elevenLabsVoiceDirectorPrompt = it))
                     },
@@ -160,7 +164,8 @@ fun PromptPage(vm: PromptVM = koinViewModel()) {
 
                 1 -> LorebookTab(
                     lorebooks = settings.lorebooks,
-                    onUpdate = { vm.updateSettings(settings.copy(lorebooks = it)) }
+                    folders = settings.lorebookFolders,
+                    onUpdate = vm::updateLorebooks,
                 )
             }
         }
@@ -177,20 +182,32 @@ private fun ModeInjectionTab(
     var expanded by rememberSaveable { mutableStateOf(true) }
     val lazyListState = rememberLazyListState()
     val toaster = LocalToaster.current
-    val currentModeInjections by rememberUpdatedState(modeInjections)
+    val orderedInjectionsState = remember(modeInjections) { mutableStateOf(modeInjections) }
+    val reorderPendingState = remember(modeInjections) { mutableStateOf(false) }
+    val currentModeInjections by rememberUpdatedState(orderedInjectionsState.value)
+    val currentOnUpdate = rememberUpdatedState(onUpdate)
+    val commitReorder by rememberUpdatedState {
+        if (reorderPendingState.value) {
+            currentOnUpdate.value(orderedInjectionsState.value)
+            reorderPendingState.value = false
+        }
+    }
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        val newList = modeInjections.toMutableList()
-        val item = newList.removeAt(from.index)
-        newList.add(to.index, item)
-        onUpdate(newList)
+        reorderModeInjections(orderedInjectionsState.value, from, to)?.let {
+            orderedInjectionsState.value = it
+            reorderPendingState.value = true
+        }
     }
     val editState = useEditState<PromptInjection.ModeInjection> { edited ->
-        val index = modeInjections.indexOfFirst { it.id == edited.id }
-        if (index >= 0) {
-            onUpdate(modeInjections.toMutableList().apply { set(index, edited) })
+        val current = orderedInjectionsState.value
+        val index = current.indexOfFirst { it.id == edited.id }
+        val updated = if (index >= 0) {
+            current.toMutableList().apply { set(index, edited) }
         } else {
-            onUpdate(modeInjections + edited)
+            current + edited
         }
+        orderedInjectionsState.value = updated
+        currentOnUpdate.value(updated)
     }
     val importSuccessMsg = stringResource(R.string.export_import_success)
     val importFailedMsg = stringResource(R.string.export_import_failed)
@@ -229,7 +246,7 @@ private fun ModeInjectionTab(
                     onSave = onVoiceDirectorPromptUpdate,
                 )
             }
-            if (modeInjections.isEmpty()) {
+            if (orderedInjectionsState.value.isEmpty()) {
                 item {
                     Column(
                         modifier = Modifier
@@ -251,7 +268,7 @@ private fun ModeInjectionTab(
                     }
                 }
             } else {
-                items(modeInjections, key = { it.id }) { injection ->
+                items(orderedInjectionsState.value, key = { it.id }) { injection ->
                     ReorderableItem(
                         state = reorderableState,
                         key = injection.id
@@ -259,7 +276,7 @@ private fun ModeInjectionTab(
                         ModeInjectionCard(
                             injection = injection,
                             modifier = Modifier
-                                .longPressDraggableHandle()
+                                .longPressDraggableHandle(onDragStopped = commitReorder)
                                 .graphicsLayer {
                                     if (isDragging) {
                                         scaleX = 1.05f
@@ -267,7 +284,11 @@ private fun ModeInjectionTab(
                                     }
                                 },
                             onEdit = { editState.open(injection) },
-                            onDelete = { onUpdate(modeInjections - injection) }
+                            onDelete = {
+                                val updated = orderedInjectionsState.value - injection
+                                orderedInjectionsState.value = updated
+                                currentOnUpdate.value(updated)
+                            }
                         )
                     }
                 }
@@ -597,31 +618,87 @@ private fun getRoleLabel(role: MessageRole): String = when (role) {
 @Composable
 private fun LorebookTab(
     lorebooks: List<Lorebook>,
-    onUpdate: (List<Lorebook>) -> Unit
+    folders: List<LorebookFolder>,
+    onUpdate: (List<Lorebook>, List<LorebookFolder>) -> Unit,
 ) {
     var expanded by rememberSaveable { mutableStateOf(true) }
     val lazyListState = rememberLazyListState()
     val toaster = LocalToaster.current
-    val currentLorebooks by rememberUpdatedState(lorebooks)
+    val orderedLorebooksState = remember(lorebooks, folders) { mutableStateOf(lorebooks) }
+    val orderedFoldersState = remember(lorebooks, folders) { mutableStateOf(folders) }
+    val currentLorebooks by rememberUpdatedState(orderedLorebooksState.value)
+    val currentFolders by rememberUpdatedState(orderedFoldersState.value)
+    val currentOnUpdate = rememberUpdatedState(onUpdate)
+    val collapsedFolderIds = remember { mutableStateListOf<String>() }
+    var showFolderEditor by remember { mutableStateOf(false) }
+    var folderBeingEdited by remember { mutableStateOf<LorebookFolder?>(null) }
+    var folderToDelete by remember { mutableStateOf<LorebookFolder?>(null) }
+    var bookToMove by remember { mutableStateOf<Lorebook?>(null) }
+    var bookSelection by remember { mutableStateOf<LorebookSelection?>(null) }
+    var selectedBookIds by remember { mutableStateOf(emptySet<String>()) }
+    val reorderPendingState = remember(lorebooks, folders) { mutableStateOf(false) }
+    val commitReorder by rememberUpdatedState {
+        if (reorderPendingState.value) {
+            // Reordering crosses several rows per gesture; save once when dragging ends.
+            currentOnUpdate.value(orderedLorebooksState.value, orderedFoldersState.value)
+            reorderPendingState.value = false
+        }
+    }
+    val updateBooks: (List<Lorebook>) -> Unit = { updated ->
+        orderedLorebooksState.value = updated
+        currentOnUpdate.value(updated, orderedFoldersState.value)
+    }
+    val updateFolders: (List<LorebookFolder>) -> Unit = { updated ->
+        orderedFoldersState.value = updated
+        currentOnUpdate.value(orderedLorebooksState.value, updated)
+    }
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
-        val newList = lorebooks.toMutableList()
-        val item = newList.removeAt(from.index)
-        newList.add(to.index, item)
-        onUpdate(newList)
+        reorderLorebooks(orderedLorebooksState.value, from.key, to.key)?.let {
+            orderedLorebooksState.value = it
+            reorderPendingState.value = true
+        }
+    }
+    val selectableBooks = when (val selection = bookSelection) {
+        null -> emptyList()
+        else -> if (selection.sourceFolderId == null) {
+            currentLorebooks.filter { book -> currentFolders.none { it.id == book.folderId } }
+        } else {
+            currentLorebooks.filter { it.folderId?.toString() == selection.sourceFolderId }
+        }
+    }
+    val activeSelection = bookSelection
+    val isUngroupedSelectionSource = activeSelection != null && activeSelection.sourceFolderId == null
+    val eligibleBookIds = selectableBooks.mapTo(mutableSetOf()) { it.id.toString() }
+    val selectedEligibleBookIds = selectedBookIds intersect eligibleBookIds
+    val allSelectableBooksSelected = selectableBooks.isNotEmpty() &&
+        selectableBooks.all { it.id.toString() in selectedEligibleBookIds }
+    val toggleAllSelection = {
+        selectedBookIds = if (allSelectableBooksSelected) {
+            emptySet()
+        } else {
+            selectableBooks.mapTo(mutableSetOf()) { it.id.toString() }
+        }
+    }
+    val startBookSelection: (LorebookFolder, String?) -> Unit = { folder, sourceFolderId ->
+        bookSelection = LorebookSelection(folder, sourceFolderId)
+        selectedBookIds = emptySet()
+        if (sourceFolderId != null) collapsedFolderIds.remove(sourceFolderId)
     }
     val editState = useEditState<Lorebook> { edited ->
-        val index = lorebooks.indexOfFirst { it.id == edited.id }
-        if (index >= 0) {
-            onUpdate(lorebooks.toMutableList().apply { set(index, edited) })
+        val current = orderedLorebooksState.value
+        val index = current.indexOfFirst { it.id == edited.id }
+        val updated = if (index >= 0) {
+            current.toMutableList().apply { set(index, edited) }
         } else {
-            onUpdate(lorebooks + edited)
+            current + edited
         }
+        updateBooks(updated)
     }
     val importSuccessMsg = stringResource(R.string.export_import_success)
     val importFailedMsg = stringResource(R.string.export_import_failed)
     val importer = rememberImporter(LorebookSerializer) { result ->
         result.onSuccess { imported ->
-            onUpdate(currentLorebooks + imported)
+            updateBooks(currentLorebooks + imported)
             toaster.show(importSuccessMsg)
         }.onFailure { error ->
             toaster.show(importFailedMsg.format(error.message))
@@ -641,7 +718,7 @@ private fun LorebookTab(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             state = lazyListState
         ) {
-            if (lorebooks.isEmpty()) {
+            if (currentLorebooks.isEmpty() && currentFolders.isEmpty()) {
                 item {
                     Column(
                         modifier = Modifier
@@ -663,24 +740,105 @@ private fun LorebookTab(
                     }
                 }
             } else {
-                items(lorebooks, key = { it.id }) { book ->
-                    ReorderableItem(
-                        state = reorderableState,
-                        key = book.id
-                    ) { isDragging ->
-                        LorebookCard(
-                            book = book,
-                            modifier = Modifier
-                                .longPressDraggableHandle()
-                                .graphicsLayer {
-                                    if (isDragging) {
-                                        scaleX = 1.05f
-                                        scaleY = 1.05f
-                                    }
+                val ungrouped = currentLorebooks.filter { book -> currentFolders.none { it.id == book.folderId } }
+                if (ungrouped.isNotEmpty()) {
+                    item(key = "folder:ungrouped") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = stringResource(R.string.prompt_page_lorebook_ungrouped),
+                                style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (isUngroupedSelectionSource) {
+                                TextButton(onClick = toggleAllSelection) {
+                                    Text(stringResource(if (allSelectableBooksSelected) R.string.prompt_page_clear_selection else R.string.prompt_page_select_all))
+                                }
+                            }
+                        }
+                    }
+                    items(ungrouped, key = { it.id }) { book ->
+                        ReorderableItem(state = reorderableState, key = book.id) { isDragging ->
+                            LorebookCard(
+                                book = book,
+                                modifier = Modifier.longPressDraggableHandle(onDragStopped = commitReorder).graphicsLayer {
+                                    if (isDragging) { scaleX = 1.03f; scaleY = 1.03f }
                                 },
-                            onEdit = { editState.open(book) },
-                            onDelete = { onUpdate(lorebooks - book) }
+                                selectionChecked = if (isUngroupedSelectionSource) book.id.toString() in selectedBookIds else null,
+                                onToggleSelection = if (isUngroupedSelectionSource) {
+                                    { selectedBookIds = if (book.id.toString() in selectedBookIds) selectedBookIds - book.id.toString() else selectedBookIds + book.id.toString() }
+                                } else null,
+                                onEdit = { editState.open(book) },
+                                onDelete = { updateBooks(currentLorebooks.filterNot { it.id == book.id }) },
+                                onMove = { bookToMove = book },
+                            )
+                        }
+                    }
+                } else if (isUngroupedSelectionSource) {
+                    item(key = "folder:ungrouped-empty") {
+                        Text(
+                            text = stringResource(R.string.prompt_page_no_lorebooks_to_add),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 8.dp, top = 4.dp, bottom = 8.dp),
                         )
+                    }
+                }
+                currentFolders.forEach { folder ->
+                    val folderBooks = currentLorebooks.filter { it.folderId == folder.id }
+                    val isSelectionSource = bookSelection?.sourceFolderId == folder.id.toString()
+                    item(key = "folder:${folder.id}") {
+                        LorebookFolderHeader(
+                            folder = folder,
+                            count = folderBooks.size,
+                            expanded = folder.id.toString() !in collapsedFolderIds,
+                            isSelectionSource = isSelectionSource,
+                            allSelected = allSelectableBooksSelected,
+                            modifier = Modifier,
+                            onToggle = {
+                                val id = folder.id.toString()
+                                if (id in collapsedFolderIds) collapsedFolderIds.remove(id)
+                                else collapsedFolderIds.add(id)
+                            },
+                            onAddBooks = { startBookSelection(folder, null) },
+                            onSelectAll = toggleAllSelection,
+                            onRemoveBooks = { startBookSelection(folder, folder.id.toString()) },
+                            onRename = {
+                                folderBeingEdited = folder
+                                showFolderEditor = true
+                            },
+                            onDelete = { folderToDelete = folder },
+                        )
+                    }
+                    if (folder.id.toString() !in collapsedFolderIds) {
+                        if (folderBooks.isEmpty()) {
+                            item(key = "folder-empty:${folder.id}") {
+                                Text(
+                                    text = stringResource(R.string.prompt_page_lorebook_empty),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(start = 24.dp, top = 4.dp, bottom = 8.dp)
+                                )
+                            }
+                        } else {
+                            items(folderBooks, key = { it.id }) { book ->
+                                ReorderableItem(state = reorderableState, key = book.id) { isDragging ->
+                                    LorebookCard(
+                                        book = book,
+                                        modifier = Modifier.longPressDraggableHandle(onDragStopped = commitReorder).graphicsLayer {
+                                            if (isDragging) { scaleX = 1.03f; scaleY = 1.03f }
+                                        },
+                                        selectionChecked = if (isSelectionSource) book.id.toString() in selectedBookIds else null,
+                                        onToggleSelection = if (isSelectionSource) {
+                                            { selectedBookIds = if (book.id.toString() in selectedBookIds) selectedBookIds - book.id.toString() else selectedBookIds + book.id.toString() }
+                                        } else null,
+                                        onEdit = { editState.open(book) },
+                                        onDelete = { updateBooks(currentLorebooks.filterNot { it.id == book.id }) },
+                                        onMove = { bookToMove = book },
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -692,26 +850,123 @@ private fun LorebookTab(
                 .align(Alignment.BottomCenter)
                 .offset(y = -ScreenOffset),
             leadingContent = {
-                IconButton(onClick = { importer.importFromFile() }) {
-                    Icon(HugeIcons.FileImport, null)
+                if (bookSelection == null) {
+                    IconButton(onClick = { importer.importFromFile() }) {
+                        Icon(HugeIcons.FileImport, null)
+                    }
                 }
             },
         ) {
-            Button(onClick = { editState.open(Lorebook()) }) {
-                Row(
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(HugeIcons.Add01, null)
-                    AnimatedVisibility(expanded) {
-                        Row {
-                            Spacer(modifier = Modifier.size(8.dp))
-                            Text(stringResource(R.string.prompt_page_add_lorebook))
+            val selection = bookSelection
+            if (selection == null) {
+                Button(onClick = {
+                    folderBeingEdited = null
+                    showFolderEditor = true
+                }) {
+                    Text(stringResource(R.string.prompt_page_add_folder))
+                }
+                Button(onClick = { editState.open(Lorebook()) }) {
+                    Row(
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(HugeIcons.Add01, null)
+                        AnimatedVisibility(expanded) {
+                            Row {
+                                Spacer(modifier = Modifier.size(8.dp))
+                                Text(stringResource(R.string.prompt_page_add_lorebook))
+                            }
                         }
                     }
                 }
+            } else {
+                TextButton(onClick = {
+                    bookSelection = null
+                    selectedBookIds = emptySet()
+                }) {
+                    Text(stringResource(R.string.prompt_page_cancel))
+                }
+                Button(
+                    onClick = {
+                        val destination = if (selection.sourceFolderId == null) selection.targetFolder.id else null
+                        updateBooks(assignLorebooksToFolder(currentLorebooks, selectedEligibleBookIds, destination))
+                        bookSelection = null
+                        selectedBookIds = emptySet()
+                    },
+                    enabled = selectedEligibleBookIds.isNotEmpty(),
+                ) {
+                    Text(
+                        stringResource(
+                            if (selection.sourceFolderId == null) R.string.prompt_page_add_selected_to_folder
+                            else R.string.prompt_page_remove_selected_from_folder,
+                            selectedEligibleBookIds.size,
+                            currentFolders.firstOrNull { it.id == selection.targetFolder.id }?.name ?: selection.targetFolder.name,
+                        )
+                    )
+                }
             }
         }
+    }
+
+    if (showFolderEditor) {
+        LorebookFolderDialog(
+            initialName = folderBeingEdited?.name.orEmpty(),
+            isEditing = folderBeingEdited != null,
+            onDismiss = { showFolderEditor = false },
+            onSave = { name ->
+                val current = folderBeingEdited
+                if (current == null) updateFolders(currentFolders + LorebookFolder(name = name))
+                else updateFolders(currentFolders.map { if (it.id == current.id) it.copy(name = name) else it })
+                showFolderEditor = false
+            }
+        )
+    }
+
+    folderToDelete?.let { folder ->
+        AlertDialog(
+            onDismissRequest = { folderToDelete = null },
+            title = { Text(stringResource(R.string.prompt_page_delete_folder)) },
+            text = { Text(stringResource(R.string.prompt_page_delete_folder_message, folder.name)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    orderedLorebooksState.value = currentLorebooks.map { if (it.folderId == folder.id) it.copy(folderId = null) else it }
+                    orderedFoldersState.value = currentFolders.filterNot { it.id == folder.id }
+                    currentOnUpdate.value(orderedLorebooksState.value, orderedFoldersState.value)
+                    if (bookSelection?.targetFolder?.id == folder.id || bookSelection?.sourceFolderId == folder.id.toString()) {
+                        bookSelection = null
+                        selectedBookIds = emptySet()
+                    }
+                    folderToDelete = null
+                }) { Text(stringResource(R.string.prompt_page_delete)) }
+            },
+            dismissButton = { TextButton(onClick = { folderToDelete = null }) { Text(stringResource(R.string.prompt_page_cancel)) } }
+        )
+    }
+
+    bookToMove?.let { book ->
+        AlertDialog(
+            onDismissRequest = { bookToMove = null },
+            title = { Text(stringResource(R.string.prompt_page_move_to_folder)) },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 400.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    TextButton(onClick = {
+                        updateBooks(currentLorebooks.map { if (it.id == book.id) it.copy(folderId = null) else it })
+                        bookToMove = null
+                    }) { Text(stringResource(R.string.prompt_page_lorebook_ungrouped)) }
+                    currentFolders.forEach { folder ->
+                        TextButton(onClick = {
+                            updateBooks(currentLorebooks.map { if (it.id == book.id) it.copy(folderId = folder.id) else it })
+                            bookToMove = null
+                        }) { Text(folder.name) }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { bookToMove = null }) { Text(stringResource(R.string.prompt_page_cancel)) } }
+        )
     }
 
     if (editState.isEditing) {
@@ -730,8 +985,11 @@ private fun LorebookTab(
 private fun LorebookCard(
     book: Lorebook,
     modifier: Modifier = Modifier,
+    selectionChecked: Boolean? = null,
+    onToggleSelection: (() -> Unit)? = null,
     onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onMove: () -> Unit,
 ) {
     val swipeState = rememberSwipeToDismissBoxState()
     val scope = rememberCoroutineScope()
@@ -776,6 +1034,12 @@ private fun LorebookCard(
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                if (selectionChecked != null && onToggleSelection != null) {
+                    Checkbox(
+                        checked = selectionChecked,
+                        onCheckedChange = { onToggleSelection() },
+                    )
+                }
                 Column(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -813,11 +1077,14 @@ private fun LorebookCard(
                         }
                     }
                 }
-                IconButton(onClick = { showExportDialog = true }) {
-                    Icon(HugeIcons.Share03, stringResource(R.string.export_title))
-                }
-                IconButton(onClick = onEdit) {
-                    Icon(HugeIcons.Tools, stringResource(R.string.prompt_page_edit))
+                if (selectionChecked == null) {
+                    IconButton(onClick = { showExportDialog = true }) {
+                        Icon(HugeIcons.Share03, stringResource(R.string.export_title))
+                    }
+                    TextButton(onClick = onMove) { Text(stringResource(R.string.prompt_page_folder)) }
+                    IconButton(onClick = onEdit) {
+                        Icon(HugeIcons.Tools, stringResource(R.string.prompt_page_edit))
+                    }
                 }
             }
         }
@@ -829,6 +1096,101 @@ private fun LorebookCard(
             onDismiss = { showExportDialog = false }
         )
     }
+}
+
+@Composable
+private fun LorebookFolderHeader(
+    folder: LorebookFolder,
+    count: Int,
+    expanded: Boolean,
+    isSelectionSource: Boolean,
+    allSelected: Boolean,
+    modifier: Modifier = Modifier,
+    onToggle: () -> Unit,
+    onAddBooks: () -> Unit,
+    onSelectAll: () -> Unit,
+    onRemoveBooks: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var menuExpanded by remember(folder.id) { mutableStateOf(false) }
+    Row(
+        modifier = modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        IconButton(onClick = onToggle) {
+            Icon(
+                HugeIcons.ArrowDown01,
+                contentDescription = stringResource(if (expanded) R.string.prompt_page_collapse else R.string.prompt_page_expand),
+                modifier = Modifier.graphicsLayer { rotationZ = if (expanded) 0f else -90f },
+            )
+        }
+        Column(Modifier.weight(1f)) {
+            Text(folder.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(stringResource(R.string.prompt_page_folder_count_format, count), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (isSelectionSource && count > 0) {
+            TextButton(onClick = onSelectAll) {
+                Text(stringResource(if (allSelected) R.string.prompt_page_clear_selection else R.string.prompt_page_select_all))
+            }
+        }
+        IconButton(onClick = onAddBooks) {
+            Icon(HugeIcons.Add01, stringResource(R.string.prompt_page_add_books_to_folder))
+        }
+        Box {
+            TextButton(onClick = { menuExpanded = true }) { Text(stringResource(R.string.prompt_page_edit)) }
+            androidx.compose.material3.DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text(stringResource(R.string.prompt_page_rename_folder)) },
+                    onClick = { menuExpanded = false; onRename() },
+                )
+                if (count > 0) {
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = { Text(stringResource(R.string.prompt_page_select_books_to_remove)) },
+                        onClick = { menuExpanded = false; onRemoveBooks() },
+                    )
+                }
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text(stringResource(R.string.prompt_page_delete_folder)) },
+                    onClick = { menuExpanded = false; onDelete() },
+                )
+            }
+        }
+    }
+}
+
+private data class LorebookSelection(
+    val targetFolder: LorebookFolder,
+    val sourceFolderId: String?,
+)
+
+@Composable
+private fun LorebookFolderDialog(
+    initialName: String,
+    isEditing: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var name by rememberSaveable(initialName) { mutableStateOf(initialName) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(if (isEditing) R.string.prompt_page_rename_folder else R.string.prompt_page_add_folder)) },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text(stringResource(R.string.prompt_page_folder_name)) },
+                singleLine = true,
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { if (name.isNotBlank()) onSave(name.trim()) }, enabled = name.isNotBlank()) {
+                Text(stringResource(R.string.prompt_page_confirm))
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.prompt_page_cancel)) } },
+    )
 }
 
 @Composable

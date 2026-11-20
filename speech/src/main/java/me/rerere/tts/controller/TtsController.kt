@@ -219,11 +219,16 @@ class TtsController(
 
     private fun prepareRealtimePreconnection() {
         if (!realtimePreconnectionEnabled) return
-        val provider = (currentProvider as? TTSProviderSetting.ElevenLabs)?.forRealtimeCall() ?: return
-        if (!provider.isElevenLabsV4Family() || provider.apiKey.isBlank() || provider.voiceId.isBlank()) return
+        val provider = when (val selected = currentProvider) {
+            is TTSProviderSetting.ElevenLabs -> selected.forRealtimeCall()
+                .takeIf { it.isElevenLabsV4Family() && it.apiKey.isNotBlank() && it.voiceId.isNotBlank() }
+            is TTSProviderSetting.FishAudio -> selected
+                .takeIf { it.apiKey.isNotBlank() && it.voiceId.isNotBlank() }
+            else -> null
+        } ?: return
         if (realtimePreconnection?.matches(provider) == true) return
         releaseRealtimePreconnection("stale_or_failed")
-        Log.i(TAG, "dialogue_preconnection_started model=${provider.model}")
+        Log.i(TAG, "dialogue_preconnection_started provider=${provider::class.simpleName}")
         realtimePreconnection = RealtimeDialoguePreconnection(
             scope = scope,
             provider = provider,
@@ -319,9 +324,14 @@ class TtsController(
         onAlignment: ((String) -> Unit)? = null,
         onTiming: ((TtsTimingStage) -> Unit)? = null,
     ) {
-        val provider = (currentProvider as? TTSProviderSetting.ElevenLabs)?.forRealtimeCall()
-        if (provider?.isElevenLabsV4Family() != true) {
-            _error.update { "Realtime dialogue requires ElevenLabs v4" }
+        val provider = when (val selected = currentProvider) {
+            is TTSProviderSetting.ElevenLabs -> selected.forRealtimeCall()
+                .takeIf { it.isElevenLabsV4Family() }
+            is TTSProviderSetting.FishAudio -> selected
+            else -> null
+        }
+        if (provider == null) {
+            _error.update { "Realtime dialogue is not supported by the selected TTS provider" }
             _playbackState.update { it.copy(status = PlaybackStatus.Error, errorMessage = _error.value) }
             return
         }
@@ -329,7 +339,7 @@ class TtsController(
         val prepared = realtimePreconnection?.takeIf { it.matches(provider) }
         if (prepared == null) releaseRealtimePreconnection("unavailable_at_reply")
         realtimePreconnection = null
-        Log.i(TAG, "dialogue_reply_connection reused=${prepared != null} model=${provider.model}")
+        Log.i(TAG, "dialogue_reply_connection reused=${prepared != null} provider=${provider::class.simpleName}")
         internalReset()
         _playbackState.update { it.copy(status = PlaybackStatus.Buffering) }
         val capture = RealtimeDialogueCapture()
@@ -346,13 +356,20 @@ class TtsController(
                         claimedConnection = null
                         connection?.audioFor(input) ?: ttsManager.generateRealtimeDialogue(provider, input)
                     },
-                    fallback = if (provider.fullDuplex) { script ->
-                        Log.w(TAG, "Dialogue unavailable before audio; using existing v4 HTTP provider")
-                        ttsManager.generateStreamingSpeech(
-                            provider.copy(model = "eleven_v4", fullDuplex = false),
-                            TTSRequest(text = script),
-                        )
-                    } else null,
+                    fallback = when (provider) {
+                        is TTSProviderSetting.FishAudio -> { script ->
+                            Log.w(TAG, "Fish Audio live TTS unavailable before audio; using HTTP TTS")
+                            ttsManager.generateStreamingSpeech(provider, TTSRequest(text = script))
+                        }
+                        is TTSProviderSetting.ElevenLabs -> if (provider.fullDuplex) { script ->
+                            Log.w(TAG, "Dialogue unavailable before audio; using existing v4 HTTP provider")
+                            ttsManager.generateStreamingSpeech(
+                                provider.copy(model = "eleven_v4", fullDuplex = false),
+                                TTSRequest(text = script),
+                            )
+                        } else null
+                        else -> null
+                    },
                 ).onEach { chunk ->
                     capture.append(chunk)?.let { onAlignment?.invoke(it) }
                 }

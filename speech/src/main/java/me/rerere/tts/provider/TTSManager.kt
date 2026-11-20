@@ -7,6 +7,8 @@ import me.rerere.tts.model.TTSRequest
 import me.rerere.tts.provider.providers.GeminiTTSProvider
 import me.rerere.tts.provider.providers.GroqTTSProvider
 import me.rerere.tts.provider.providers.ElevenLabsTTSProvider
+import me.rerere.tts.provider.providers.FishAudioRealtimeTTS
+import me.rerere.tts.provider.providers.FishAudioTTSProvider
 import me.rerere.tts.provider.providers.MiMoTTSProvider
 import me.rerere.tts.provider.providers.MiniMaxTTSProvider
 import me.rerere.tts.provider.providers.OpenAITTSProvider
@@ -24,11 +26,13 @@ class TTSManager(private val context: Context) {
     private val xaiProvider = XAITTSProvider()
     private val elevenLabsProvider = ElevenLabsTTSProvider()
     private val miMoProvider = MiMoTTSProvider()
+    private val fishAudioProvider = FishAudioTTSProvider()
 
     fun supportsStreaming(providerSetting: TTSProviderSetting): Boolean {
         return when (val normalizedSetting = providerSetting.normalizeKnownProvider()) {
             is TTSProviderSetting.ElevenLabs -> elevenLabsProvider.supportsStreaming(normalizedSetting)
             is TTSProviderSetting.MiniMax -> miniMaxProvider.supportsStreaming(normalizedSetting)
+            is TTSProviderSetting.FishAudio -> fishAudioProvider.supportsStreaming(normalizedSetting)
             else -> false
         }
     }
@@ -51,6 +55,7 @@ class TTSManager(private val context: Context) {
             is TTSProviderSetting.Groq -> groqProvider.generateSpeech(context, normalizedSetting, request)
             is TTSProviderSetting.XAI -> xaiProvider.generateSpeech(context, normalizedSetting, request)
             is TTSProviderSetting.ElevenLabs -> elevenLabsProvider.generateSpeech(context, normalizedSetting, request)
+            is TTSProviderSetting.FishAudio -> fishAudioProvider.generateSpeech(context, normalizedSetting, request)
         }
     }
 
@@ -72,13 +77,18 @@ class TTSManager(private val context: Context) {
             is TTSProviderSetting.Groq -> groqProvider.generateStreamingSpeech(context, normalizedSetting, request)
             is TTSProviderSetting.XAI -> xaiProvider.generateStreamingSpeech(context, normalizedSetting, request)
             is TTSProviderSetting.ElevenLabs -> elevenLabsProvider.generateStreamingSpeech(context, normalizedSetting, request)
+            is TTSProviderSetting.FishAudio -> fishAudioProvider.generateStreamingSpeech(context, normalizedSetting, request)
         }
     }
 
     fun generateRealtimeDialogue(
-        providerSetting: TTSProviderSetting.ElevenLabs,
+        providerSetting: TTSProviderSetting,
         text: Flow<String>,
-    ): Flow<AudioChunk> = elevenLabsProvider.generateRealtimeDialogue(providerSetting, text)
+    ): Flow<AudioChunk> = when (providerSetting) {
+        is TTSProviderSetting.ElevenLabs -> elevenLabsProvider.generateRealtimeDialogue(providerSetting, text)
+        is TTSProviderSetting.FishAudio -> FishAudioRealtimeTTS.generate(providerSetting, text)
+        else -> error("${providerSetting.name} does not support realtime TTS")
+    }
 
     private fun TTSProviderSetting.normalizeKnownProvider(): TTSProviderSetting {
         return when (this) {

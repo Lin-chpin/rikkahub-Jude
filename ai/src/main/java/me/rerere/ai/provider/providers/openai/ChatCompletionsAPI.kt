@@ -507,7 +507,15 @@ class ChatCompletionsAPI(
                     }
                 }
             }
-        }.mergeCustomBody(params.customBody).also { body ->
+        }.mergeCustomBody(params.customBody).let { body ->
+            if (params.appendMessagesToRequestEnd) {
+                val orderedBody = LinkedHashMap(body.filterKeys { it != "messages" })
+                body["messages"]?.let { orderedBody["messages"] = it }
+                JsonObject(orderedBody)
+            } else {
+                body
+            }
+        }.also { body ->
             runCatching { params.onRequestPrepared?.invoke(body) }
         }
     }

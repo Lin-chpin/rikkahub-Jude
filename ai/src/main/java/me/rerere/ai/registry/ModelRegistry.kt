@@ -275,6 +275,7 @@ object ModelRegistry {
 
     private val DEEPSEEK_V4_FLASH = defineModel {
         tokens("deepseek", "v", "4", "flash")
+        visionInput()
         toolReasoningAbility()
     }
 
@@ -294,6 +295,7 @@ object ModelRegistry {
 
     private val DEEPSEEK_FLASH = defineModel {
         tokens(tokenRegex("deepseek"), tokenRegex("flash"))
+        visionInput()
         toolReasoningAbility()
     }
 

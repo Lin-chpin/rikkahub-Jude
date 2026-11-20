@@ -17,7 +17,7 @@ import me.rerere.tts.provider.TTSProviderSetting
 /** Opens the existing dialogue stream without sending any text or starting playback. */
 internal class RealtimeDialoguePreconnection(
     scope: CoroutineScope,
-    private val provider: TTSProviderSetting.ElevenLabs,
+    private val provider: TTSProviderSetting,
     generateAudio: (Flow<String>) -> Flow<AudioChunk>,
     onFailure: (Throwable) -> Unit = {},
 ) {
@@ -38,7 +38,7 @@ internal class RealtimeDialoguePreconnection(
         }
     }
 
-    fun matches(provider: TTSProviderSetting.ElevenLabs): Boolean =
+    fun matches(provider: TTSProviderSetting): Boolean =
         this.provider == provider && connectionJob.isActive
 
     fun audioFor(text: Flow<String>): Flow<AudioChunk> = flow {

@@ -16,6 +16,7 @@ enum class TTSProviderKind(val safeName: String) {
     XAI("xai"),
     MINIMAX("minimax"),
     MIMO("mimo"),
+    FISH_AUDIO("fish_audio"),
 }
 
 enum class TTSProviderErrorCode(val safeValue: String) {

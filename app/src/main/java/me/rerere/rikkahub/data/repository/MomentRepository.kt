@@ -92,6 +92,9 @@ class MomentRepository(
         return candidates.map { it.toMoment() }
     }
 
+    suspend fun deleteUserMoment(assistantId: Uuid, momentId: Uuid): Boolean =
+        dao.deleteUserMoment(assistantId.toString(), momentId.toString()) > 0
+
     suspend fun postAssistantMoment(
         assistantId: Uuid,
         content: String,

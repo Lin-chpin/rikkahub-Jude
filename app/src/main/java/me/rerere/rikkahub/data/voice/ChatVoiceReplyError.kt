@@ -134,6 +134,12 @@ internal fun TTSProviderSetting.configurationError(): ChatVoiceReplyError? {
         is TTSProviderSetting.XAI -> remoteConfigurationError(apiKey, baseUrl, voice = voiceId)
         is TTSProviderSetting.ElevenLabs -> remoteConfigurationError(apiKey, baseUrl, model, voiceId)
         is TTSProviderSetting.MiMo -> remoteConfigurationError(apiKey, baseUrl, model, voice)
+        is TTSProviderSetting.FishAudio -> when {
+            apiKey.isBlank() -> ChatVoiceReplyError(ChatVoiceReplyErrorCode.MISSING_API_KEY)
+            model.isBlank() -> ChatVoiceReplyError(ChatVoiceReplyErrorCode.NO_MODEL)
+            voiceId.isBlank() -> ChatVoiceReplyError(ChatVoiceReplyErrorCode.MISSING_VOICE)
+            else -> null
+        }
     }
 }
 

@@ -1037,9 +1037,9 @@ class ChatService(
                 messages = generationMessages,
                 startNewAssistantMessage = requestMode == ChatRequestMode.VoiceCall,
                 assistant = if (requestMode == ChatRequestMode.VoiceCall &&
-                    (settings.getSelectedTTSProvider() as? TTSProviderSetting.ElevenLabs)?.let {
+                    ((settings.getSelectedTTSProvider() as? TTSProviderSetting.ElevenLabs)?.let {
                         it.fullDuplex && it.isElevenLabsV4Family()
-                    } == true
+                    } == true || settings.getSelectedTTSProvider() is TTSProviderSetting.FishAudio)
                 ) assistant.copy(streamOutput = true) else assistant,
                 conversationId = conversation.id,
                 requestSource = requestMode.name,

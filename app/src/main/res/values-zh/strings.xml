@@ -539,6 +539,29 @@
   <string name="prompt_page_add">添加</string>
   <string name="prompt_page_add_entry">添加条目</string>
   <string name="prompt_page_add_lorebook">添加世界书</string>
+  <string name="anonymous_question_box_delete">删除问题</string>
+  <string name="anonymous_question_box_delete_confirmation">删除这组问答及其所有回复？</string>
+  <string name="moments_delete_action">删除动态</string>
+  <string name="moments_delete_title">删除这条朋友圈？</string>
+  <string name="moments_delete_confirmation">这条动态和它的评论会一起删除。</string>
+  <string name="prompt_page_add_folder">新建文件夹</string>
+  <string name="prompt_page_folder">文件夹</string>
+  <string name="prompt_page_folder_name">文件夹名称</string>
+  <string name="prompt_page_lorebook_ungrouped">未分组</string>
+  <string name="prompt_page_move_to_folder">移动到文件夹</string>
+  <string name="prompt_page_add_books_to_folder">选择未分组的世界书加入此文件夹</string>
+  <string name="prompt_page_select_books_to_remove">选择移出此文件夹的世界书</string>
+  <string name="prompt_page_select_all">全选</string>
+  <string name="prompt_page_clear_selection">取消全选</string>
+  <string name="prompt_page_no_lorebooks_to_add">没有可加入的未分组世界书</string>
+  <string name="prompt_page_add_selected_to_folder">将 %1$d 本加入“%2$s”</string>
+  <string name="prompt_page_remove_selected_from_folder">将所选 %1$d 本移出文件夹</string>
+  <string name="prompt_page_rename_folder">重命名文件夹</string>
+  <string name="prompt_page_delete_folder">删除文件夹</string>
+  <string name="prompt_page_delete_folder_message">删除“%1$s”后，其中的世界书会移到“未分组”。</string>
+  <string name="prompt_page_folder_count_format">%1$d 本世界书</string>
+  <string name="prompt_page_collapse">收起文件夹</string>
+  <string name="prompt_page_expand">展开文件夹</string>
   <string name="prompt_page_add_mode_injection">添加模式注入</string>
   <string name="prompt_page_cancel">取消</string>
   <string name="prompt_page_case_sensitive">大小写敏感</string>
@@ -1071,6 +1094,7 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="setting_tts_page_pitch_description">控制语音音调高低 (0.1 - 2.0，1.0为正常音调)</string>
   <string name="setting_tts_page_provider_gemini">Gemini</string>
   <string name="setting_tts_page_provider_openai">OpenAI</string>
+  <string name="setting_tts_page_provider_fish_audio">Fish Audio</string>
   <string name="setting_tts_page_provider_system">系统TTS</string>
   <string name="setting_tts_page_provider_type">提供商类型</string>
   <string name="setting_tts_page_provider_type_description">选择TTS提供商类型</string>
@@ -1085,6 +1109,11 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="setting_tts_page_voice_description">用于语音合成的声音</string>
   <string name="setting_tts_page_voice_id">语音 ID</string>
   <string name="setting_tts_page_voice_id_description">语音合成使用的语音 ID</string>
+  <string name="setting_tts_page_fish_audio_api_key_description">直接填写 Fish Audio 提供的 API Key，无需添加前缀。</string>
+  <string name="setting_tts_page_fish_audio_voice_id_description">直接填写 Fish Audio 的音色 ID。</string>
+  <string name="setting_tts_page_fish_audio_model_description">可选择标准模型或免费开发模型。</string>
+  <string name="setting_tts_page_fish_audio_free_developer_model">免费开发模型</string>
+  <string name="setting_tts_page_fish_audio_speed_description">范围 0.5–2.0，1.0 为正常语速。</string>
   <string name="setting_tts_page_voice_name">语音名称</string>
   <string name="setting_tts_page_voice_name_description">语音的名称</string>
   <string name="setting_tts_page_voice_name_placeholder">Kore</string>
@@ -1240,4 +1269,6 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="liquid_glass_blur_unsupported">背景模糊需要 Android 12 或以上版本。</string>
   <string name="liquid_glass_preview_assistant">看看背景的磨砂效果</string>
   <string name="liquid_glass_preview_user">试着调节两个滑块</string>
+  <string name="gemini_relay_cache_optimization_title">Gemini 中转站缓存优化</string>
+  <string name="gemini_relay_cache_optimization_desc">针对中转站gemini的缓存提升，目前为实验性功能，若效果不好请关闭</string>
 </resources>

@@ -91,7 +91,7 @@ fun ChatMessageAssistantAvatar(
                 if (showIcon) {
                     UIAvatar(
                         name = assistant.name,
-                        modifier = Modifier.size(32.dp),
+                        modifier = Modifier.size(36.dp),
                         value = assistant.avatar,
                         loading = loading,
                     )
@@ -119,7 +119,7 @@ fun ChatMessageAssistantAvatar(
                 if (showIcon) {
                     AutoAIIcon(
                         name = model.modelId,
-                        modifier = Modifier.size(32.dp),
+                        modifier = Modifier.size(36.dp),
                         loading = loading
                     )
                 }
