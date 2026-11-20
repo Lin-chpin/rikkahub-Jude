@@ -20,22 +20,15 @@ internal data class GeminiRelayCacheOverrides(
     val body: List<CustomBody>,
 )
 
-internal fun addGeminiRelayCacheSessionId(
+internal fun applyGeminiRelayCacheSessionId(
     headers: List<CustomHeader>,
     body: List<CustomBody>,
     sessionId: String?,
 ): GeminiRelayCacheOverrides {
     if (sessionId.isNullOrBlank()) return GeminiRelayCacheOverrides(headers, body)
 
-    val updatedHeaders = if (headers.any { it.name.equals("session-id", ignoreCase = true) }) {
-        headers
-    } else {
-        headers + CustomHeader("session-id", sessionId)
-    }
-    val updatedBody = if (body.any { it.key == "user" }) {
-        body
-    } else {
-        body + CustomBody("user", JsonPrimitive(sessionId))
-    }
+    val updatedHeaders = headers.filterNot { it.name.equals("session-id", ignoreCase = true) } +
+        CustomHeader("session-id", sessionId)
+    val updatedBody = body.filterNot { it.key == "user" } + CustomBody("user", JsonPrimitive(sessionId))
     return GeminiRelayCacheOverrides(updatedHeaders, updatedBody)
 }

@@ -4,6 +4,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import me.rerere.ai.core.Tool
 import me.rerere.ai.provider.CustomBody
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
@@ -14,29 +15,31 @@ import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
-import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RequestDiagnosticsCallbackTest {
     @Test
-    fun `messages are moved after custom fields only when explicitly requested`() {
+    fun `messages move after tools only when explicitly requested`() {
         val api = ChatCompletionsAPI(OkHttpClient(), KeyRoulette.default())
         val provider = ProviderSetting.OpenAI()
         val messages = listOf(UIMessage.user("hello"))
         val params = TextGenerationParams(
             model = Model(modelId = "vendor/Gemini-2.5"),
+            tools = listOf(Tool(name = "lookup", description = "", execute = { emptyList() })),
             customBody = listOf(CustomBody("vendor_option", JsonPrimitive(true))),
         )
 
         val regular = api.buildChatCompletionRequest(messages, params, provider)
         val optimized = api.buildChatCompletionRequest(
             messages,
-            params.copy(appendMessagesToRequestEnd = true),
+            params.copy(moveMessagesAfterTools = true),
             provider,
         )
 
-        assertNotEquals(regular.keys.toList(), optimized.keys.toList())
-        assertEquals("messages", optimized.keys.last())
+        assertTrue(regular.keys.indexOf("messages") < regular.keys.indexOf("tools"))
+        assertTrue(optimized.keys.indexOf("tools") < optimized.keys.indexOf("messages"))
+        assertTrue(optimized.keys.indexOf("messages") < optimized.keys.indexOf("vendor_option"))
         assertEquals(JsonPrimitive(true), optimized["vendor_option"])
         assertEquals(regular["messages"], optimized["messages"])
     }

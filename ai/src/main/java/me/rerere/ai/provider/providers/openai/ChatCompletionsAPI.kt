@@ -340,7 +340,7 @@ class ChatCompletionsAPI(
         val modelAbilities = (params.model.abilities + ModelRegistry.MODEL_ABILITIES.getData(params.model.modelId)).toSet()
         return buildJsonObject {
             put("model", params.model.modelId)
-            put("messages", buildMessages(messages))
+            if (!params.moveMessagesAfterTools) put("messages", buildMessages(messages))
 
             if (isModelAllowTemperature(params.model)) {
                 if (params.temperature != null) put("temperature", params.temperature)
@@ -507,15 +507,8 @@ class ChatCompletionsAPI(
                     }
                 }
             }
-        }.mergeCustomBody(params.customBody).let { body ->
-            if (params.appendMessagesToRequestEnd) {
-                val orderedBody = LinkedHashMap(body.filterKeys { it != "messages" })
-                body["messages"]?.let { orderedBody["messages"] = it }
-                JsonObject(orderedBody)
-            } else {
-                body
-            }
-        }.also { body ->
+            if (params.moveMessagesAfterTools) put("messages", buildMessages(messages))
+        }.mergeCustomBody(params.customBody).also { body ->
             runCatching { params.onRequestPrepared?.invoke(body) }
         }
     }

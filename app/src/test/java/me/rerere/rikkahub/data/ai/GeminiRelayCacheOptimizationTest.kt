@@ -28,8 +28,8 @@ class GeminiRelayCacheOptimizationTest {
     }
 
     @Test
-    fun `manual session identifiers take precedence and missing session ids are skipped`() {
-        val generated = addGeminiRelayCacheSessionId(
+    fun `session identifiers override manual values and missing session ids are skipped`() {
+        val generated = applyGeminiRelayCacheSessionId(
             headers = emptyList(),
             body = emptyList(),
             sessionId = "conversation-1",
@@ -40,15 +40,15 @@ class GeminiRelayCacheOptimizationTest {
             generated.body.single(),
         )
 
-        val manual = addGeminiRelayCacheSessionId(
+        val overridden = applyGeminiRelayCacheSessionId(
             headers = listOf(CustomHeader("Session-ID", "manual-session")),
             body = listOf(CustomBody("user", JsonPrimitive("manual-user"))),
             sessionId = "conversation-1",
         )
-        assertEquals("manual-session", manual.headers.single().value)
-        assertEquals(JsonPrimitive("manual-user"), manual.body.single().value)
+        assertEquals(listOf(CustomHeader("session-id", "conversation-1")), overridden.headers)
+        assertEquals(listOf(CustomBody("user", JsonPrimitive("conversation-1"))), overridden.body)
 
-        val missing = addGeminiRelayCacheSessionId(emptyList(), emptyList(), null)
+        val missing = applyGeminiRelayCacheSessionId(emptyList(), emptyList(), null)
         assertTrue(missing.headers.isEmpty())
         assertTrue(missing.body.isEmpty())
     }

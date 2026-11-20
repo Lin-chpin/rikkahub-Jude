@@ -546,7 +546,7 @@ class GenerationHandler(
         }
         val effectiveSessionId = sessionIdOverride?.takeIf { it.isNotBlank() }
             ?: conversationId?.toString()
-        val appendMessagesToRequestEnd = shouldOptimizeGeminiRelayCache(
+        val moveMessagesAfterTools = shouldOptimizeGeminiRelayCache(
             enabled = settings.sendSessionIdForApiKey,
             provider = provider,
             model = model,
@@ -566,11 +566,12 @@ class GenerationHandler(
             addAll(assistant.customBodies)
             addAll(model.customBodies)
         }
-        val geminiCacheOverrides = if (appendMessagesToRequestEnd) {
-            addGeminiRelayCacheSessionId(headers, body, effectiveSessionId)
+        val geminiCacheOverrides = if (moveMessagesAfterTools) {
+            applyGeminiRelayCacheSessionId(headers, body, effectiveSessionId)
         } else {
             GeminiRelayCacheOverrides(headers, body)
         }
+        val sessionHeaders = geminiCacheOverrides.headers.filter { it.name.equals("session-id", ignoreCase = true) }
         val params = TextGenerationParams(
             model = model,
             temperature = assistant.temperature,
@@ -578,12 +579,22 @@ class GenerationHandler(
             maxTokens = maxTokensOverride ?: assistant.maxTokens,
             tools = tools,
             suppressContentLogs = suppressContentLogs,
-            onRequestPrepared = diagnosticTrace?.let { it::request },
+            onRequestPrepared = diagnosticTrace?.let { trace ->
+                { requestBody ->
+                    trace.request(
+                        requestBody,
+                        moveMessagesAfterTools,
+                        sessionHeaders.count(),
+                        effectiveSessionId != null && sessionHeaders.any { it.value == effectiveSessionId },
+                        effectiveSessionId,
+                    )
+                }
+            },
             onTokenUsage = diagnosticTrace?.let { it::usage },
             reasoningLevel = assistant.reasoningLevel,
             customHeaders = geminiCacheOverrides.headers,
             customBody = geminiCacheOverrides.body,
-            appendMessagesToRequestEnd = appendMessagesToRequestEnd,
+            moveMessagesAfterTools = moveMessagesAfterTools,
         )
         timing.mark("model_request_prepared")
         voiceCallTiming?.markOnce("model_request_prepared")

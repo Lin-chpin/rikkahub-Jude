@@ -44,9 +44,26 @@ internal class RequestContextDiagnostics(
     ) {
         private var requestId = "unprepared"
 
-        fun request(body: JsonObject) {
+        fun request(
+            body: JsonObject,
+            geminiRelayCacheEnabled: Boolean,
+            sessionHeaderCount: Int,
+            sessionHeaderMatchesSessionId: Boolean,
+            expectedSessionId: String?,
+        ) {
             requestId = UUID.randomUUID().toString()
-            record(conversationId, source, api, providerHash, requestId, body)
+            record(
+                conversationId,
+                source,
+                api,
+                providerHash,
+                requestId,
+                body,
+                geminiRelayCacheEnabled,
+                sessionHeaderCount,
+                sessionHeaderMatchesSessionId,
+                expectedSessionId,
+            )
         }
 
         fun usage(body: JsonObject) {
@@ -64,9 +81,32 @@ internal class RequestContextDiagnostics(
     }
 
     @Synchronized
-    private fun record(conversationId: String, source: String, api: String, providerHash: String, requestId: String, body: JsonObject) {
+    private fun record(
+        conversationId: String,
+        source: String,
+        api: String,
+        providerHash: String,
+        requestId: String,
+        body: JsonObject,
+        geminiRelayCacheEnabled: Boolean,
+        sessionHeaderCount: Int,
+        sessionHeaderMatchesSessionId: Boolean,
+        expectedSessionId: String?,
+    ) {
         val items = (body["messages"] ?: body["input"]) as? JsonArray ?: JsonArray(emptyList())
         fun role(item: JsonElement) = ((item as? JsonObject)?.get("role") as? JsonPrimitive)?.contentOrNull
+        val requestModel = (body["model"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+        if (api == "ChatCompletions" && requestModel.contains("gemini", ignoreCase = true)) {
+            val user = body["user"] as? JsonPrimitive
+            writeLog(
+                "GeminiRelayCacheRequest",
+                "request=$requestId enabled=$geminiRelayCacheEnabled sessionIdPresent=${expectedSessionId != null} " +
+                    "sessionHeaderCount=$sessionHeaderCount sessionHeaderMatchesSessionId=$sessionHeaderMatchesSessionId " +
+                    "userPresent=${body.containsKey("user")} userString=${user?.isString == true} " +
+                    "userMatchesSessionId=${expectedSessionId != null && user == JsonPrimitive(expectedSessionId)} " +
+                    "toolsIndex=${body.keys.indexOf("tools")} messagesIndex=${body.keys.indexOf("messages")} fields=${body.size}",
+            )
+        }
         if (source == "VoiceCall" && api == "ChatCompletions") {
             val requestMessages = items.mapIndexedNotNull { index, item ->
                 (item as? JsonObject)?.let { Triple(index, role(item).orEmpty(), it["content"].promptDiagnosticText()) }

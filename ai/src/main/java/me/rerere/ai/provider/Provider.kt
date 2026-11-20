@@ -66,7 +66,7 @@ data class TextGenerationParams(
     @Transient val suppressContentLogs: Boolean = false,
     @Transient val onRequestPrepared: ((JsonObject) -> Unit)? = null,
     @Transient val onTokenUsage: ((JsonObject) -> Unit)? = null,
-    @Transient val appendMessagesToRequestEnd: Boolean = false,
+    @Transient val moveMessagesAfterTools: Boolean = false,
 )
 
 @Serializable
