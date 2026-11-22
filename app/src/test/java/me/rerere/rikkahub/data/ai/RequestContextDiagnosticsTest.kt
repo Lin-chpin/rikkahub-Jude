@@ -13,7 +13,13 @@ class RequestContextDiagnosticsTest {
         val diagnostics = RequestContextDiagnostics { tag, message -> logs.add("$tag $message") }
         fun request(source: String, system: String, history: String, tool: String = "time") =
             diagnostics.begin("conversation", source, "ChatCompletions", "private-provider-key").also {
-                it.request(body(system, history, tool))
+                it.request(
+                    body = body(system, history, tool),
+                    geminiRelayCacheEnabled = false,
+                    sessionHeaderCount = 0,
+                    sessionHeaderMatchesSessionId = false,
+                    expectedSessionId = null,
+                )
             }
         val first = request("Normal", "private-system", """{"role":"user","content":"private-history"}""")
         val normalId = logs.first().substringAfter("request=").substringBefore(' ')
@@ -40,7 +46,13 @@ class RequestContextDiagnosticsTest {
         val logs = mutableListOf<String>()
         val diagnostics = RequestContextDiagnostics { _, message -> logs.add(message) }
         fun request(body: String) = diagnostics.begin("conversation", "Normal", "ChatCompletions", "provider")
-            .request(Json.parseToJsonElement(body).jsonObject)
+            .request(
+                body = Json.parseToJsonElement(body).jsonObject,
+                geminiRelayCacheEnabled = false,
+                sessionHeaderCount = 0,
+                sessionHeaderMatchesSessionId = false,
+                expectedSessionId = null,
+            )
         request("""{"model":"deepseek-v4-pro","tools":[{"name":"time"},{"name":"weather"}],"messages":[{"role":"user","content":"hello"},{"role":"system","content":"state=INACTIVE"}],"stream":false}""")
         request("""{"model":"deepseek-v4-pro","tools":[{"name":"time"},{"name":"weather"}],"messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"reply"},{"role":"system","content":"state=INACTIVE"}],"stream":true,"stream_options":{"include_usage":true}}""")
         assertTrue(logs.last().contains("sameSystem=true sameTools=true optionDiff=none"))
@@ -49,7 +61,13 @@ class RequestContextDiagnosticsTest {
         request("""{"model":"different-model","tools":[{"name":"weather"},{"name":"time"}],"messages":[{"role":"user","content":"hello"}]}""")
         assertTrue(logs.last().contains("sameTools=false optionDiff=model"))
         diagnostics.begin("another-conversation", "Normal", "ChatCompletions", "provider")
-            .request(body("system", """{"role":"user","content":"hello"}""", "time"))
+            .request(
+                body = body("system", """{"role":"user","content":"hello"}""", "time"),
+                geminiRelayCacheEnabled = false,
+                sessionHeaderCount = 0,
+                sessionHeaderMatchesSessionId = false,
+                expectedSessionId = null,
+            )
         assertTrue(logs.last().contains("compare=previousNormal baseline=missing"))
     }
 
