@@ -28,6 +28,12 @@ interface MessageNodeDAO {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(nodes: List<MessageNodeEntity>)
 
+    @Insert
+    suspend fun insertNewAll(nodes: List<MessageNodeEntity>)
+
+    @Update
+    suspend fun updateAll(nodes: List<MessageNodeEntity>)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(node: MessageNodeEntity)
 
@@ -39,6 +45,9 @@ interface MessageNodeDAO {
 
     @Query("DELETE FROM message_node WHERE id = :nodeId")
     suspend fun deleteById(nodeId: String)
+
+    @Query("DELETE FROM message_node WHERE id IN (:nodeIds)")
+    suspend fun deleteByIds(nodeIds: List<String>)
 
     // 使用 @RawQuery 绕过 Room 编译期校验，以便使用 json_each() 虚拟表
     @RawQuery

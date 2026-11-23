@@ -10,6 +10,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.net.toFile
@@ -20,7 +25,9 @@ import java.io.File
 
 @Composable
 internal fun useCropLauncher(
-    onCroppedImageReady: (Uri) -> Unit, onCleanup: (() -> Unit)? = null
+    scope: CoroutineScope,
+    onCroppedImageReady: suspend (Uri) -> Unit,
+    onCleanup: (suspend () -> Unit)? = null,
 ): Pair<ActivityResultLauncher<Intent>, (Uri) -> Unit> {
     val context = LocalContext.current
     var cropOutputUri by remember { mutableStateOf<Uri?>(null) }
@@ -28,14 +35,20 @@ internal fun useCropLauncher(
     val cropActivityLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == android.app.Activity.RESULT_OK) {
-            cropOutputUri?.let { croppedUri ->
-                onCroppedImageReady(croppedUri)
+        val croppedUri = cropOutputUri.takeIf {
+            result.resultCode == android.app.Activity.RESULT_OK
+        }
+        scope.launch {
+            try {
+                croppedUri?.let { onCroppedImageReady(it) }
+            } finally {
+                withContext(NonCancellable + Dispatchers.IO) {
+                    cropOutputUri?.toFile()?.delete()
+                }
+                cropOutputUri = null
+                onCleanup?.invoke()
             }
         }
-        cropOutputUri?.toFile()?.delete()
-        cropOutputUri = null
-        onCleanup?.invoke()
     }
 
     val launchCrop: (Uri) -> Unit = { sourceUri ->

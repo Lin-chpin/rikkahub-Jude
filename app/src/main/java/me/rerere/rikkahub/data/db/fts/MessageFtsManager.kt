@@ -28,23 +28,32 @@ class MessageFtsManager(private val database: AppDatabase) {
     suspend fun indexConversation(conversation: Conversation) = withContext(Dispatchers.IO) {
         val conversationId = conversation.id.toString()
         db.execSQL("DELETE FROM message_fts WHERE conversation_id = ?", arrayOf(conversationId))
-        conversation.messageNodes.forEach { node ->
-            node.messages.forEach { message ->
-                val text = message.extractFtsText()
-                if (text.isNotBlank()) {
-                    db.execSQL(
-                        "INSERT INTO message_fts(text, node_id, message_id, conversation_id, title, update_at) VALUES (?, ?, ?, ?, ?, ?)",
-                        arrayOf(
-                            text,
-                            node.id.toString(),
-                            message.id.toString(),
-                            conversationId,
-                            conversation.title,
-                            conversation.updateAt.toEpochMilli().toString(),
-                        )
-                    )
-                }
+        conversation.messageNodes.forEach { node -> indexNode(conversation, node) }
+    }
+
+    suspend fun updateConversation(
+        conversation: Conversation,
+        changedNodeIds: Set<String>,
+    ) = withContext(Dispatchers.IO) {
+        if (changedNodeIds.isEmpty()) return@withContext
+
+        val database = db
+        val conversationId = conversation.id.toString()
+        database.beginTransaction()
+        try {
+            changedNodeIds.forEach { nodeId ->
+                database.execSQL(
+                    "DELETE FROM message_fts WHERE conversation_id = ? AND node_id = ?",
+                    arrayOf(conversationId, nodeId),
+                )
             }
+            conversation.messageNodes
+                .filter { it.id.toString() in changedNodeIds }
+                .forEach { node -> indexNode(database, conversation, node) }
+
+            database.setTransactionSuccessful()
+        } finally {
+            database.endTransaction()
         }
     }
 
@@ -60,11 +69,13 @@ class MessageFtsManager(private val database: AppDatabase) {
         val results = mutableListOf<MessageSearchResult>()
         val cursor = db.query(
             """
-            SELECT node_id, message_id, conversation_id, title, update_at,
+            SELECT message_fts.node_id, message_fts.message_id, message_fts.conversation_id,
+                   conversationentity.title, conversationentity.update_at,
                    simple_snippet(message_fts, 0, '[', ']', '...', 30) AS snippet
             FROM message_fts
-            WHERE text MATCH jieba_query(?)
-            ORDER BY rank, update_at DESC
+            JOIN conversationentity ON conversationentity.id = message_fts.conversation_id
+            WHERE message_fts.text MATCH jieba_query(?)
+            ORDER BY message_fts.rank, conversationentity.update_at DESC
             LIMIT 50
             """.trimIndent(),
             arrayOf(keyword)
@@ -85,6 +96,32 @@ class MessageFtsManager(private val database: AppDatabase) {
             }
         }
         results
+    }
+
+    private fun indexNode(conversation: Conversation, node: MessageNode) = indexNode(db, conversation, node)
+
+    private fun indexNode(
+        database: androidx.sqlite.db.SupportSQLiteDatabase,
+        conversation: Conversation,
+        node: MessageNode,
+    ) {
+        val conversationId = conversation.id.toString()
+        node.messages.forEach { message ->
+            val text = message.extractFtsText()
+            if (text.isNotBlank()) {
+                database.execSQL(
+                    "INSERT INTO message_fts(text, node_id, message_id, conversation_id, title, update_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    arrayOf(
+                        text,
+                        node.id.toString(),
+                        message.id.toString(),
+                        conversationId,
+                        conversation.title,
+                        conversation.updateAt.toEpochMilli().toString(),
+                    )
+                )
+            }
+        }
     }
 }
 

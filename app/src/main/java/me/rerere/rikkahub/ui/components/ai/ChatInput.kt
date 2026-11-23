@@ -84,6 +84,10 @@ import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.blur.materials.HazeMaterials
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ModelType
@@ -127,6 +131,7 @@ enum class ExpandState {
 @Composable
 fun ChatInput(
     state: ChatInputState,
+    importScope: CoroutineScope,
     loading: Boolean,
     conversation: Conversation,
     settings: Settings,
@@ -161,12 +166,14 @@ fun ChatInput(
     val focusManager = LocalFocusManager.current
 
     fun sendMessage() {
+        if (!loading && state.pendingFileImports > 0) return
         focusManager.clearFocus(force = true)
         keyboardController?.hide()
         if (loading) onCancelClick() else onSendClick()
     }
 
     fun sendMessageWithoutAnswer() {
+        if (!loading && state.pendingFileImports > 0) return
         focusManager.clearFocus(force = true)
         keyboardController?.hide()
         if (loading) onCancelClick() else onLongSendClick()
@@ -192,12 +199,30 @@ fun ChatInput(
     val context = LocalContext.current
     val filesManager: FilesManager = koinInject()
 
+    suspend fun <T> withFileImport(block: suspend () -> T): T {
+        state.beginFileImport()
+        try {
+            return block()
+        } finally {
+            state.finishFileImport()
+        }
+    }
+
+    fun importChatFiles(uris: List<Uri>, onImported: (List<Uri>) -> Unit) {
+        importScope.launch {
+            onImported(withFileImport { filesManager.createChatFilesByContentsOnIo(uris) })
+        }
+    }
+
     // Camera launcher
     var cameraOutputUri by remember { mutableStateOf<Uri?>(null) }
     var cameraOutputFile by remember { mutableStateOf<File?>(null) }
     val (_, launchCameraCrop) = useCropLauncher(
+        scope = importScope,
         onCroppedImageReady = { croppedUri ->
-            state.addImages(filesManager.createChatFilesByContents(listOf(croppedUri)))
+            state.addImages(withFileImport {
+                filesManager.createChatFilesByContentsOnIo(listOf(croppedUri))
+            })
             dismissExpand()
         },
         onCleanup = {
@@ -209,11 +234,17 @@ fun ChatInput(
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { captureSuccessful ->
         if (captureSuccessful && cameraOutputUri != null) {
             if (settings.displaySetting.skipCropImage) {
-                state.addImages(filesManager.createChatFilesByContents(listOf(cameraOutputUri!!)))
-                cameraOutputFile?.delete()
-                cameraOutputFile = null
-                cameraOutputUri = null
-                dismissExpand()
+                val capturedUri = cameraOutputUri!!
+                val capturedFile = cameraOutputFile
+                importChatFiles(listOf(capturedUri)) { localUris ->
+                    state.addImages(localUris)
+                    capturedFile?.delete()
+                    if (cameraOutputFile == capturedFile) {
+                        cameraOutputFile = null
+                        cameraOutputUri = null
+                    }
+                    dismissExpand()
+                }
             } else {
                 launchCameraCrop(cameraOutputUri!!)
             }
@@ -234,8 +265,11 @@ fun ChatInput(
     // Image picker launcher
     var preCropTempFile by remember { mutableStateOf<File?>(null) }
     val (_, launchImageCrop) = useCropLauncher(
+        scope = importScope,
         onCroppedImageReady = { croppedUri ->
-            state.addImages(filesManager.createChatFilesByContents(listOf(croppedUri)))
+            state.addImages(withFileImport {
+                filesManager.createChatFilesByContentsOnIo(listOf(croppedUri))
+            })
             dismissExpand()
         },
         onCleanup = {
@@ -248,24 +282,40 @@ fun ChatInput(
             if (selectedUris.isNotEmpty()) {
                 Log.d("ImagePickButton", "Selected URIs: $selectedUris")
                 if (settings.displaySetting.skipCropImage) {
-                    state.addImages(filesManager.createChatFilesByContents(selectedUris))
-                    dismissExpand()
+                    importChatFiles(selectedUris) {
+                        state.addImages(it)
+                        dismissExpand()
+                    }
                 } else {
                     if (selectedUris.size == 1) {
                         val tempFile = File(context.appTempFolder, "pick_temp_${System.currentTimeMillis()}.jpg")
-                        runCatching {
-                            context.contentResolver.openInputStream(selectedUris.first())?.use { input ->
-                                tempFile.outputStream().use { output -> input.copyTo(output) }
+                        importScope.launch {
+                            withFileImport {
+                                try {
+                                    withContext(Dispatchers.IO) {
+                                        val input = context.contentResolver.openInputStream(selectedUris.first())
+                                            ?: error("Failed to open selected image")
+                                        input.use {
+                                            tempFile.outputStream().use { output -> it.copyTo(output) }
+                                        }
+                                    }
+                                    preCropTempFile = tempFile
+                                    launchImageCrop(tempFile.toUri())
+                                } catch (error: kotlinx.coroutines.CancellationException) {
+                                    tempFile.delete()
+                                    throw error
+                                } catch (error: Exception) {
+                                    tempFile.delete()
+                                    Log.e("ImagePickButton", "Failed to copy image to temp, falling back", error)
+                                    launchImageCrop(selectedUris.first())
+                                }
                             }
-                            preCropTempFile = tempFile
-                            launchImageCrop(tempFile.toUri())
-                        }.onFailure {
-                            Log.e("ImagePickButton", "Failed to copy image to temp, falling back", it)
-                            launchImageCrop(selectedUris.first())
                         }
                     } else {
-                        state.addImages(filesManager.createChatFilesByContents(selectedUris))
-                        dismissExpand()
+                        importChatFiles(selectedUris) {
+                            state.addImages(it)
+                            dismissExpand()
+                        }
                     }
                 }
             } else {
@@ -277,8 +327,10 @@ fun ChatInput(
     val videoPickerLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { selectedUris ->
             if (selectedUris.isNotEmpty()) {
-                state.addVideos(filesManager.createChatFilesByContents(selectedUris))
-                dismissExpand()
+                importChatFiles(selectedUris) {
+                    state.addVideos(it)
+                    dismissExpand()
+                }
             }
         }
 
@@ -286,8 +338,10 @@ fun ChatInput(
     val audioPickerLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { selectedUris ->
             if (selectedUris.isNotEmpty()) {
-                state.addAudios(filesManager.createChatFilesByContents(selectedUris))
-                dismissExpand()
+                importChatFiles(selectedUris) {
+                    state.addAudios(it)
+                    dismissExpand()
+                }
             }
         }
 
@@ -295,23 +349,41 @@ fun ChatInput(
     val filePickerLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
             if (uris.isNotEmpty()) {
-                val documents = uris.mapNotNull { uri ->
-                    val fileName = filesManager.getFileNameFromUri(uri) ?: "file"
-                    val mime = filesManager.getFileMimeType(uri) ?: "text/plain"
-                    if (isAllowedFileType(fileName, mime)) {
-                        val localUri = filesManager.createChatFilesByContents(listOf(uri))[0]
-                        UIMessagePart.Document(url = localUri.toString(), fileName = fileName, mime = mime)
-                    } else {
-                        toaster.show(
-                            context.getString(R.string.chat_input_unsupported_file_type, fileName),
-                            type = ToastType.Error
-                        )
-                        null
+                importScope.launch {
+                    withFileImport {
+                        val (documents, unsupportedFiles) = withContext(Dispatchers.IO) {
+                            val importedDocuments = mutableListOf<UIMessagePart.Document>()
+                            val unsupportedNames = mutableListOf<String>()
+                            uris.forEach { uri ->
+                                val fileName = filesManager.getFileNameFromUri(uri) ?: "file"
+                                val mime = filesManager.getFileMimeType(uri) ?: "text/plain"
+                                if (isAllowedFileType(fileName, mime)) {
+                                    filesManager.createChatFilesByContents(listOf(uri)).singleOrNull()?.let { localUri ->
+                                        importedDocuments.add(
+                                            UIMessagePart.Document(
+                                                url = localUri.toString(),
+                                                fileName = fileName,
+                                                mime = mime,
+                                            )
+                                        )
+                                    }
+                                } else {
+                                    unsupportedNames.add(fileName)
+                                }
+                            }
+                            importedDocuments to unsupportedNames
+                        }
+                        unsupportedFiles.forEach { fileName ->
+                            toaster.show(
+                                context.getString(R.string.chat_input_unsupported_file_type, fileName),
+                                type = ToastType.Error
+                            )
+                        }
+                        if (documents.isNotEmpty()) {
+                            state.addFiles(documents)
+                            dismissExpand()
+                        }
                     }
-                }
-                if (documents.isNotEmpty()) {
-                    state.addFiles(documents)
-                    dismissExpand()
                 }
             }
         }
@@ -369,6 +441,7 @@ fun ChatInput(
 
                         TextInputRow(
                             state = state,
+                            importScope = importScope,
                             onSendMessage = { sendMessage() },
                         )
 
@@ -457,7 +530,7 @@ fun ChatInput(
                                     .size(30.dp)
                                     .clip(CircleShape)
                                     .combinedClickable(
-                                        enabled = loading || !state.isEmpty(),
+                                        enabled = loading || (!state.isEmpty() && state.pendingFileImports == 0),
                                         onClick = {
                                             dismissExpand()
                                             sendMessage()
@@ -467,14 +540,15 @@ fun ChatInput(
                                         }
                                     )
                             ) {
+                                val canSend = !state.isEmpty() && state.pendingFileImports == 0
                                 val containerColor = when {
                                     loading -> MaterialTheme.colorScheme.errorContainer
-                                    state.isEmpty() -> MaterialTheme.colorScheme.surfaceContainerHigh
+                                    !canSend -> MaterialTheme.colorScheme.surfaceContainerHigh
                                     else -> MaterialTheme.colorScheme.primary
                                 }
                                 val contentColor = when {
                                     loading -> MaterialTheme.colorScheme.onErrorContainer
-                                    state.isEmpty() -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                    !canSend -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                                     else -> MaterialTheme.colorScheme.onPrimary
                                 }
                                 Surface(
@@ -585,6 +659,7 @@ private fun ActionIconButton(
 @Composable
 private fun TextInputRow(
     state: ChatInputState,
+    importScope: CoroutineScope,
     onSendMessage: () -> Unit,
 ) {
     val settings = LocalSettings.current
@@ -593,6 +668,21 @@ private fun TextInputRow(
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val filesManager: FilesManager = koinInject()
+
+    suspend fun <T> withFileImport(block: suspend () -> T): T {
+        state.beginFileImport()
+        try {
+            return block()
+        } finally {
+            state.finishFileImport()
+        }
+    }
+
+    fun importChatFiles(uris: List<Uri>, onImported: (List<Uri>) -> Unit) {
+        importScope.launch {
+            onImported(withFileImport { filesManager.createChatFilesByContentsOnIo(uris) })
+        }
+    }
     val assistant = settings.getCurrentAssistant()
     val quickMessages = remember(settings.quickMessages, assistant.quickMessageIds) {
         settings.getQuickMessagesOfAssistant(assistant)
@@ -683,11 +773,7 @@ private fun TextInputRow(
                         transferableContent.consume { item ->
                             val uri = item.uri
                             if (uri != null) {
-                                state.addImages(
-                                    filesManager.createChatFilesByContents(
-                                        listOf(uri)
-                                    )
-                                )
+                                importChatFiles(listOf(uri)) { state.addImages(it) }
                             }
                             uri != null
                         }
@@ -697,8 +783,14 @@ private fun TextInputRow(
                         transferableContent.consume { item ->
                             val text = item.text?.toString()
                             if (text != null && text.length > settings.displaySetting.pasteLongTextThreshold) {
-                                val document = filesManager.createChatTextFile(text)
-                                state.addFiles(listOf(document))
+                                importScope.launch {
+                                    withFileImport {
+                                        val document = withContext(Dispatchers.IO) {
+                                            filesManager.createChatTextFile(text)
+                                        }
+                                        state.addFiles(listOf(document))
+                                    }
+                                }
                                 true
                             } else {
                                 false
@@ -729,7 +821,9 @@ private fun TextInputRow(
                     imeAction = if (settings.displaySetting.sendOnEnter) ImeAction.Send else ImeAction.Default
                 ),
                 onKeyboardAction = {
-                    if (settings.displaySetting.sendOnEnter && !state.isEmpty() && rikkahubLock == null) {
+                    if (settings.displaySetting.sendOnEnter && !state.isEmpty() &&
+                        state.pendingFileImports == 0 && rikkahubLock == null
+                    ) {
                         onSendMessage()
                     }
                 },

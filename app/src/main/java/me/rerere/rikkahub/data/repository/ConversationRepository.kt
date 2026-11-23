@@ -35,6 +35,7 @@ class ConversationRepository(
     companion object {
         private const val PAGE_SIZE = 20
         private const val INITIAL_LOAD_SIZE = 40
+        private const val NODE_DELETE_BATCH_SIZE = 900
     }
 
     suspend fun getRecentConversations(assistantId: Uuid, limit: Int = 10): List<Conversation> {
@@ -226,15 +227,32 @@ class ConversationRepository(
     }
 
     suspend fun updateConversation(conversation: Conversation) {
-        database.withTransaction {
-            conversationDAO.update(
-                conversationToConversationEntity(conversation)
+        val conversationId = conversation.id.toString()
+        val syncPlan = database.withTransaction {
+            val updatedConversationEntity = conversationToConversationEntity(conversation)
+            val updatedNodes = messageNodesToEntities(conversationId, conversation.messageNodes)
+            val currentNodes = messageNodeDAO.getNodesOfConversation(conversationId)
+            val plan = createMessageNodeSyncPlan(
+                currentNodes = currentNodes,
+                updatedNodes = updatedNodes,
             )
-            // 删除旧的节点，插入新的节点
-            messageNodeDAO.deleteByConversation(conversation.id.toString())
-            saveMessageNodes(conversation.id.toString(), conversation.messageNodes)
+
+            conversationDAO.update(updatedConversationEntity)
+            plan.deletes.chunked(NODE_DELETE_BATCH_SIZE).forEach { nodeIds ->
+                messageNodeDAO.deleteByIds(nodeIds)
+            }
+            if (plan.updates.isNotEmpty()) {
+                messageNodeDAO.updateAll(plan.updates)
+            }
+            if (plan.inserts.isNotEmpty()) {
+                messageNodeDAO.insertNewAll(plan.inserts)
+            }
+            plan
         }
-        messageFtsManager.indexConversation(conversation)
+        messageFtsManager.updateConversation(
+            conversation = conversation,
+            changedNodeIds = syncPlan.ftsNodeIds,
+        )
     }
 
     suspend fun deleteConversation(conversation: Conversation, deleteFiles: Boolean = true) {
@@ -381,7 +399,11 @@ class ConversationRepository(
     }
 
     private suspend fun saveMessageNodes(conversationId: String, nodes: List<MessageNode>) {
-        val entities = nodes.mapIndexed { index, node ->
+        messageNodeDAO.insertAll(messageNodesToEntities(conversationId, nodes))
+    }
+
+    private fun messageNodesToEntities(conversationId: String, nodes: List<MessageNode>): List<MessageNodeEntity> =
+        nodes.mapIndexed { index, node ->
             MessageNodeEntity(
                 id = node.id.toString(),
                 conversationId = conversationId,
@@ -390,8 +412,6 @@ class ConversationRepository(
                 selectIndex = node.selectIndex
             )
         }
-        messageNodeDAO.insertAll(entities)
-    }
 }
 
 /**

@@ -60,11 +60,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewModelScope
 import com.dokar.sonner.ToastType
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.hugeicons.HugeIcons
@@ -158,28 +161,33 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
 
     // 初始化输入状态（处理传入的 files 和 text 参数）
     LaunchedEffect(files, text) {
-        if (files.isNotEmpty()) {
-            val localFiles = filesManager.createChatFilesByContents(files)
-            val contentTypes = files.mapNotNull { file ->
-                filesManager.getFileMimeType(file)
-            }
-            val parts = buildList {
-                localFiles.forEachIndexed { index, file ->
-                    val type = contentTypes.getOrNull(index)
-                    if (type?.startsWith("image/") == true) {
-                        add(UIMessagePart.Image(url = file.toString()))
-                    } else if (type?.startsWith("video/") == true) {
-                        add(UIMessagePart.Video(url = file.toString()))
-                    } else if (type?.startsWith("audio/") == true) {
-                        add(UIMessagePart.Audio(url = file.toString()))
-                    }
-                }
-            }
-            inputState.messageContent = parts
-        }
         text?.base64Decode()?.let { decodedText ->
             if (decodedText.isNotEmpty()) {
                 inputState.setMessageText(decodedText)
+            }
+        }
+        if (files.isNotEmpty()) {
+            inputState.beginFileImport()
+            try {
+                val contentTypes = withContext(Dispatchers.IO) {
+                    files.mapNotNull { file -> filesManager.getFileMimeType(file) }
+                }
+                val localFiles = filesManager.createChatFilesByContentsOnIo(files)
+                val parts = buildList {
+                    localFiles.forEachIndexed { index, file ->
+                        val type = contentTypes.getOrNull(index)
+                        if (type?.startsWith("image/") == true) {
+                            add(UIMessagePart.Image(url = file.toString()))
+                        } else if (type?.startsWith("video/") == true) {
+                            add(UIMessagePart.Video(url = file.toString()))
+                        } else if (type?.startsWith("audio/") == true) {
+                            add(UIMessagePart.Audio(url = file.toString()))
+                        }
+                    }
+                }
+                inputState.messageContent = inputState.messageContent + parts
+            } finally {
+                inputState.finishFileImport()
             }
         }
     }
@@ -462,6 +470,7 @@ private fun ChatPageContent(
             bottomBar = {
                 ChatInput(
                     state = inputState,
+                    importScope = vm.viewModelScope,
                     loading = loadingJob != null,
                     settings = setting,
                     conversation = conversation,

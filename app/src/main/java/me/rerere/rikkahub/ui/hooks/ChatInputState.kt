@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import me.rerere.ai.ui.UIMessagePart
@@ -13,9 +14,19 @@ import kotlin.uuid.Uuid
 class ChatInputState {
     val textContent = TextFieldState()
     var messageContent by mutableStateOf(listOf<UIMessagePart>())
+    var pendingFileImports by mutableIntStateOf(0)
+        private set
     var editingMessage by mutableStateOf<Uuid?>(null)
     private var editingParts: List<UIMessagePart>? = null
     private var editingAttachmentUrls: Set<String> = emptySet()
+
+    fun beginFileImport() {
+        pendingFileImports++
+    }
+
+    fun finishFileImport() {
+        pendingFileImports = (pendingFileImports - 1).coerceAtLeast(0)
+    }
 
     fun clearInput() {
         textContent.setTextAndPlaceCursorAtEnd("")
