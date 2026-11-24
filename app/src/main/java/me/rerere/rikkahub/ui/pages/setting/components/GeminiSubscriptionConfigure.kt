@@ -28,11 +28,13 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.dokar.sonner.ToastType
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.ai.gemini.GeminiOAuthAccountRepository
 import me.rerere.rikkahub.data.ai.gemini.GeminiOAuthLoginService
 import me.rerere.rikkahub.data.ai.gemini.GeminiOAuthLoginState
 import me.rerere.rikkahub.data.ai.gemini.GeminiOAuthQuotaGroup
+import me.rerere.rikkahub.ui.components.ai.formatGeminiQuotaRowTitle
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.utils.formatQuotaResetTimeInShanghai
 import org.koin.compose.koinInject
@@ -169,11 +171,11 @@ internal fun GeminiSubscriptionConfigure() {
                                 Text(group.displayName)
                                 group.buckets.forEach { bucket ->
                                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        Text(bucket.displayName)
+                                        Text(formatGeminiQuotaRowTitle("", bucket))
                                         bucket.remainingFraction?.let { fraction ->
-                                            val percent = (fraction * 100).toInt()
+                                            val percent = (fraction.coerceIn(0.0, 1.0) * 100).roundToInt()
                                             LinearProgressIndicator(
-                                                progress = { fraction.toFloat() },
+                                                progress = { fraction.toFloat().coerceIn(0f, 1f) },
                                                 modifier = Modifier.fillMaxWidth(),
                                             )
                                             Text(

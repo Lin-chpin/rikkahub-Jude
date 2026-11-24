@@ -37,18 +37,59 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Time02
 import me.rerere.rikkahub.R
+import kotlin.math.roundToInt
 import me.rerere.rikkahub.data.ai.gemini.GeminiOAuthAccountRepository
+import me.rerere.rikkahub.data.ai.gemini.GeminiOAuthQuotaBucket
+import me.rerere.rikkahub.data.ai.gemini.GeminiOAuthQuotaGroup
 import me.rerere.rikkahub.data.ai.openai.OpenAICodexAuthService
 import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.utils.formatQuotaResetTimeInShanghai
 import org.koin.compose.koinInject
 
-private data class QuotaRow(
+internal data class QuotaRow(
     val title: String,
     val remainingFraction: Float?,
     val resetTime: String?,
 )
+
+internal fun List<GeminiOAuthQuotaGroup>.toQuotaRows(): List<QuotaRow> = flatMap { group ->
+    group.buckets.map { bucket ->
+        QuotaRow(
+            title = formatGeminiQuotaRowTitle(group.displayName, bucket),
+            remainingFraction = bucket.remainingFraction?.toFloat(),
+            resetTime = bucket.resetTime?.let(::formatQuotaResetTimeInShanghai),
+        )
+    }
+}
+
+internal fun formatGeminiQuotaRowTitle(
+    groupDisplayName: String,
+    bucket: GeminiOAuthQuotaBucket,
+): String {
+    val groupName = groupDisplayName.trim()
+    val bucketName = bucket.displayName.trim()
+    val baseTitle = when {
+        groupName.isNotEmpty() && bucketName.isNotEmpty() && !bucketName.equals(groupName, ignoreCase = true) ->
+            "$groupName · $bucketName"
+        bucketName.isNotEmpty() -> bucketName
+        else -> groupName
+    }
+    val windowLabel = bucket.window?.trim()?.takeIf(String::isNotEmpty) ?: return baseTitle
+    if (titleMentionsWindow(baseTitle, windowLabel)) return baseTitle
+    return if (baseTitle.isEmpty()) windowLabel else "$baseTitle ($windowLabel)"
+}
+
+private fun titleMentionsWindow(title: String, windowLabel: String): Boolean {
+    if (title.contains(windowLabel, ignoreCase = true)) return true
+    val aliases = when (windowLabel.lowercase()) {
+        "5h" -> listOf("5-hour", "5 hour", "five hour", "five-hour", "5小时", "5 小时")
+        "weekly", "7d", "1w" -> listOf("weekly", "7d", "1w", "week", "7天", "7 天", "每周")
+        "24h", "daily", "1d" -> listOf("24h", "daily", "1d", "每日", "24 小时")
+        else -> emptyList()
+    }
+    return aliases.any { title.contains(it, ignoreCase = true) }
+}
 
 @Composable
 internal fun SubscriptionQuotaButton(model: Model?) {
@@ -76,15 +117,7 @@ internal fun SubscriptionQuotaButton(model: Model?) {
             errorText = null
             try {
                 rows = when (val selectedProvider = provider) {
-                    is ProviderSetting.Google -> geminiAccountRepository.fetchQuota().flatMap { group ->
-                        group.buckets.map { bucket ->
-                            QuotaRow(
-                                title = "${group.displayName} · ${bucket.displayName}",
-                                remainingFraction = bucket.remainingFraction?.toFloat(),
-                                resetTime = bucket.resetTime?.let(::formatQuotaResetTimeInShanghai),
-                            )
-                        }
-                    }
+                    is ProviderSetting.Google -> geminiAccountRepository.fetchQuota().toQuotaRows()
 
                     is ProviderSetting.OpenAI -> codexAuthService.fetchQuota(selectedProvider).map { window ->
                         QuotaRow(
@@ -173,7 +206,7 @@ internal fun SubscriptionQuotaButton(model: Model?) {
                                     Text(
                                         stringResource(
                                             R.string.gemini_oauth_quota_remaining,
-                                            (fraction.coerceIn(0f, 1f) * 100).toInt(),
+                                            (fraction.coerceIn(0f, 1f) * 100).roundToInt(),
                                         )
                                     )
                                 } ?: Text(stringResource(R.string.gemini_oauth_quota_value_unavailable))

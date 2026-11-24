@@ -3,6 +3,8 @@ package me.rerere.rikkahub.ui.pages.assistant
 import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -12,13 +14,16 @@ import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.model.AssistantMemory
 import me.rerere.rikkahub.data.model.MemoryScope
+import me.rerere.rikkahub.data.model.Tag
 import me.rerere.rikkahub.data.model.memoryScope
 import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.model.Lorebook
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.service.ChatService
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.uuid.Uuid
 
 class AssistantVM(
@@ -31,9 +36,23 @@ class AssistantVM(
     val settings: StateFlow<Settings> = settingsStore.settingsFlow
         .stateIn(viewModelScope, SharingStarted.Eagerly, Settings.dummy())
 
+    private val memoryFlowCache = AssistantMemoryFlowCache(viewModelScope, memoryRepository::observeMemories)
+
     fun updateSettings(settings: Settings) {
         viewModelScope.launch {
             settingsStore.update(settings)
+        }
+    }
+
+    fun updateAssistants(assistants: List<Assistant>) {
+        viewModelScope.launch {
+            settingsStore.update { it.copy(assistants = assistants) }
+        }
+    }
+
+    fun updateAssistantTags(tags: List<Tag>) {
+        viewModelScope.launch {
+            settingsStore.update { it.copy(assistantTags = tags) }
         }
     }
 
@@ -97,7 +116,27 @@ class AssistantVM(
         }
     }
 
-    fun getMemories(assistant: Assistant) = memoryRepository.observeMemories(assistant.memoryScope)
+    fun getMemories(assistant: Assistant): StateFlow<List<AssistantMemory>> =
+        memoryFlowCache.get(assistant)
+}
+
+/**
+ * Caches memory observation [StateFlow] instances by [MemoryScope] so LazyColumn item
+ * recompositions during drag-and-drop do not recreate Room flows or re-subscribe queries.
+ */
+internal class AssistantMemoryFlowCache(
+    private val scope: CoroutineScope,
+    private val observeMemories: (MemoryScope) -> Flow<List<AssistantMemory>>,
+) {
+    private val flows = ConcurrentHashMap<String, StateFlow<List<AssistantMemory>>>()
+
+    fun get(assistant: Assistant): StateFlow<List<AssistantMemory>> {
+        val memoryScope = assistant.memoryScope
+        return flows.getOrPut(memoryScope.ownerId) {
+            observeMemories(memoryScope)
+                .stateIn(scope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        }
+    }
 }
 
 internal fun Settings.withAssistantRemoved(assistantId: Uuid): Settings? {

@@ -40,14 +40,16 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -59,10 +61,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.rerere.hugeicons.stroke.MoreVertical
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.Screen
-import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.model.Assistant
-import me.rerere.rikkahub.data.model.AssistantMemory
 import me.rerere.rikkahub.data.model.Lorebook
+import me.rerere.rikkahub.data.model.Tag as AssistantTag
+import me.rerere.rikkahub.data.model.memoryScope
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.FormItem
 import me.rerere.rikkahub.ui.components.ui.Tag
@@ -98,9 +100,29 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
     // 操作菜单状态
     var actionSheetAssistant by remember { mutableStateOf<Assistant?>(null) }
 
+    val orderedAssistantsState = remember { mutableStateOf(settings.assistants) }
+    val reorderPendingState = remember { mutableStateOf(false) }
+    var isDraggingAssistants by remember { mutableStateOf(false) }
+    LaunchedEffect(settings.assistants, isDraggingAssistants) {
+        if (!isDraggingAssistants) {
+            orderedAssistantsState.value = settings.assistants
+            reorderPendingState.value = false
+        }
+    }
+    val currentOnUpdateAssistants = rememberUpdatedState(vm::updateAssistants)
+    val commitReorder by rememberUpdatedState {
+        if (reorderPendingState.value) {
+            currentOnUpdateAssistants.value(orderedAssistantsState.value)
+            reorderPendingState.value = false
+        }
+    }
+    val assistantTagsById = remember(settings.assistantTags) {
+        settings.assistantTags.associateBy { it.id }
+    }
+
     // 根据搜索关键词和选中的标签过滤助手
-    val filteredAssistants = remember(settings.assistants, selectedTagIds, searchQuery) {
-        settings.assistants.filter { assistant ->
+    val filteredAssistants = remember(orderedAssistantsState.value, selectedTagIds, searchQuery) {
+        orderedAssistantsState.value.filter { assistant ->
             val matchesSearch = searchQuery.isBlank() ||
                 assistant.name.contains(searchQuery, ignoreCase = true)
             val matchesTags = selectedTagIds.isEmpty() ||
@@ -143,12 +165,13 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
         ) {
             val lazyListState = rememberLazyListState()
             val isFiltering = selectedTagIds.isNotEmpty() || searchQuery.isNotBlank()
+            val currentIsFiltering by rememberUpdatedState(isFiltering)
             val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
-                if (!isFiltering) {
-                    val newAssistants = settings.assistants.toMutableList().apply {
-                        add(to.index, removeAt(from.index))
+                if (!currentIsFiltering) {
+                    reorderAssistants(orderedAssistantsState.value, from, to)?.let { updated ->
+                        orderedAssistantsState.value = updated
+                        reorderPendingState.value = true
                     }
-                    vm.updateSettings(settings.copy(assistants = newAssistants))
                 }
             }
             val haptic = LocalHapticFeedback.current
@@ -177,12 +200,12 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
 
             // 标签过滤器
             AssistantTagsFilterRow(
-                settings = settings,
-                vm = vm,
+                assistantTags = settings.assistantTags,
                 selectedTagIds = selectedTagIds,
                 onUpdateSelectedTagIds = { ids ->
                     selectedTagIds = ids
-                }
+                },
+                onUpdateTags = vm::updateAssistantTags,
             )
 
             LazyColumn(
@@ -198,13 +221,18 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
                         state = reorderableState,
                         key = assistant.id,
                     ) { isDragging ->
-                        val memories by vm.getMemories(assistant).collectAsStateWithLifecycle(
-                            initialValue = emptyList(),
-                        )
+                        val draggingState = rememberUpdatedState(isDragging)
+                        val memoryCount = if (assistant.enableMemory) {
+                            remember(assistant.memoryScope) {
+                                vm.getMemories(assistant)
+                            }.collectAsStateWithLifecycle().value.size
+                        } else {
+                            0
+                        }
                         AssistantItem(
                             assistant = assistant,
-                            settings = settings,
-                            memories = memories,
+                            assistantTagsById = assistantTagsById,
+                            memoryCount = memoryCount,
                             onEdit = {
                                 navController.navigate(Screen.AssistantDetail(id = assistant.id.toString()))
                             },
@@ -212,17 +240,23 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
                                 actionSheetAssistant = assistant
                             },
                             modifier = Modifier
-                                .scale(if (isDragging) 0.95f else 1f)
+                                .graphicsLayer {
+                                    val scale = if (draggingState.value) 0.95f else 1f
+                                    scaleX = scale
+                                    scaleY = scale
+                                }
                                 .fillMaxWidth()
-                                .animateItem()
                                 .then(
                                     if (!isFiltering) {
                                         Modifier.longPressDraggableHandle(
                                             onDragStarted = {
+                                                isDraggingAssistants = true
                                                 haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
                                             },
                                             onDragStopped = {
+                                                isDraggingAssistants = false
                                                 haptic.performHapticFeedback(HapticFeedbackType.GestureEnd)
+                                                commitReorder()
                                             }
                                         )
                                     } else {
@@ -260,62 +294,82 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
 
 @Composable
 private fun AssistantTagsFilterRow(
-    settings: Settings,
-    vm: AssistantVM,
+    assistantTags: List<AssistantTag>,
     selectedTagIds: Set<Uuid>,
-    onUpdateSelectedTagIds: (Set<Uuid>) -> Unit
+    onUpdateSelectedTagIds: (Set<Uuid>) -> Unit,
+    onUpdateTags: (List<AssistantTag>) -> Unit,
 ) {
-    val haptic = LocalHapticFeedback.current
-    if (settings.assistantTags.isNotEmpty()) {
-        val tagsListState = rememberLazyListState()
-        val tagsReorderableState = rememberReorderableLazyListState(tagsListState) { from, to ->
-            val newTags = settings.assistantTags.toMutableList().apply {
-                add(to.index, removeAt(from.index))
-            }
-            vm.updateSettings(settings.copy(assistantTags = newTags))
-        }
+    if (assistantTags.isEmpty()) return
 
-        LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.padding(horizontal = 16.dp),
-            state = tagsListState
-        ) {
-            lazyItems(items = settings.assistantTags, key = { tag -> tag.id }) { tag ->
-                ReorderableItem(
-                    state = tagsReorderableState, key = tag.id
-                ) { isDragging ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        FilterChip(
-                            onClick = {
-                                onUpdateSelectedTagIds(
-                                    if (tag.id in selectedTagIds) {
-                                        selectedTagIds - tag.id
-                                    } else {
-                                        selectedTagIds + tag.id
-                                    }
-                                )
-                            },
-                            label = {
-                                Text(tag.name)
-                            },
-                            selected = tag.id in selectedTagIds,
-                            shape = RoundedCornerShape(50),
-                            modifier = Modifier
-                                .scale(if (isDragging) 0.95f else 1f)
-                                .longPressDraggableHandle(
-                                    onDragStarted = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
-                                    },
-                                    onDragStopped = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.GestureEnd)
-                                    },
-                                )
+    val haptic = LocalHapticFeedback.current
+    val tagsListState = rememberLazyListState()
+    val orderedTagsState = remember { mutableStateOf(assistantTags) }
+    val reorderPendingState = remember { mutableStateOf(false) }
+    var isDraggingTags by remember { mutableStateOf(false) }
+    LaunchedEffect(assistantTags, isDraggingTags) {
+        if (!isDraggingTags) {
+            orderedTagsState.value = assistantTags
+            reorderPendingState.value = false
+        }
+    }
+    val currentOnUpdateTags = rememberUpdatedState(onUpdateTags)
+    val commitReorder by rememberUpdatedState {
+        if (reorderPendingState.value) {
+            currentOnUpdateTags.value(orderedTagsState.value)
+            reorderPendingState.value = false
+        }
+    }
+    val tagsReorderableState = rememberReorderableLazyListState(tagsListState) { from, to ->
+        reorderAssistantTags(orderedTagsState.value, from, to)?.let { updated ->
+            orderedTagsState.value = updated
+            reorderPendingState.value = true
+        }
+    }
+
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.padding(horizontal = 16.dp),
+        state = tagsListState
+    ) {
+        lazyItems(items = orderedTagsState.value, key = { tag -> tag.id }) { tag ->
+            ReorderableItem(
+                state = tagsReorderableState,
+                key = tag.id
+            ) { isDragging ->
+                val draggingState = rememberUpdatedState(isDragging)
+                FilterChip(
+                    onClick = {
+                        onUpdateSelectedTagIds(
+                            if (tag.id in selectedTagIds) {
+                                selectedTagIds - tag.id
+                            } else {
+                                selectedTagIds + tag.id
+                            }
                         )
-                    }
-                }
+                    },
+                    label = {
+                        Text(tag.name)
+                    },
+                    selected = tag.id in selectedTagIds,
+                    shape = RoundedCornerShape(50),
+                    modifier = Modifier
+                        .graphicsLayer {
+                            val scale = if (draggingState.value) 0.95f else 1f
+                            scaleX = scale
+                            scaleY = scale
+                        }
+                        .longPressDraggableHandle(
+                            onDragStarted = {
+                                isDraggingTags = true
+                                haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+                            },
+                            onDragStopped = {
+                                isDraggingTags = false
+                                haptic.performHapticFeedback(HapticFeedbackType.GestureEnd)
+                                commitReorder()
+                            },
+                        )
+                )
             }
         }
     }
@@ -399,9 +453,9 @@ private fun AssistantCreationSheet(
 @Composable
 private fun AssistantItem(
     assistant: Assistant,
-    settings: Settings,
+    assistantTagsById: Map<Uuid, AssistantTag>,
     modifier: Modifier = Modifier,
-    memories: List<AssistantMemory>,
+    memoryCount: Int,
     onEdit: () -> Unit,
     onShowActions: () -> Unit,
 ) {
@@ -445,13 +499,13 @@ private fun AssistantItem(
                 ) {
                     if (assistant.enableMemory) {
                         Tag(type = TagType.SUCCESS) {
-                            Text(stringResource(R.string.assistant_page_memory_count, memories.size))
+                            Text(stringResource(R.string.assistant_page_memory_count, memoryCount))
                         }
                     }
 
                     if (assistant.tags.isNotEmpty()) {
                         assistant.tags.take(2).fastForEach { tagId ->
-                            val tag = settings.assistantTags.find { it.id == tagId }
+                            val tag = assistantTagsById[tagId]
                                 ?: return@fastForEach
                             Surface(
                                 shape = RoundedCornerShape(50),

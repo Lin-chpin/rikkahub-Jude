@@ -22,9 +22,15 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +40,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
 import me.rerere.ai.provider.ModelType
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.model.Assistant
@@ -45,7 +52,6 @@ import me.rerere.rikkahub.ui.components.ui.TagsInput
 import me.rerere.rikkahub.ui.components.ui.UIAvatar
 import me.rerere.rikkahub.ui.hooks.heroAnimation
 import me.rerere.rikkahub.ui.theme.CustomColors
-import me.rerere.rikkahub.utils.toFixed
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
 import kotlin.math.roundToInt
@@ -353,6 +359,22 @@ internal fun AssistantBasicContent(
                 }
             }
             HorizontalDivider()
+            val contextSliderState = rememberDeferredSliderState(
+                key = assistant.id,
+                persistedValue = clampContextMessageSize(assistant.contextMessageSize),
+                normalizeFloat = ::normalizeContextMessageSliderValue,
+                toFloat = Int::toFloat,
+                clampFloat = { value ->
+                    if (value.isNaN()) {
+                        DEFAULT_CONTEXT_MESSAGE_SIZE.toFloat()
+                    } else {
+                        value.coerceIn(CONTEXT_MESSAGE_MIN.toFloat(), CONTEXT_MESSAGE_MAX.toFloat())
+                    }
+                },
+                onPendingFlush = { size ->
+                    onUpdate(assistant.copy(contextMessageSize = size))
+                },
+            )
             FormItem(
                 modifier = Modifier.padding(8.dp),
                 label = {
@@ -367,14 +389,23 @@ internal fun AssistantBasicContent(
                     Switch(
                         checked = assistant.contextMessageLimitEnabled,
                         onCheckedChange = { enabled ->
+                            val nextSize = resolveContextMessageLimitToggle(
+                                enabled = enabled,
+                                persistedSize = assistant.contextMessageSize,
+                                transientSliderValue = if (contextSliderState.isDragging) {
+                                    contextSliderState.displayValue
+                                } else {
+                                    null
+                                },
+                                pendingCommittedSize = contextSliderState.pendingCommit,
+                            )
+                            contextSliderState.cancelDrag(
+                                pendingValue = if (nextSize > 0) clampContextMessageSize(nextSize) else null
+                            )
                             onUpdate(
                                 assistant.copy(
                                     contextMessageLimitEnabled = enabled,
-                                    contextMessageSize = if (enabled && assistant.contextMessageSize <= 0) {
-                                        80
-                                    } else {
-                                        assistant.contextMessageSize
-                                    },
+                                    contextMessageSize = nextSize,
                                 )
                             )
                         },
@@ -383,15 +414,18 @@ internal fun AssistantBasicContent(
             ) {
                 if (assistant.contextMessageLimitEnabled) {
                     Slider(
-                        value = assistant.contextMessageSize.coerceIn(1, 512).toFloat(),
-                        onValueChange = {
-                            onUpdate(
-                                assistant.copy(
-                                    contextMessageSize = it.roundToInt()
+                        value = contextSliderState.sliderValue,
+                        onValueChange = contextSliderState::onValueChange,
+                        onValueChangeFinished = {
+                            contextSliderState.onValueChangeFinished { size ->
+                                onUpdate(
+                                    assistant.copy(
+                                        contextMessageSize = size
+                                    )
                                 )
-                            )
+                            }
                         },
-                        valueRange = 1f..512f,
+                        valueRange = CONTEXT_MESSAGE_MIN.toFloat()..CONTEXT_MESSAGE_MAX.toFloat(),
                         steps = 0,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -399,7 +433,7 @@ internal fun AssistantBasicContent(
                     Text(
                         text = stringResource(
                             R.string.assistant_page_context_message_count,
-                            assistant.contextMessageSize.coerceIn(1, 512)
+                            contextSliderState.displayValue
                         ),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.75f),
@@ -490,10 +524,20 @@ internal fun AssistantBasicContent(
         Card(
             colors = CustomColors.cardColorsOnSurfaceContainer
         ) {
+            val backgroundOpacityState = rememberDeferredSliderState(
+                key = assistant.id,
+                persistedValue = normalizeOpacity(assistant.backgroundOpacity),
+                normalizeFloat = ::normalizeOpacity,
+                toFloat = { it },
+                clampFloat = { if (it.isNaN()) 1.0f else it.coerceIn(0f, 1f) },
+                onPendingFlush = { opacity ->
+                    onUpdate(assistant.copy(backgroundOpacity = opacity))
+                },
+            )
             BackgroundPicker(
                 modifier = Modifier.padding(8.dp),
                 background = assistant.background,
-                backgroundOpacity = assistant.backgroundOpacity,
+                backgroundOpacity = backgroundOpacityState.displayValue,
                 onUpdate = { background ->
                     onUpdate(
                         assistant.copy(
@@ -504,46 +548,35 @@ internal fun AssistantBasicContent(
             )
 
             if (assistant.background != null) {
-                val backgroundOpacity = assistant.backgroundOpacity.coerceIn(0f, 1f)
                 HorizontalDivider()
-                FormItem(
-                    modifier = Modifier.padding(8.dp),
-                    label = {
-                        Text(stringResource(R.string.assistant_page_background_opacity))
-                    },
-                    description = {
-                        Text(stringResource(R.string.assistant_page_background_opacity_desc))
-                    }
-                ) {
-                    Slider(
-                        value = backgroundOpacity,
-                        onValueChange = {
-                            onUpdate(
-                                assistant.copy(
-                                    backgroundOpacity = it.toFixed(2).toFloatOrNull()?.coerceIn(0f, 1f) ?: 1.0f
-                                )
+                BackgroundOpacityFormItem(
+                    descriptionResId = R.string.assistant_page_background_opacity_desc,
+                    opacityState = backgroundOpacityState,
+                    onCommit = { opacity ->
+                        onUpdate(
+                            assistant.copy(
+                                backgroundOpacity = opacity
                             )
-                        },
-                        valueRange = 0f..1f,
-                        steps = 19,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Text(
-                        text = stringResource(
-                            R.string.assistant_page_background_opacity_value,
-                            (backgroundOpacity * 100).roundToInt()
-                        ),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.75f),
-                    )
-                }
+                        )
+                    }
+                )
             }
 
             HorizontalDivider()
+            val voiceCallBackgroundOpacityState = rememberDeferredSliderState(
+                key = assistant.id,
+                persistedValue = normalizeOpacity(assistant.voiceCallBackgroundOpacity),
+                normalizeFloat = ::normalizeOpacity,
+                toFloat = { it },
+                clampFloat = { if (it.isNaN()) 1.0f else it.coerceIn(0f, 1f) },
+                onPendingFlush = { opacity ->
+                    onUpdate(assistant.copy(voiceCallBackgroundOpacity = opacity))
+                },
+            )
             BackgroundPicker(
                 modifier = Modifier.padding(8.dp),
                 background = assistant.voiceCallBackground,
-                backgroundOpacity = assistant.voiceCallBackgroundOpacity,
+                backgroundOpacity = voiceCallBackgroundOpacityState.displayValue,
                 labelResId = R.string.assistant_page_voice_call_background,
                 descriptionResId = R.string.assistant_page_voice_call_background_desc,
                 onUpdate = { background ->
@@ -556,41 +589,213 @@ internal fun AssistantBasicContent(
             )
 
             if (assistant.voiceCallBackground != null) {
-                val backgroundOpacity = assistant.voiceCallBackgroundOpacity.coerceIn(0f, 1f)
                 HorizontalDivider()
-                FormItem(
-                    modifier = Modifier.padding(8.dp),
-                    label = {
-                        Text(stringResource(R.string.assistant_page_background_opacity))
-                    },
-                    description = {
-                        Text(stringResource(R.string.assistant_page_voice_call_background_opacity_desc))
-                    }
-                ) {
-                    Slider(
-                        value = backgroundOpacity,
-                        onValueChange = {
-                            onUpdate(
-                                assistant.copy(
-                                    voiceCallBackgroundOpacity = it.toFixed(2).toFloatOrNull()
-                                        ?.coerceIn(0f, 1f) ?: 1.0f
-                                )
+                BackgroundOpacityFormItem(
+                    descriptionResId = R.string.assistant_page_voice_call_background_opacity_desc,
+                    opacityState = voiceCallBackgroundOpacityState,
+                    onCommit = { opacity ->
+                        onUpdate(
+                            assistant.copy(
+                                voiceCallBackgroundOpacity = opacity
                             )
-                        },
-                        valueRange = 0f..1f,
-                        steps = 19,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Text(
-                        text = stringResource(
-                            R.string.assistant_page_background_opacity_value,
-                            (backgroundOpacity * 100).roundToInt()
-                        ),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.75f),
-                    )
-                }
+                        )
+                    }
+                )
             }
         }
+    }
+}
+
+internal const val CONTEXT_MESSAGE_MIN = 1
+internal const val CONTEXT_MESSAGE_MAX = 512
+internal const val DEFAULT_CONTEXT_MESSAGE_SIZE = 80
+private const val PENDING_COMMIT_TIMEOUT_MS = 500L
+
+internal fun clampContextMessageSize(size: Int): Int =
+    size.coerceIn(CONTEXT_MESSAGE_MIN, CONTEXT_MESSAGE_MAX)
+
+internal fun normalizeContextMessageSliderValue(value: Float): Int =
+    if (value.isNaN()) {
+        DEFAULT_CONTEXT_MESSAGE_SIZE
+    } else {
+        value.roundToInt().coerceIn(CONTEXT_MESSAGE_MIN, CONTEXT_MESSAGE_MAX)
+    }
+
+internal fun normalizeOpacity(value: Float): Float =
+    if (value.isNaN()) {
+        1.0f
+    } else {
+        (value.coerceIn(0f, 1f) * 100f).roundToInt() / 100f
+    }
+
+internal fun resolveContextMessageLimitToggle(
+    enabled: Boolean,
+    persistedSize: Int,
+    transientSliderValue: Int?,
+    pendingCommittedSize: Int?,
+): Int {
+    val currentSize = transientSliderValue ?: pendingCommittedSize ?: persistedSize
+    return if (enabled) {
+        if (currentSize <= 0) {
+            DEFAULT_CONTEXT_MESSAGE_SIZE
+        } else {
+            clampContextMessageSize(currentSize)
+        }
+    } else {
+        currentSize
+    }
+}
+
+/**
+ * Holds transient slider drag state in Compose so continuous dragging stays local at 60fps+
+ * and only persists to ViewModel/DataStore when interaction finishes.
+ */
+@Stable
+internal class DeferredSliderState<T>(
+    persistedValue: T,
+    private val normalizeFloat: (Float) -> T,
+    private val toFloat: (T) -> Float,
+    private val clampFloat: (Float) -> Float,
+) {
+    var persistedValue by mutableStateOf(persistedValue)
+        private set
+
+    var sliderValue by mutableFloatStateOf(toFloat(persistedValue))
+        private set
+
+    var isDragging by mutableStateOf(false)
+        private set
+
+    var pendingCommit by mutableStateOf<T?>(null)
+        private set
+
+    val displayValue: T
+        get() = normalizeFloat(sliderValue)
+
+    fun onValueChange(rawValue: Float) {
+        isDragging = true
+        sliderValue = clampFloat(rawValue)
+    }
+
+    fun onValueChangeFinished(onCommit: (T) -> Unit) {
+        val committed = normalizeFloat(sliderValue)
+        sliderValue = toFloat(committed)
+        isDragging = false
+        if (committed != (pendingCommit ?: persistedValue)) {
+            pendingCommit = committed
+            onCommit(committed)
+        }
+    }
+
+    fun syncFromPersisted(newPersistedValue: T) {
+        persistedValue = newPersistedValue
+        val pending = pendingCommit
+        if (pending == null) {
+            if (!isDragging) {
+                sliderValue = toFloat(newPersistedValue)
+            }
+        } else if (newPersistedValue == pending) {
+            pendingCommit = null
+            if (!isDragging) {
+                sliderValue = toFloat(newPersistedValue)
+            }
+        }
+    }
+
+    fun clearPendingAndSync() {
+        pendingCommit = null
+        if (!isDragging) {
+            sliderValue = toFloat(persistedValue)
+        }
+    }
+
+    fun cancelDrag(pendingValue: T? = null) {
+        isDragging = false
+        pendingCommit = pendingValue?.takeIf { it != persistedValue }
+        if (pendingValue != null) {
+            sliderValue = toFloat(pendingValue)
+        }
+    }
+}
+
+@Composable
+private fun <T> rememberDeferredSliderState(
+    key: Any?,
+    persistedValue: T,
+    normalizeFloat: (Float) -> T,
+    toFloat: (T) -> Float,
+    clampFloat: (Float) -> Float,
+    onPendingFlush: (T) -> Unit,
+): DeferredSliderState<T> {
+    val state = remember(key) {
+        DeferredSliderState(
+            persistedValue = persistedValue,
+            normalizeFloat = normalizeFloat,
+            toFloat = toFloat,
+            clampFloat = clampFloat,
+        )
+    }
+    val latestOnPendingFlush by rememberUpdatedState(onPendingFlush)
+    var activeKey by remember { mutableStateOf(key) }
+    SideEffect {
+        activeKey = key
+    }
+
+    LaunchedEffect(state, persistedValue) {
+        state.syncFromPersisted(persistedValue)
+    }
+
+    LaunchedEffect(state, state.pendingCommit) {
+        if (state.pendingCommit != null) {
+            delay(PENDING_COMMIT_TIMEOUT_MS)
+            state.clearPendingAndSync()
+        }
+    }
+
+    DisposableEffect(state) {
+        onDispose {
+            if (state.isDragging && activeKey == key) {
+                state.onValueChangeFinished(latestOnPendingFlush)
+            }
+        }
+    }
+
+    return state
+}
+
+@Composable
+private fun BackgroundOpacityFormItem(
+    descriptionResId: Int,
+    opacityState: DeferredSliderState<Float>,
+    onCommit: (Float) -> Unit,
+) {
+    val backgroundOpacity = opacityState.displayValue
+    FormItem(
+        modifier = Modifier.padding(8.dp),
+        label = {
+            Text(stringResource(R.string.assistant_page_background_opacity))
+        },
+        description = {
+            Text(stringResource(descriptionResId))
+        }
+    ) {
+        Slider(
+            value = opacityState.sliderValue,
+            onValueChange = opacityState::onValueChange,
+            onValueChangeFinished = {
+                opacityState.onValueChangeFinished(onCommit)
+            },
+            valueRange = 0f..1f,
+            steps = 19,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Text(
+            text = stringResource(
+                R.string.assistant_page_background_opacity_value,
+                (backgroundOpacity * 100).roundToInt()
+            ),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.75f),
+        )
     }
 }
