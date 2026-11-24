@@ -128,6 +128,8 @@ fun ChatMessage(
     model: Model? = null,
     assistant: Assistant? = null,
     lastMessage: Boolean = false,
+    allowActions: Boolean = true,
+    showGenerationSpeed: Boolean = true,
     onFork: () -> Unit,
     onRegenerate: () -> Unit,
     onEdit: () -> Unit,
@@ -188,7 +190,7 @@ fun ChatMessage(
         lineHeight = LocalTextStyle.current.lineHeight * settings.fontSizeRatio,
         fontFamily = chatFontFamily
     )
-    var showActionsSheet by remember { mutableStateOf(false) }
+    var showActionsSheet by remember(message.id, allowActions) { mutableStateOf(false) }
     var showVoiceReplyEditor by remember(message.id) { mutableStateOf(false) }
     var showSelectCopySheet by remember { mutableStateOf(false) }
     val navController = LocalNavController.current
@@ -289,7 +291,7 @@ fun ChatMessage(
             }
         }
 
-        val showActions = if (pendingChatVoiceReply) {
+        val showActions = allowActions && if (pendingChatVoiceReply) {
             false
         } else if (lastMessage) {
             !loading
@@ -328,11 +330,14 @@ fun ChatMessage(
 
         if (!pendingChatVoiceReply) {
             ProvideTextStyle(textStyle) {
-                ChatMessageNerdLine(message = message)
+                ChatMessageNerdLine(
+                    message = message,
+                    showGenerationSpeed = showGenerationSpeed,
+                )
             }
         }
     }
-    if (showActionsSheet) {
+    if (showActionsSheet && allowActions) {
         ChatMessageActionsSheet(
             message = message,
             onEdit = { if (chatVoiceReply != null) showVoiceReplyEditor = true else onEdit() },

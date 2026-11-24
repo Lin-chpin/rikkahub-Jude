@@ -26,6 +26,7 @@ import me.rerere.ai.provider.OpenAIAuthType
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.GoogleAuthType
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.SYSTEM_PROMPT_DYNAMIC_SECTION
@@ -46,6 +47,7 @@ import me.rerere.rikkahub.data.ai.transformers.onGenerationFinish
 import me.rerere.rikkahub.data.ai.transformers.transforms
 import me.rerere.rikkahub.data.ai.transformers.visualTransforms
 import me.rerere.rikkahub.data.ai.tools.buildMemoryTools
+import me.rerere.rikkahub.data.ai.gemini.withGeminiSubscriptionCompressedSummary
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.datastore.findProvider
@@ -466,7 +468,9 @@ class GenerationHandler(
                 }
         }
         val effectiveSystemPrompt = if (systemPromptIsPresetSlot) "" else configuredSystemPrompt
-        val internalMessages = buildList {
+        val moveCompressedSummaryToTail = provider is ProviderSetting.Google &&
+            provider.authType == GoogleAuthType.GEMINI_SUBSCRIPTION
+        val systemMessages = buildList {
             val dynamicSystemPrompt = buildString {
                 if (!extraSystemPrompt.isNullOrBlank()) {
                     if (effectiveSystemPrompt.isNotBlank()) {
@@ -475,7 +479,7 @@ class GenerationHandler(
                     }
                     append(extraSystemPrompt)
                 }
-                if (!conversationContextSummary.isNullOrBlank()) {
+                if (!moveCompressedSummaryToTail && !conversationContextSummary.isNullOrBlank()) {
                     appendLine()
                     appendLine()
                     append("The following is a compressed summary of earlier messages in this conversation. ")
@@ -516,9 +520,9 @@ class GenerationHandler(
                 }
                 add(UIMessage(role = MessageRole.SYSTEM, parts = parts))
             }
-            // Response accumulation uses `messages`, keeping request-only state out of storage/UI.
-            addAll(contextMessages)
-        }.transforms(
+        }
+        // Response accumulation uses `messages`, keeping request-only state out of storage/UI.
+        val internalMessages = (systemMessages + contextMessages).transforms(
             transformers = transformers,
             context = context,
             model = model,
@@ -531,6 +535,7 @@ class GenerationHandler(
             onWarning = onInputWarning,
         ).withRequestMessageParts(requestMessageParts)
             .withRuntimeContextInstruction(runtimeStateSystemPrompt)
+            .withGeminiSubscriptionCompressedSummary(provider, conversationContextSummary)
             .let { requestMessages ->
                 if (projectGeminiRelayToolHistory) requestMessages.withToolHistoryAsText() else requestMessages
             }
@@ -595,6 +600,7 @@ class GenerationHandler(
             customHeaders = geminiCacheOverrides.headers,
             customBody = geminiCacheOverrides.body,
             moveMessagesAfterTools = moveMessagesAfterTools,
+            sessionId = effectiveSessionId,
         )
         timing.mark("model_request_prepared")
         voiceCallTiming?.markOnce("model_request_prepared")
@@ -640,7 +646,8 @@ class GenerationHandler(
             responseMessages = responseMessages.handleMessageChunk(chunk = chunk, model = model)
             chunk.usage?.let { usage ->
                 Log.i("PromptCacheUsage", "conversation=$conversationId model=${model.modelId} " +
-                    "promptTokens=${usage.promptTokens} cachedTokens=${usage.cachedTokens}")
+                    "promptTokens=${usage.promptTokens} cachedTokens=${usage.cachedTokens} " +
+                    "cachedTokensReported=${usage.cachedTokensReported}")
                 responseMessages = responseMessages.mapIndexed { index, message ->
                     if (index == responseMessages.lastIndex) {
                         message.copy(usage = message.usage.merge(usage))
@@ -744,7 +751,8 @@ internal fun shouldProjectGeminiRelayToolHistory(model: Model, provider: Provide
 
 private fun ProviderSetting.isOfficialGeminiEndpoint(): Boolean = when (this) {
     // Vertex requests use Google's hard-coded aiplatform.googleapis.com endpoint.
-    is ProviderSetting.Google -> vertexAI || baseUrl.isOfficialGeminiApiBaseUrl()
+    is ProviderSetting.Google -> authType == GoogleAuthType.GEMINI_SUBSCRIPTION ||
+        vertexAI || baseUrl.isOfficialGeminiApiBaseUrl()
     is ProviderSetting.OpenAI -> baseUrl.isOfficialGeminiApiBaseUrl()
 
     else -> false

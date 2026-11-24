@@ -69,6 +69,31 @@ class SettingsUpdateTest {
     }
 
     @Test
+    fun systemPromptUpdateClearsTheLatestPromptWithoutReplacingOtherAssistantFields() {
+        val original = Assistant(id = Uuid.random(), name = "Assistant", systemPrompt = "Long prompt")
+        val current = Settings(
+            assistants = listOf(original.copy(name = "Renamed", systemPrompt = "Partially deleted prompt")),
+        ).withUpdateBaseline()
+        val requested = current.withAssistantSystemPromptUpdate(original.id, "")
+        val result = mergeSettingsUpdate(current, requested)
+
+        assertEquals("", result.assistants.single().systemPrompt)
+        assertEquals("Renamed", result.assistants.single().name)
+    }
+
+    @Test
+    fun sequentialSystemPromptSavesKeepAnExplicitClearAfterEarlierDrafts() {
+        val assistant = Assistant(id = Uuid.random(), name = "Assistant", systemPrompt = "Long prompt")
+        val initial = Settings(assistants = listOf(assistant))
+        val partialSave = initial.withAssistantSystemPromptUpdate(assistant.id, "Partially deleted prompt")
+        val afterPartialSave = mergeSettingsUpdate(initial, partialSave)
+        val clearSave = afterPartialSave.withAssistantSystemPromptUpdate(assistant.id, "")
+        val afterClearSave = mergeSettingsUpdate(afterPartialSave, clearSave)
+
+        assertEquals("", afterClearSave.assistants.single().systemPrompt)
+    }
+
+    @Test
     fun listsWithoutIdsReplaceAsOneSettingAndExplicitRestoreReplacesEverything() {
         val baseline = Settings(favoriteModels = listOf(Uuid.random())).withUpdateBaseline()
         val requested = baseline.copy(favoriteModels = listOf(Uuid.random()))

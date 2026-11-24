@@ -1,6 +1,7 @@
 package me.rerere.ai.registry
 
 import me.rerere.ai.provider.Modality
+import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.ModelAbility
 
 fun interface ModelData<T> {
@@ -8,6 +9,30 @@ fun interface ModelData<T> {
 }
 
 object ModelRegistry {
+    // Responses image generation is a built-in tool on documented mainline models, not a standalone model.
+    private val OPENAI_RESPONSES_IMAGE_GENERATION_MODEL_IDS = setOf(
+        "chat-latest",
+        "gpt-5.2",
+        "gpt-5.2-pro",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.4-pro",
+        "gpt-5.5",
+        "gpt-5.5-pro",
+        "gpt-5.6-cyber",
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-6-astra",
+        "gpt-6-cyber",
+        "gpt-6-luna",
+        "gpt-6-sol",
+        "gpt-6.1-sol",
+        "gpt-6.1-terra",
+        "gpt-6.2-astra",
+        "gpt-6.2-sol",
+    )
+
     private val GPT4O = defineModel {
         tokens("gpt", "4", "o")
         visionInput()
@@ -95,6 +120,25 @@ object ModelRegistry {
 
     private val GPT_5_6_SOL = defineModel {
         exact("gpt-5.6-Sol")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val GPT_5_6_CYBER = defineModel {
+        exact("gpt-5.6-cyber")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val CHAT_LATEST = defineModel {
+        exact("chat-latest")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val GPT_6 = defineModel {
+        tokens("gpt", "6")
+        notTokens("gpt", "5")
         visionInput()
         toolReasoningAbility()
     }
@@ -468,6 +512,9 @@ object ModelRegistry {
         GPT_5_6_TERRA,
         GPT_5_6_LUNA,
         GPT_5_6_SOL,
+        GPT_5_6_CYBER,
+        CHAT_LATEST,
+        GPT_6,
         GEMINI_20_FLASH,
         GEMINI_2_5_FLASH,
         GEMINI_2_5_PRO,
@@ -542,6 +589,14 @@ object ModelRegistry {
         buildList {
             if (ModelAbility.TOOL in abilities) add(ModelAbility.TOOL)
             if (ModelAbility.REASONING in abilities) add(ModelAbility.REASONING)
+        }
+    }
+
+    val MODEL_BUILT_IN_TOOLS = ModelData { modelId ->
+        if (modelId.lowercase() in OPENAI_RESPONSES_IMAGE_GENERATION_MODEL_IDS) {
+            setOf(BuiltInTools.ImageGeneration)
+        } else {
+            emptySet()
         }
     }
 

@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
@@ -113,8 +114,10 @@ import me.rerere.rikkahub.data.voice.VoiceCallVisualCapture
 import me.rerere.rikkahub.data.voice.VoiceCallVisualRequest
 import me.rerere.rikkahub.data.voice.VoiceCallVisualRoundState
 import me.rerere.rikkahub.data.voice.VoiceCallVisualRoundStatus
+import me.rerere.rikkahub.data.voice.VoiceCallVisualSource
 import me.rerere.rikkahub.data.voice.VOICE_CALL_VISUAL_MAX_IMAGES
 import me.rerere.rikkahub.data.voice.VoiceCallVisualSendStatus
+import me.rerere.rikkahub.data.voice.encodeVoiceCallThumbnail
 import me.rerere.rikkahub.data.voice.supportsVoiceCallImages
 import me.rerere.rikkahub.data.voice.canUseVoiceCallVisuals
 import me.rerere.rikkahub.data.voice.prepareRequest
@@ -133,6 +136,7 @@ import me.rerere.rikkahub.service.VoiceCallSessionRegistry
 import me.rerere.rikkahub.service.VoiceCallFloatingBallActions
 import me.rerere.rikkahub.service.VoiceCallScreenCaptureService
 import me.rerere.rikkahub.ui.components.richtext.appendVoiceCallAudioTagAwareText
+import me.rerere.rikkahub.ui.components.richtext.ZoomableAsyncImage
 import me.rerere.rikkahub.ui.components.ai.AsrButton
 import me.rerere.rikkahub.ui.components.message.CollapsibleTranslationText
 import me.rerere.rikkahub.ui.components.message.TranslateMessageButton
@@ -237,6 +241,7 @@ fun VoiceCallOverlay(
     val visualCapture = remember(conversation.id) { VoiceCallVisualCapture(context.applicationContext) }
     val visualRound = remember(conversation.id) { VoiceCallVisualRoundState() }
     val visualRoundState by visualRound.state.collectAsState()
+    var floatingThumbnail by remember(conversation.id) { mutableStateOf<ByteArray?>(null) }
     var visualSpeechStarted by remember(conversation.id) { mutableStateOf(false) }
     val visualCameraState by visualCapture.cameraState.collectAsState()
     val visualScreenState by visualCapture.screenState.collectAsState()
@@ -260,6 +265,7 @@ fun VoiceCallOverlay(
     DisposableEffect(conversation.id) {
         onDispose {
             visualRound.clear()
+            floatingThumbnail?.fill(0)
         }
     }
     LaunchedEffect(isHistory, callAssistant.voiceCallVisualEnabled, supportsCallImages) {
@@ -581,6 +587,11 @@ fun VoiceCallOverlay(
         submittedKeyboardInput = contentText
         val includeConnectedEvent = !hasSubmittedUserMessage
         var visualRequestHasParts = false
+        val visualArchiveImageBytesProvider: (suspend () -> List<ByteArray>)? =
+            activeVisualSessionId?.let { sessionId -> { visualRound.archiveImageCopiesForMessage(sessionId) } }
+        val onVoiceCallArchiveImagesSaved: (() -> Unit)? = activeVisualSessionId?.let { sessionId ->
+            { visualRound.clearArchiveImages(sessionId) }
+        }
         val visualPartsProvider: (suspend () -> List<UIMessagePart>)? = activeVisualSessionId?.let { sessionId ->
                 {
                     val prepared = try {
@@ -630,6 +641,8 @@ fun VoiceCallOverlay(
             requestMode = ChatRequestMode.VoiceCall,
             includeVoiceCallConnectedEvent = includeConnectedEvent,
             requestMessagePartsProvider = visualPartsProvider,
+            voiceCallArchiveImageBytesProvider = visualArchiveImageBytesProvider,
+            onVoiceCallArchiveImagesSaved = onVoiceCallArchiveImagesSaved,
             onVoiceCallVisualSendStatus = visualSendStatusCallback,
             voiceCallInputTiming = voiceCallInputTiming,
         )
@@ -905,13 +918,21 @@ fun VoiceCallOverlay(
                     mainModel = callModel,
                     maxFrameCount = maxFrameCount,
                     onFramesCaptured = { frames ->
+                        visualRound.framesCaptured(sessionId, frames)
+                        val latestScreenFrame = frames.lastOrNull { it.source == VoiceCallVisualSource.SCREEN }
+                        val thumbnail = latestScreenFrame?.let { frame ->
+                            withContext(Dispatchers.Default) { encodeVoiceCallThumbnail(frame.jpeg) }
+                        }
+                        if (thumbnail != null) {
+                            floatingThumbnail?.fill(0)
+                            floatingThumbnail = thumbnail
+                        }
                         recordVoiceCallFlow(
                             "截图帧回调 session=${sessionId.take(8)} count=${frames.size} " +
                                 "sources=${frames.joinToString(",") { it.source.name }.ifBlank { "none" }} " +
                                 "jpegBytes=${frames.joinToString(",") { "${it.source.name}:${it.jpeg.size}" }.ifBlank { "none" }} " +
-                                "thumbnail=not_retained"
+                                "thumbnail=${thumbnail != null} thumbnailBytes=${thumbnail?.size ?: 0}"
                         )
-                        visualRound.framesCaptured(sessionId, frames)
                     },
                     onRecognitionChanged = { recognizing ->
                         recordVoiceCallFlow("OCR 批次状态 session=${sessionId.take(8)} recognizing=$recognizing")
@@ -1131,16 +1152,20 @@ fun VoiceCallOverlay(
         floatingCallStatus,
         visualRoundState.capturedImageCount.takeIf { it > 0 }?.let { "$it/$VOICE_CALL_VISUAL_MAX_IMAGES" },
     ).joinToString(" · ")
-    LaunchedEffect(floatingStatus, visualScreenState.active) {
-        if (visualScreenState.active) {
+    LaunchedEffect(floatingStatus, visualScreenState.active, floatingThumbnail, voiceCallResultReported) {
+        if (visualScreenState.active && !voiceCallResultReported) {
             recordVoiceCallFlow(
                 "共享屏幕悬浮球反馈 status=${floatingStatus.ifBlank { "none" }} " +
-                    "thumbnail=false bytes=0"
+                    "thumbnail=${floatingThumbnail != null} bytes=${floatingThumbnail?.size ?: 0}"
             )
             VoiceCallScreenCaptureService.setFloatingBallFeedback(
                 status = floatingStatus,
-                thumbnail = null,
+                thumbnail = floatingThumbnail,
             )
+        } else {
+            VoiceCallScreenCaptureService.setFloatingBallFeedback(status = "", thumbnail = null)
+            floatingThumbnail?.fill(0)
+            floatingThumbnail = null
         }
     }
     LaunchedEffect(visualScreenState.active, asrPermission.allRequiredPermissionsGranted) {
@@ -1804,6 +1829,18 @@ private fun VoiceCallMessageBubble(
                                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+
+                        is VoiceCallDisplayItem.Image -> {
+                            ZoomableAsyncImage(
+                                model = item.uri,
+                                contentDescription = "通话截图",
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 240.dp)
+                                    .padding(6.dp)
+                                    .clip(RoundedCornerShape(12.dp)),
                             )
                         }
                     }

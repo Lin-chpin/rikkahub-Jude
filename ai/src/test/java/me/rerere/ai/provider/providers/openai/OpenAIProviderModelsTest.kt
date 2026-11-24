@@ -1,10 +1,14 @@
 package me.rerere.ai.provider.providers.openai
 
+import me.rerere.ai.provider.BuiltInTools
+import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.OpenAIAuthType
 import me.rerere.ai.provider.OPENAI_CODEX_BASE_URL
 import me.rerere.ai.provider.ProviderSetting
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OpenAIProviderModelsTest {
@@ -18,7 +22,7 @@ class OpenAIProviderModelsTest {
         val url = openAIModelsUrl(setting)
 
         assertEquals("$OPENAI_CODEX_BASE_URL/models", url.toString().substringBefore('?'))
-        assertEquals("0.148.0", url.queryParameter("client_version"))
+        assertEquals("0.166.0", url.queryParameter("client_version"))
     }
 
     @Test
@@ -49,5 +53,46 @@ class OpenAIProviderModelsTest {
         assertEquals(1, models.size)
         assertEquals("gpt-5.6-sol", models.single().modelId)
         assertEquals("GPT-5.6 Sol", models.single().displayName)
+    }
+
+    @Test
+    fun `Codex Responses image models expose image generation capability`() {
+        val setting = ProviderSetting.OpenAI(
+            authType = OpenAIAuthType.CHATGPT_SUBSCRIPTION,
+            baseUrl = OPENAI_CODEX_BASE_URL,
+            useResponseApi = true,
+        )
+
+        val model = Model(modelId = "gpt-6.2-astra")
+            .withCodexImageGenerationCapability(setting)
+
+        assertTrue(BuiltInTools.ImageGeneration in model.tools)
+    }
+
+    @Test
+    fun `Codex image generation capability requires subscription Responses and a supported model`() {
+        val apiSetting = ProviderSetting.OpenAI(
+            authType = OpenAIAuthType.API_KEY,
+            useResponseApi = true,
+        )
+        val codexChatCompletionsSetting = ProviderSetting.OpenAI(
+            authType = OpenAIAuthType.CHATGPT_SUBSCRIPTION,
+            baseUrl = OPENAI_CODEX_BASE_URL,
+            useResponseApi = false,
+        )
+        val unsupportedModel = Model(modelId = "gpt-6.3-astra")
+
+        assertFalse(BuiltInTools.ImageGeneration in Model(modelId = "gpt-6.2-astra")
+            .withCodexImageGenerationCapability(apiSetting).tools)
+        assertFalse(BuiltInTools.ImageGeneration in Model(modelId = "gpt-6.2-astra")
+            .withCodexImageGenerationCapability(codexChatCompletionsSetting).tools)
+        assertFalse(BuiltInTools.ImageGeneration in unsupportedModel
+            .withCodexImageGenerationCapability(
+                ProviderSetting.OpenAI(
+                    authType = OpenAIAuthType.CHATGPT_SUBSCRIPTION,
+                    baseUrl = OPENAI_CODEX_BASE_URL,
+                    useResponseApi = true,
+                )
+            ).tools)
     }
 }

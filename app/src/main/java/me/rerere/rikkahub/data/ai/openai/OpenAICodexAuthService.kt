@@ -17,12 +17,12 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
-import me.rerere.ai.provider.OpenAIAuthType
 import me.rerere.ai.provider.OpenAICodexCredentials
-import me.rerere.ai.provider.OPENAI_CODEX_BASE_URL
+import me.rerere.ai.provider.OpenAIAuthType
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.providers.openai.OpenAICodexTokenProvider
 import me.rerere.common.http.await
+import me.rerere.common.http.suppressContentLogs
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import okhttp3.FormBody
 import okhttp3.MediaType.Companion.toMediaType
@@ -77,6 +77,7 @@ class OpenAICodexAuthService(
 
     suspend fun signIn(
         providerId: Uuid,
+        activateSubscription: Boolean = true,
         onDeviceCodeReady: (OpenAICodexDeviceCode) -> Unit,
     ): OpenAICodexCredentials {
         val credentials = withContext(Dispatchers.IO) {
@@ -88,7 +89,7 @@ class OpenAICodexAuthService(
             exchangeAuthorizationCode(authorization).toCredentials(previous = null)
         }
         credentialCache[providerId] = credentials
-        persistCredentials(providerId, credentials, activateSubscription = true)
+        persistCredentials(providerId, credentials, activateSubscription)
         return credentials
     }
 
@@ -125,6 +126,34 @@ class OpenAICodexAuthService(
             )
             refreshed
         }
+    }
+
+    internal suspend fun fetchQuota(
+        providerSetting: ProviderSetting.OpenAI,
+    ): List<OpenAICodexQuotaWindow> = withContext(Dispatchers.IO) {
+        require(providerSetting.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION) {
+            "ChatGPT subscription quota is available only for a signed-in ChatGPT subscription provider."
+        }
+        val credentials = getCredentials(providerSetting)
+        val request = Request.Builder()
+            .url("https://chatgpt.com/backend-api/wham/usage")
+            .get()
+            .header("Authorization", "Bearer ${credentials.accessToken}")
+            .header("ChatGPT-Account-Id", credentials.accountId)
+            .header("Accept", "application/json")
+            .header("Origin", "https://chatgpt.com")
+            .header("Referer", "https://chatgpt.com/")
+            .header("User-Agent", "Codex Desktop")
+            .suppressContentLogs(true)
+            .build()
+        val response = execute(request)
+        if (response.code !in 200..299) {
+            throw java.io.IOException("ChatGPT subscription quota request failed: HTTP ${response.code}")
+        }
+        val body = runCatching { json.parseToJsonElement(response.body) as? JsonObject }
+            .getOrNull()
+            ?: throw java.io.IOException("ChatGPT subscription quota response was not valid JSON.")
+        parseOpenAICodexQuota(body)
     }
 
     private suspend fun requestDeviceCode(): DeviceCodeResponse {
@@ -267,16 +296,12 @@ class OpenAICodexAuthService(
                     if (provider !is ProviderSetting.OpenAI || provider.id != providerId) {
                         provider
                     } else {
-                        provider.copy(
-                            authType = if (activateSubscription) {
-                                OpenAIAuthType.CHATGPT_SUBSCRIPTION
-                            } else {
-                                provider.authType
-                            },
-                            codexCredentials = credentials,
-                            baseUrl = if (activateSubscription) OPENAI_CODEX_BASE_URL else provider.baseUrl,
-                            useResponseApi = if (activateSubscription) true else provider.useResponseApi,
-                        )
+                        val activeProvider = if (activateSubscription) {
+                            provider.switchAuthType(OpenAIAuthType.CHATGPT_SUBSCRIPTION)
+                        } else {
+                            provider
+                        }
+                        activeProvider.copy(codexCredentials = credentials)
                     }
                 }
             )

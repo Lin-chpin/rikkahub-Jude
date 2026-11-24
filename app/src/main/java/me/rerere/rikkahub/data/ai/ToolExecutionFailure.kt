@@ -55,7 +55,7 @@ internal fun toolExecutionFailure(stage: String, error: Throwable? = null): Stri
         actualStage == "resolution" -> "tool_not_found"
         actualStage == "argument_parsing" -> "invalid_arguments"
         actualStage == "response_parsing" -> "response_format_invalid"
-        actualStage == "configuration" -> providerCode ?: "configuration_error"
+        actualStage == "configuration" -> providerCode ?: failure?.code ?: "configuration_error"
         actualStage == "remote_service" -> "provider_reported_failure"
         actualStage == "connection" -> if (interruptedSocket) "connection_interrupted" else failure?.code ?: "connection_failed"
         actualStage == "remote_tool" -> failure?.code ?: "remote_tool_failed"
@@ -86,6 +86,8 @@ internal fun JsonElement?.toolExecutionFailureMessage(): String? {
         stage == "resolution" -> "找不到对应的工具。"
         stage == "argument_parsing" -> "工具参数缺少必填项或格式无效。"
         stage == "response_parsing" -> "工具响应解析或格式校验失败。"
+        stage == "configuration" && code == "image_generation_unavailable" ->
+            "没有配置生图模型，而且当前聊天模型也不支持生图。请在模型设置中配置生图模型，或选择支持生图的聊天模型。"
         providerCode in setOf("invalid_api_key", "authentication_error", "unauthorized") -> "第三方服务身份验证失败。"
         providerCode in setOf("payment_issue", "payment_required", "insufficient_quota", "quota_exceeded", "billing_hard_limit_reached") ->
             "第三方服务要求检查账户付款状态或可用额度。"

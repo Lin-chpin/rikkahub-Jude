@@ -78,14 +78,10 @@ import me.rerere.rikkahub.data.ai.tools.LocalToolOption
 import me.rerere.rikkahub.data.ai.tools.REQUEST_VOICE_CALL_TOOL_NAME
 import me.rerere.rikkahub.data.ai.tools.ChatToolFactory
 import me.rerere.rikkahub.data.ai.transformers.Base64ImageToLocalFileTransformer
-import me.rerere.rikkahub.data.ai.transformers.DocumentAsPromptTransformer
-import me.rerere.rikkahub.data.ai.transformers.OcrTransformer
-import me.rerere.rikkahub.data.ai.transformers.PlaceholderTransformer
-import me.rerere.rikkahub.data.ai.transformers.PromptInjectionTransformer
+import me.rerere.rikkahub.data.ai.transformers.chatInputTransformers
 import me.rerere.rikkahub.data.ai.transformers.RegexOutputTransformer
 import me.rerere.rikkahub.data.ai.transformers.TemplateTransformer
 import me.rerere.rikkahub.data.ai.transformers.ThinkTagTransformer
-import me.rerere.rikkahub.data.ai.transformers.TimeReminderTransformer
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.findModelById
@@ -225,16 +221,6 @@ data class GenerationDoneEvent(
 
 enum class ChatErrorSolution {
     CheckTitleModelSettings,
-}
-
-private val inputTransformers by lazy {
-    listOf(
-        TimeReminderTransformer,
-        PromptInjectionTransformer,
-        PlaceholderTransformer,
-        DocumentAsPromptTransformer,
-        OcrTransformer,
-    )
 }
 
 private val outputTransformers by lazy {
@@ -472,6 +458,8 @@ class ChatService(
         requestMode: ChatRequestMode = ChatRequestMode.Normal,
         includeVoiceCallConnectedEvent: Boolean = false,
         requestMessagePartsProvider: (suspend () -> List<UIMessagePart>)? = null,
+        voiceCallArchiveImageBytesProvider: (suspend () -> List<ByteArray>)? = null,
+        onVoiceCallArchiveImagesSaved: (() -> Unit)? = null,
         onVoiceCallVisualSendStatus: ((VoiceCallVisualSendStatus) -> Unit)? = null,
         voiceCallInputTiming: GenerationTimingTrace? = null,
     ) {
@@ -512,18 +500,40 @@ class ChatService(
                 val processedContent = preprocessUserInputParts(content, assistant)
                 timing?.mark("user_input_preprocess_finished")
 
+                val voiceCallImageAnnotations = if (requestMode == ChatRequestMode.VoiceCall) {
+                    val imageBytes = voiceCallArchiveImageBytesProvider?.invoke().orEmpty()
+                    try {
+                        filesManager.createChatFilesByByteArrays(
+                            byteArrays = imageBytes,
+                            displayName = "voice-call-screenshot.jpg",
+                            mimeType = "image/jpeg",
+                        ).map { uri ->
+                            UIMessageAnnotation.VoiceCallImageAttachment(uri.toString())
+                        }
+                    } finally {
+                        imageBytes.forEach { it.fill(0) }
+                    }
+                } else emptyList()
+
                 // 添加消息到列表
                 val userMessage = UIMessage(
                     role = MessageRole.USER,
                     parts = processedContent,
+                    annotations = voiceCallImageAnnotations,
                 )
                 timing?.mark("user_message_save_started", userMessage.id.toString())
-                mutateConversation(conversationId) { latest ->
-                    val consumption = if (answer && requestMode == ChatRequestMode.Normal) latest.consumePendingVoiceCallEndedEvent() else null
-                    notifyEndedEvent = consumption?.shouldNotifyModel == true
-                    val base = consumption?.conversation ?: latest
-                    base.copy(messageNodes = base.messageNodes + userMessage.toMessageNode(), updateAt = Instant.now())
+                try {
+                    mutateConversation(conversationId) { latest ->
+                        val consumption = if (answer && requestMode == ChatRequestMode.Normal) latest.consumePendingVoiceCallEndedEvent() else null
+                        notifyEndedEvent = consumption?.shouldNotifyModel == true
+                        val base = consumption?.conversation ?: latest
+                        base.copy(messageNodes = base.messageNodes + userMessage.toMessageNode(), updateAt = Instant.now())
+                    }
+                } catch (error: Exception) {
+                    filesManager.deleteChatFiles(voiceCallImageAnnotations.map { it.uri.toUri() })
+                    throw error
                 }
+                onVoiceCallArchiveImagesSaved?.invoke()
                 timing?.mark("user_message_save_finished", userMessage.id.toString())
                 timing?.mark("user_message_hook_started")
                 LocalBuildIntegration.onUserMessageSent(
@@ -818,6 +828,9 @@ class ChatService(
                         val hasAiContent = completedCallMessages.any { message ->
                             message.role == MessageRole.ASSISTANT && message.toText().isNotBlank()
                         }
+                        val hasArchivedImages = completedCallMessages.any { message ->
+                            message.annotations.any { it is UIMessageAnnotation.VoiceCallImageAttachment }
+                        }
                         if (hasVoiceCallConversation) {
                             val recordNode = UIMessage(
                                 role = MessageRole.ASSISTANT,
@@ -826,9 +839,9 @@ class ChatService(
                                     UIMessageAnnotation.VoiceCallRecord(
                                         callId = completion.callId,
                                         durationSeconds = completion.durationSeconds,
-                                        cardAnchor = hasAiContent,
+                                        cardAnchor = hasAiContent || hasArchivedImages,
                                         standalone = true,
-                                        messageIds = if (hasAiContent) completion.messageIds else emptySet(),
+                                        messageIds = completion.messageIds,
                                         audioSegmentsByMessageId = completion.audioSegmentsByMessageId,
                                         pendingEndedEvent = true,
                                     )
@@ -1073,7 +1086,7 @@ class ChatService(
                     addAll(memoryRepository.getMemories(MemoryScope.assistant(assistant.id)))
                 },
                 inputTransformers = buildList {
-                    addAll(inputTransformers)
+                    addAll(chatInputTransformers)
                     add(templateTransformer)
                 },
                 outputTransformers = outputTransformers,

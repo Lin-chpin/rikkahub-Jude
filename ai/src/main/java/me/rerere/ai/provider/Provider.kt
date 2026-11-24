@@ -67,6 +67,7 @@ data class TextGenerationParams(
     @Transient val onRequestPrepared: ((JsonObject) -> Unit)? = null,
     @Transient val onTokenUsage: ((JsonObject) -> Unit)? = null,
     @Transient val moveMessagesAfterTools: Boolean = false,
+    @Transient val sessionId: String? = null,
 )
 
 @Serializable

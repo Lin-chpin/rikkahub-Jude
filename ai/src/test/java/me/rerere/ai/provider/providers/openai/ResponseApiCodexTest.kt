@@ -16,6 +16,7 @@ import me.rerere.ai.provider.CustomHeader
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.OpenAIAuthType
+import me.rerere.ai.provider.OPENAI_CODEX_BASE_URL
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.registry.ModelRegistry
@@ -233,6 +234,31 @@ class ResponseApiCodexTest {
             }
         assertEquals(emptyList<ModelAbility>(), ModelRegistry.MODEL_ABILITIES.getData("gpt-5.6"))
         assertEquals(emptyList<ModelAbility>(), ModelRegistry.MODEL_ABILITIES.getData("gpt-5.6-mini"))
+    }
+
+    @Test
+    fun `Codex Responses can request image generation for a supported model`() {
+        val setting = ProviderSetting.OpenAI(
+            baseUrl = OPENAI_CODEX_BASE_URL,
+            authType = OpenAIAuthType.CHATGPT_SUBSCRIPTION,
+            useResponseApi = true,
+        )
+        val model = Model(modelId = "gpt-6.2-astra")
+            .withCodexImageGenerationCapability(setting)
+        val body = ResponseAPI(okhttp3.OkHttpClient()).buildRequestBody(
+            providerSetting = setting,
+            messages = listOf(UIMessage.user("draw a small red fox")),
+            params = TextGenerationParams(model),
+            stream = true,
+        )
+
+        val imageTool = body["tools"]!!.jsonArray.single().jsonObject
+        assertEquals("image_generation", imageTool["type"]?.jsonPrimitive?.content)
+        assertEquals("gpt-image-2", imageTool["model"]?.jsonPrimitive?.content)
+        assertEquals(
+            "image_generation",
+            body["tool_choice"]!!.jsonObject["type"]?.jsonPrimitive?.content,
+        )
     }
 
     @Test

@@ -243,6 +243,8 @@ class ChatVM(
         requestMode: ChatRequestMode = ChatRequestMode.Normal,
         includeVoiceCallConnectedEvent: Boolean = false,
         requestMessagePartsProvider: (suspend () -> List<UIMessagePart>)? = null,
+        voiceCallArchiveImageBytesProvider: (suspend () -> List<ByteArray>)? = null,
+        onVoiceCallArchiveImagesSaved: (() -> Unit)? = null,
         onVoiceCallVisualSendStatus: ((VoiceCallVisualSendStatus) -> Unit)? = null,
         voiceCallInputTiming: GenerationTimingTrace? = null,
     ) {
@@ -256,6 +258,8 @@ class ChatVM(
             requestMode = requestMode,
             includeVoiceCallConnectedEvent = includeVoiceCallConnectedEvent,
             requestMessagePartsProvider = requestMessagePartsProvider,
+            voiceCallArchiveImageBytesProvider = voiceCallArchiveImageBytesProvider,
+            onVoiceCallArchiveImagesSaved = onVoiceCallArchiveImagesSaved,
             onVoiceCallVisualSendStatus = onVoiceCallVisualSendStatus,
             voiceCallInputTiming = voiceCallInputTiming,
         )

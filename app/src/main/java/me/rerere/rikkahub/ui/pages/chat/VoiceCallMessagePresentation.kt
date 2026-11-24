@@ -11,6 +11,7 @@ internal const val VOICE_CALL_REPLY_TRANSLATION_KEY = "voice-call-reply"
 
 internal sealed interface VoiceCallDisplayItem {
     data class Text(val text: String) : VoiceCallDisplayItem
+    data class Image(val uri: String) : VoiceCallDisplayItem
     data class Voice(
         val text: String,
         val durationSeconds: Int,
@@ -24,6 +25,7 @@ internal sealed interface VoiceCallDisplayItem {
 internal val VoiceCallDisplayItem.translationText: String?
     get() = when (this) {
         is VoiceCallDisplayItem.Text -> text
+        is VoiceCallDisplayItem.Image -> null
         is VoiceCallDisplayItem.Voice -> text
         VoiceCallDisplayItem.Loading -> null
     }
@@ -77,12 +79,16 @@ internal fun UIMessage.voiceCallDisplayItems(
     }
 
     if (role != MessageRole.ASSISTANT || !isCurrentAssistant) {
-        return when (role) {
+        val textItems = when (role) {
             MessageRole.ASSISTANT ->
                 fullText.splitVoiceCallDisplayItems(asVoice = true, audioSegments = audioSegments)
 
             else -> listOfNotNull(fullText.takeIf { it.isNotBlank() }?.let(VoiceCallDisplayItem::Text))
         }
+        val archiveImages = annotations
+            .filterIsInstance<UIMessageAnnotation.VoiceCallImageAttachment>()
+            .map { VoiceCallDisplayItem.Image(it.uri) }
+        return textItems + archiveImages
     }
     return fullText.splitVoiceCallDisplayItems(asVoice = true, audioSegments = audioSegments)
 }

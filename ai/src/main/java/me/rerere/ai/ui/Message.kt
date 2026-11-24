@@ -866,6 +866,12 @@ sealed class UIMessageAnnotation {
     ) : UIMessageAnnotation()
 
     @Serializable
+    @SerialName("voice_call_image_attachment")
+    data class VoiceCallImageAttachment(
+        val uri: String,
+    ) : UIMessageAnnotation()
+
+    @Serializable
     @SerialName("tts_audio")
     data class TtsAudio(
         val requestText: String,

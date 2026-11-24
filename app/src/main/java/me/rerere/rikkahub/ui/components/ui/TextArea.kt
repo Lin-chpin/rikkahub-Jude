@@ -6,6 +6,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -65,6 +66,8 @@ import me.rerere.rikkahub.ui.modifier.onClick
  * @param readOnly Whether the text field is read-only
  * @param supportedFileTypes Array of MIME types to filter in file picker (default: text files)
  * @param enableFullscreen Whether to enable fullscreen editing mode
+ * @param headerActions Optional actions displayed beside the fullscreen button.
+ * @param onFullscreenSave Called when fullscreen editing is accepted, after updating [state].
  * @param onImportError Callback when file import fails (optional)
  * @param fileImporter Optional parser for formats that must not be read as raw text.
  */
@@ -80,6 +83,8 @@ fun TextArea(
     readOnly: Boolean = false,
     supportedFileTypes: Array<String> = arrayOf("text/*", "application/json"),
     enableFullscreen: Boolean = true,
+    headerActions: @Composable RowScope.() -> Unit = {},
+    onFullscreenSave: ((String) -> Unit)? = null,
     onImportError: ((String) -> Unit)? = null,
     fileImporter: (suspend (Uri) -> String)? = null,
 ) {
@@ -152,6 +157,8 @@ fun TextArea(
                         )
                     }
 
+                    headerActions()
+
                     if (importing) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp) else Icon(
                         imageVector = HugeIcons.FileImport,
                         contentDescription = stringResource(R.string.text_area_import_from_file),
@@ -188,6 +195,7 @@ fun TextArea(
             state = state,
             label = label,
             placeholder = placeholder,
+            onSave = onFullscreenSave,
             onDismiss = { isFullScreen = false }
         )
     }
@@ -198,6 +206,7 @@ private fun FullScreenTextEditor(
     state: TextFieldState,
     label: String,
     placeholder: String,
+    onSave: ((String) -> Unit)?,
     onDismiss: () -> Unit
 ) {
     var editingText by remember(state.text.toString()) {
@@ -231,6 +240,7 @@ private fun FullScreenTextEditor(
                         TextButton(
                             onClick = {
                                 state.setTextAndPlaceCursorAtEnd(editingText)
+                                onSave?.invoke(editingText)
                                 onDismiss()
                             }
                         ) {

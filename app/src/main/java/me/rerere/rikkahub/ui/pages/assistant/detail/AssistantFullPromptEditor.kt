@@ -31,6 +31,7 @@ import me.rerere.rikkahub.ui.theme.CustomColors
 internal fun AssistantFullPromptEditor(
     prompt: String,
     savedPrompt: String,
+    isSaving: Boolean = false,
     onCancel: () -> Unit,
     onSave: (String) -> Unit,
 ) {
@@ -40,19 +41,20 @@ internal fun AssistantFullPromptEditor(
         if (editorState.text.toString() == savedPrompt) onCancel() else confirmDiscard = true
     }
 
-    BackHandler(enabled = !confirmDiscard, onBack = requestClose)
+    BackHandler(enabled = !confirmDiscard && !isSaving, onBack = requestClose)
 
     Scaffold(
         topBar = {
             LargeFlexibleTopAppBar(
                 title = { Text(stringResource(R.string.assistant_prompt_editor_title)) },
                 navigationIcon = {
-                    TextButton(onClick = requestClose) {
+                    TextButton(onClick = requestClose, enabled = !isSaving) {
                         Text(stringResource(R.string.cancel))
                     }
                 },
                 actions = {
                     TextButton(
+                        enabled = !isSaving,
                         onClick = { onSave(editorState.text.toString()) },
                     ) {
                         Text(stringResource(R.string.text_area_save))

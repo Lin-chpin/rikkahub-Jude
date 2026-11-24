@@ -196,29 +196,39 @@ class FilesManager(
         }
     }
 
-    fun createChatFilesByByteArrays(byteArrays: List<ByteArray>): List<Uri> {
+    fun createChatFilesByByteArrays(
+        byteArrays: List<ByteArray>,
+        displayName: String = "image.png",
+        mimeType: String = "image/png",
+    ): List<Uri> {
         val newUris = mutableListOf<Uri>()
         val dir = context.filesDir.resolve(FileFolders.UPLOAD)
-        if (!dir.exists()) {
-            dir.mkdirs()
-        }
         byteArrays.forEach { byteArray ->
-            val fileName = buildUuidFileName(displayName = "image.png", mimeType = "image/png")
-            val file = dir.resolve(fileName)
-            if (!file.exists()) {
+            var file: File? = null
+            try {
+                if (!dir.exists() && !dir.mkdirs() && !dir.exists()) {
+                    error("Failed to create upload directory")
+                }
+                file = dir.resolve(buildUuidFileName(displayName = displayName, mimeType = mimeType))
                 file.createNewFile()
+                file.outputStream().use { outputStream ->
+                    outputStream.write(byteArray)
+                }
+                trackManagedFile(
+                    folder = FileFolders.UPLOAD,
+                    file = file,
+                    displayName = displayName,
+                    mimeType = mimeType
+                )
+                newUris.add(file.toUri())
+            } catch (error: Exception) {
+                file?.takeIf { it.exists() }?.delete()
+                Log.e(TAG, "createChatFilesByByteArrays: Failed to save image", error)
+                Logging.log(
+                    TAG,
+                    "createChatFilesByByteArrays: Failed to save image ${error::class.simpleName ?: "Exception"}"
+                )
             }
-            val newUri = file.toUri()
-            file.outputStream().use { outputStream ->
-                outputStream.write(byteArray)
-            }
-            trackManagedFile(
-                folder = FileFolders.UPLOAD,
-                file = file,
-                displayName = "image.png",
-                mimeType = "image/png"
-            )
-            newUris.add(newUri)
         }
         return newUris
     }

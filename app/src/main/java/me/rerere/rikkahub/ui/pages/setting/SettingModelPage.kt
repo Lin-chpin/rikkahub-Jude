@@ -6,6 +6,7 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Earth
 import me.rerere.hugeicons.stroke.View
 import me.rerere.hugeicons.stroke.FileZip
+import me.rerere.hugeicons.stroke.Image03
 import me.rerere.hugeicons.stroke.Mortarboard01
 import me.rerere.hugeicons.stroke.Message01
 import me.rerere.hugeicons.stroke.MessageMultiple01
@@ -68,6 +69,7 @@ import me.rerere.rikkahub.data.ai.prompts.DEFAULT_TITLE_PROMPT
 import me.rerere.rikkahub.data.ai.prompts.DEFAULT_TRANSLATION_PROMPT
 import me.rerere.rikkahub.ui.components.ai.ReasoningButton
 import me.rerere.rikkahub.data.datastore.Settings
+import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.ui.components.ai.ModelSelector
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.FormItem
@@ -123,6 +125,10 @@ fun SettingModelPage(vm: SettingVM = koinViewModel()) {
 
             item {
                 DefaultOcrModelSetting(settings = settings, vm = vm)
+            }
+
+            item {
+                DefaultImageGenerationModelSetting(settings = settings, vm = vm)
             }
 
             item {
@@ -877,6 +883,169 @@ private fun DefaultCompressModelSetting(
 }
 
 @Composable
+private fun DefaultImageGenerationModelSetting(
+    settings: Settings,
+    vm: SettingVM,
+) {
+    val config = settings.imageGenerationOpenAIConfig
+    var showModal by remember { mutableStateOf(false) }
+    ModelFeatureCard(
+        title = {
+            Text(stringResource(R.string.setting_model_page_image_generation_model), maxLines = 1)
+        },
+        description = {
+            Text(stringResource(R.string.setting_model_page_image_generation_model_desc))
+        },
+        icon = {
+            Icon(HugeIcons.Image03, null)
+        },
+        actions = {
+            Box(modifier = Modifier.weight(1f)) {
+                if (config.enabled) {
+                    ImageGenerationOpenAIModelSelector(
+                        settings = settings,
+                        vm = vm,
+                        modifier = Modifier.wrapContentWidth(),
+                    )
+                } else {
+                    ModelSelector(
+                        modelId = settings.findModelById(settings.imageGenerationModelId)?.id
+                            ?: settings.chatModelId,
+                        type = ModelType.IMAGE,
+                        additionalTypes = setOf(ModelType.CHAT),
+                        onSelect = { model ->
+                            vm.updateSettings(settings.copy(imageGenerationModelId = model.id))
+                        },
+                        providers = settings.providers,
+                        modifier = Modifier.wrapContentWidth(),
+                    )
+                }
+            }
+            IconButton(
+                onClick = { showModal = true },
+                colors = IconButtonDefaults.filledTonalIconButtonColors(),
+            ) {
+                Icon(HugeIcons.Tools, null)
+            }
+        },
+    )
+
+    if (showModal) {
+        ModalBottomSheet(
+            onDismissRequest = { showModal = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            ImageGenerationOpenAIConfigForm(settings = settings, vm = vm)
+        }
+    }
+}
+
+@Composable
+private fun ImageGenerationOpenAIModelSelector(
+    settings: Settings,
+    vm: SettingVM,
+    modifier: Modifier = Modifier,
+) {
+    val config = settings.imageGenerationOpenAIConfig
+    SeparateOpenAIModelSelector(
+        providerName = "Image generation API",
+        modelId = config.modelId,
+        apiKey = config.apiKey,
+        baseUrl = config.baseUrl,
+        chatCompletionsPath = "/chat/completions",
+        useResponseApi = false,
+        modelType = ModelType.IMAGE,
+        onModelIdChange = { modelId ->
+            vm.updateSettings(
+                settings.copy(imageGenerationOpenAIConfig = config.copy(modelId = modelId))
+            )
+        },
+        modifier = modifier,
+    )
+}
+
+@Composable
+private fun ImageGenerationOpenAIConfigForm(
+    settings: Settings,
+    vm: SettingVM,
+) {
+    val config = settings.imageGenerationOpenAIConfig
+    FormItem(
+        label = { Text(stringResource(R.string.setting_model_page_image_generation_api_title)) },
+        description = { Text(stringResource(R.string.setting_model_page_image_generation_api_desc)) },
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(stringResource(R.string.setting_model_page_image_generation_api_toggle))
+            Switch(
+                checked = config.enabled,
+                onCheckedChange = { enabled ->
+                    vm.updateSettings(
+                        settings.copy(imageGenerationOpenAIConfig = config.copy(enabled = enabled))
+                    )
+                },
+            )
+        }
+
+        if (config.enabled) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedTextField(
+                    value = config.modelId,
+                    onValueChange = { modelId ->
+                        vm.updateSettings(
+                            settings.copy(imageGenerationOpenAIConfig = config.copy(modelId = modelId))
+                        )
+                    },
+                    label = { Text(stringResource(R.string.setting_model_page_image_generation_api_model)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 1,
+                )
+                OutlinedTextField(
+                    value = config.apiKey,
+                    onValueChange = { apiKey ->
+                        vm.updateSettings(
+                            settings.copy(imageGenerationOpenAIConfig = config.copy(apiKey = apiKey))
+                        )
+                    },
+                    label = { Text(stringResource(R.string.setting_provider_page_api_key)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 1,
+                )
+                OutlinedTextField(
+                    value = config.baseUrl,
+                    onValueChange = { baseUrl ->
+                        vm.updateSettings(
+                            settings.copy(imageGenerationOpenAIConfig = config.copy(baseUrl = baseUrl))
+                        )
+                    },
+                    label = { Text(stringResource(R.string.setting_provider_page_api_base_url)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 1,
+                )
+                OutlinedTextField(
+                    value = config.size,
+                    onValueChange = { size ->
+                        vm.updateSettings(
+                            settings.copy(imageGenerationOpenAIConfig = config.copy(size = size))
+                        )
+                    },
+                    label = { Text(stringResource(R.string.setting_model_page_image_generation_api_size)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 1,
+                    placeholder = { Text("384x384") },
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun CompressOpenAIModelSelector(
     settings: Settings,
     vm: SettingVM,
@@ -954,6 +1123,7 @@ private fun SeparateOpenAIModelSelector(
     chatCompletionsPath: String,
     useResponseApi: Boolean,
     onModelIdChange: (String) -> Unit,
+    modelType: ModelType = ModelType.CHAT,
     modifier: Modifier = Modifier,
 ) {
     val providerManager = koinInject<ProviderManager>()
@@ -972,7 +1142,7 @@ private fun SeparateOpenAIModelSelector(
                 .listModels(provider)
                 .map { model ->
                     model.copy(
-                        type = ModelType.CHAT,
+                        type = modelType,
                         inputModalities = ModelRegistry.MODEL_INPUT_MODALITIES.getData(model.modelId),
                         outputModalities = ModelRegistry.MODEL_OUTPUT_MODALITIES.getData(model.modelId),
                         abilities = ModelRegistry.MODEL_ABILITIES.getData(model.modelId),
@@ -986,7 +1156,7 @@ private fun SeparateOpenAIModelSelector(
     val selectedFallback = remember(modelId, availableModels) {
         modelId
             .takeIf { it.isNotBlank() && availableModels.none { model -> model.modelId == it } }
-            ?.let { Model(modelId = it, displayName = it, type = ModelType.CHAT) }
+            ?.let { Model(modelId = it, displayName = it, type = modelType) }
     }
     val models = remember(availableModels, selectedFallback) {
         if (selectedFallback == null) {
@@ -1001,7 +1171,7 @@ private fun SeparateOpenAIModelSelector(
 
     ModelSelector(
         modelId = selectedModelId,
-        type = ModelType.CHAT,
+        type = modelType,
         onSelect = { model -> onModelIdChange(model.modelId) },
         providers = listOf(provider.copy(models = models)),
         modifier = modifier

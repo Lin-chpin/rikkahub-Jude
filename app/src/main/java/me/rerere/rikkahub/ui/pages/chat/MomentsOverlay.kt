@@ -98,7 +98,6 @@ fun MomentsOverlay(
     assistant: Assistant,
     conversation: Conversation,
     assistantName: String,
-    conversationSystemPrompt: String?,
     settings: Settings,
     vm: MomentsVM,
     onDismiss: () -> Unit,
@@ -137,7 +136,7 @@ fun MomentsOverlay(
 
     LaunchedEffect(assistantId, conversation.compressedSummary) {
         vm.markViewed(assistantId)
-        vm.processDue(assistantId, assistant, conversation, conversationSystemPrompt)
+        vm.processDue(assistantId, assistant, conversation)
     }
 
     Dialog(
@@ -171,7 +170,7 @@ fun MomentsOverlay(
                             processing = processing,
                             onDismiss = onDismiss,
                             onRefresh = {
-                                vm.processDue(assistantId, assistant, conversation, conversationSystemPrompt, manual = true)
+                                vm.processDue(assistantId, assistant, conversation, manual = true)
                                 vm.markViewed(assistantId)
                             },
                             onPost = {

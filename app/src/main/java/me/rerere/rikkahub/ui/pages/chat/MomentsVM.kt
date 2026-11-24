@@ -20,16 +20,19 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.ai.GenerationChunk
 import me.rerere.rikkahub.data.ai.GenerationHandler
-import me.rerere.rikkahub.data.ai.transformers.InputMessageTransformer
-import me.rerere.rikkahub.data.ai.transformers.OcrTransformer
+import me.rerere.rikkahub.data.ai.transformers.TemplateTransformer
+import me.rerere.rikkahub.data.ai.transformers.chatInputTransformers
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.model.MemoryScope
+import me.rerere.rikkahub.data.model.messagesForGeneration
 import me.rerere.rikkahub.data.voice.supportsImageInput
 import me.rerere.rikkahub.data.model.Conversation
-import me.rerere.rikkahub.data.model.memoryScope
+import me.rerere.rikkahub.data.voice.voiceCallSummaryPrompt
+import me.rerere.rikkahub.data.voice.withoutVoiceCallAudioTagsForNormalContext
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.repository.Moment
@@ -47,6 +50,7 @@ class MomentsVM(
     private val conversationRepository: ConversationRepository,
     private val memoryRepository: MemoryRepository,
     private val generationHandler: GenerationHandler,
+    private val templateTransformer: TemplateTransformer,
     val filesManager: FilesManager,
 ) : ViewModel() {
     private val _processing = MutableStateFlow(false)
@@ -105,7 +109,6 @@ class MomentsVM(
         assistantId: Uuid,
         assistant: Assistant,
         conversation: Conversation,
-        conversationSystemPrompt: String?,
         manual: Boolean = false,
     ) {
         viewModelScope.launch {
@@ -131,10 +134,10 @@ class MomentsVM(
                 }
                 val outcomes = buildList {
                     moments.forEach { moment ->
-                        add(processDueMoment(moment, assistant, generationConversation, conversationSystemPrompt))
+                        add(processDueMoment(moment, assistant, generationConversation))
                     }
                     comments.forEach { comment ->
-                        add(processDueComment(comment, assistant, generationConversation, conversationSystemPrompt))
+                        add(processDueComment(comment, assistant, generationConversation))
                     }
                 }
                 if (manual) {
@@ -162,12 +165,11 @@ class MomentsVM(
         moment: Moment,
         assistant: Assistant,
         conversation: Conversation,
-        conversationSystemPrompt: String?,
     ): MomentsProcessOutcome {
         val key = "moment:${moment.id}"
         if (!processingIds.add(key)) return MomentsProcessOutcome(MomentsProcessIssue.ALREADY_PROCESSING)
         try {
-            val result = generateMomentReaction(moment, assistant, conversation, conversationSystemPrompt)
+            val result = generateMomentReaction(moment, assistant, conversation)
             val reaction = when (result) {
                 MomentReactionGeneration.VisionModelSetupRequired -> {
                     _visionModelSetupRequired.emit(Unit)
@@ -212,7 +214,6 @@ class MomentsVM(
         comment: MomentComment,
         assistant: Assistant,
         conversation: Conversation,
-        conversationSystemPrompt: String?,
     ): MomentsProcessOutcome {
         val key = "comment:${comment.id}"
         if (!processingIds.add(key)) return MomentsProcessOutcome(MomentsProcessIssue.ALREADY_PROCESSING)
@@ -220,7 +221,7 @@ class MomentsVM(
             val moment = momentRepository.getMoment(comment.momentId)
                 ?: return MomentsProcessOutcome(MomentsProcessIssue.PERSISTENCE_FAILED)
             val comments = momentRepository.getComments(moment.id)
-            return when (val result = generateCommentReply(moment, comments, comment, assistant, conversation, conversationSystemPrompt)) {
+            return when (val result = generateCommentReply(moment, comments, comment, assistant, conversation)) {
                 CommentGenerationResult.EmptyText ->
                     MomentsProcessOutcome(MomentsProcessIssue.EMPTY_TEXT)
 
@@ -248,7 +249,6 @@ class MomentsVM(
         moment: Moment,
         assistant: Assistant,
         conversation: Conversation,
-        conversationSystemPrompt: String?,
     ): MomentReactionGeneration {
         val settings = settingsStore.settingsFlow.value
         val model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId)
@@ -259,8 +259,6 @@ class MomentsVM(
         if (requiresOcrFallback && !settings.hasConfiguredVisionOcrModel()) {
             return MomentReactionGeneration.VisionModelSetupRequired
         }
-        val inputTransformers = if (requiresOcrFallback) listOf(OcrTransformer) else emptyList()
-        val memories = memoryRepository.getMemories(assistant.memoryScope(conversation.id))
         val timelineContext = buildTimelineContext(moment.assistantId, excludeMomentId = moment.id)
         val imageInstruction = if (moment.imageUris.isNotEmpty() && moment.imageDescription.isBlank()) {
             """
@@ -297,15 +295,11 @@ class MomentsVM(
             settings = settings,
             assistant = assistant,
             model = model,
-            conversationId = conversation.id,
-            memories = memories,
+            conversation = conversation,
             messages = listOf(UIMessage(
                 role = MessageRole.USER,
                 parts = parts,
             )),
-            inputTransformers = inputTransformers,
-            conversationSystemPrompt = conversationSystemPrompt,
-            conversationContextSummary = conversation.compressedSummary,
             maxTokens = 360,
         )
         if (text.isBlank()) return MomentReactionGeneration.EmptyText
@@ -325,12 +319,10 @@ class MomentsVM(
         target: MomentComment,
         assistant: Assistant,
         conversation: Conversation,
-        conversationSystemPrompt: String?,
     ): CommentGenerationResult {
         val settings = settingsStore.settingsFlow.value
         val model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId)
             ?: return CommentGenerationResult.ModelUnavailable
-        val memories = memoryRepository.getMemories(assistant.memoryScope(conversation.id))
         val prompt = """
             Reply as the assistant in a Moments comment thread.
             Keep it natural and short. Return only the reply text, no JSON and no markdown.
@@ -352,11 +344,8 @@ class MomentsVM(
             settings = settings,
             assistant = assistant,
             model = model,
-            conversationId = conversation.id,
-            memories = memories,
+            conversation = conversation,
             messages = listOf(UIMessage.user(prompt)),
-            conversationSystemPrompt = conversationSystemPrompt,
-            conversationContextSummary = conversation.compressedSummary,
             maxTokens = 360,
         ).trim()
         return text.takeIf { it.isNotBlank() }
@@ -379,26 +368,28 @@ class MomentsVM(
         settings: Settings,
         assistant: me.rerere.rikkahub.data.model.Assistant,
         model: me.rerere.ai.provider.Model,
-        conversationId: Uuid,
-        memories: List<me.rerere.rikkahub.data.model.AssistantMemory>,
+        conversation: Conversation,
         messages: List<UIMessage>,
-        inputTransformers: List<InputMessageTransformer> = emptyList(),
-        conversationSystemPrompt: String?,
-        conversationContextSummary: String?,
         maxTokens: Int,
     ): String {
         var output = ""
+        val chatHistory = conversation.messagesForGeneration()
+            .map(UIMessage::withoutVoiceCallAudioTagsForNormalContext)
         generationHandler.generateText(
             settings = settings,
             model = model,
-            conversationId = conversationId,
-            messages = messages,
-            inputTransformers = inputTransformers,
+            conversationId = conversation.id,
+            requestSource = "Moments",
+            messages = chatHistory + messages,
+            inputTransformers = chatInputTransformers + templateTransformer,
             assistant = assistant.copy(streamOutput = false),
-            conversationSystemPrompt = conversationSystemPrompt,
-            conversationContextSummary = conversationContextSummary,
-            memories = memories,
-            includeMemoriesInPrompt = true,
+            conversationSystemPrompt = conversation.customSystemPrompt,
+            conversationContextSummary = conversation.compressedSummary,
+            conversationModeInjectionIds = conversation.modeInjectionIds,
+            conversationLorebookIds = conversation.lorebookIds,
+            runtimeStateSystemPrompt = conversation.voiceCallSummaryPrompt(),
+            memories = memoryRepository.getMemories(MemoryScope.assistant(assistant.id)),
+            includeMemoriesInPrompt = assistant.enableMemory,
             tools = emptyList(),
             maxSteps = 1,
             maxTokensOverride = maxTokens,

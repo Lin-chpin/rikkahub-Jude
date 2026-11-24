@@ -734,8 +734,6 @@ private fun ChatPageContent(
             assistant = assistant,
             conversation = conversation,
             assistantName = momentAssistantName,
-            conversationSystemPrompt = conversation.customSystemPrompt
-                ?.takeIf { assistant.allowConversationSystemPrompt && it.isNotBlank() },
             settings = setting,
             vm = momentsVM,
             onDismiss = {

@@ -32,6 +32,15 @@ enum class OpenAIAuthType {
 }
 
 @Serializable
+enum class GoogleAuthType {
+    @SerialName("api_key")
+    API_KEY,
+
+    @SerialName("gemini_subscription")
+    GEMINI_SUBSCRIPTION,
+}
+
+@Serializable
 data class OpenAICodexCredentials(
     val accessToken: String,
     val refreshToken: String,
@@ -88,7 +97,35 @@ sealed class ProviderSetting {
         var authType: OpenAIAuthType = OpenAIAuthType.API_KEY,
         var codexCredentials: OpenAICodexCredentials? = null,
         var responsesPath: String = "/responses",
+        var apiModels: List<Model> = emptyList(),
+        var subscriptionModels: List<Model> = emptyList(),
+        var apiBaseUrl: String? = null,
+        var apiUseResponseApi: Boolean? = null,
     ) : ProviderSetting() {
+        fun switchAuthType(target: OpenAIAuthType): OpenAI {
+            if (target == authType) return this
+            return when (target) {
+                OpenAIAuthType.CHATGPT_SUBSCRIPTION -> copy(
+                    authType = target,
+                    apiModels = models,
+                    subscriptionModels = subscriptionModels,
+                    apiBaseUrl = baseUrl,
+                    apiUseResponseApi = useResponseApi,
+                    models = subscriptionModels,
+                    baseUrl = OPENAI_CODEX_BASE_URL,
+                    useResponseApi = true,
+                )
+
+                OpenAIAuthType.API_KEY -> copy(
+                    authType = target,
+                    subscriptionModels = models,
+                    models = apiModels,
+                    baseUrl = apiBaseUrl ?: ProviderSetting.OpenAI().baseUrl,
+                    useResponseApi = apiUseResponseApi ?: false,
+                )
+            }
+        }
+
         override fun addModel(model: Model): ProviderSetting {
             return copy(models = models + model)
         }
@@ -153,7 +190,27 @@ sealed class ProviderSetting {
         var serviceAccountEmail: String = "", // only for vertex AI service account
         var location: String = "us-central1", // only for vertex AI service account
         var projectId: String = "", // only for vertex AI service account
+        var authType: GoogleAuthType = GoogleAuthType.API_KEY,
+        var apiModels: List<Model> = emptyList(),
+        var subscriptionModels: List<Model> = emptyList(),
     ) : ProviderSetting() {
+        fun switchAuthType(target: GoogleAuthType): Google {
+            if (target == authType) return this
+            return when (target) {
+                GoogleAuthType.GEMINI_SUBSCRIPTION -> copy(
+                    authType = target,
+                    apiModels = models,
+                    models = subscriptionModels,
+                )
+
+                GoogleAuthType.API_KEY -> copy(
+                    authType = target,
+                    subscriptionModels = models,
+                    models = apiModels,
+                )
+            }
+        }
+
         override fun addModel(model: Model): ProviderSetting {
             return copy(models = models + model)
         }

@@ -98,6 +98,7 @@ import me.rerere.hugeicons.stroke.Image03
 import me.rerere.hugeicons.stroke.Tools
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.Settings
+import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.files.FileUtils
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.ui.components.ai.ModelSelector
@@ -388,19 +389,23 @@ private fun InputBar(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            ModelSelector(
-                modelId = settings.imageGenerationModelId,
-                providers = settings.providers,
-                type = ModelType.IMAGE,
-                onlyIcon = true,
-                onSelect = { model ->
-                    scope.launch {
-                        vm.settingsStore.update { oldSettings ->
-                            oldSettings.copy(imageGenerationModelId = model.id)
+            if (!settings.imageGenerationOpenAIConfig.enabled) {
+                ModelSelector(
+                    modelId = settings.findModelById(settings.imageGenerationModelId)?.id
+                        ?: settings.chatModelId,
+                    providers = settings.providers,
+                    type = ModelType.IMAGE,
+                    additionalTypes = setOf(ModelType.CHAT),
+                    onlyIcon = true,
+                    onSelect = { model ->
+                        scope.launch {
+                            vm.settingsStore.update { oldSettings ->
+                                oldSettings.copy(imageGenerationModelId = model.id)
+                            }
                         }
                     }
-                }
-            )
+                )
+            }
 
             IconButton(
                 onClick = onShowSettings
@@ -711,19 +716,25 @@ private fun SettingsBottomSheet(
                 label = { Text(stringResource(R.string.imggen_page_model_selection)) },
                 description = { Text(stringResource(R.string.imggen_page_model_selection_desc)) }
             ) {
-                ModelSelector(
-                    modelId = settings.imageGenerationModelId,
-                    providers = settings.providers,
-                    type = ModelType.IMAGE,
-                    onlyIcon = false,
-                    onSelect = { model ->
-                        scope.launch {
-                            vm.settingsStore.update { oldSettings ->
-                                oldSettings.copy(imageGenerationModelId = model.id)
+                if (settings.imageGenerationOpenAIConfig.enabled) {
+                    Text(settings.imageGenerationOpenAIConfig.modelId)
+                } else {
+                    ModelSelector(
+                        modelId = settings.findModelById(settings.imageGenerationModelId)?.id
+                            ?: settings.chatModelId,
+                        providers = settings.providers,
+                        type = ModelType.IMAGE,
+                        additionalTypes = setOf(ModelType.CHAT),
+                        onlyIcon = false,
+                        onSelect = { model ->
+                            scope.launch {
+                                vm.settingsStore.update { oldSettings ->
+                                    oldSettings.copy(imageGenerationModelId = model.id)
+                                }
                             }
                         }
-                    }
-                )
+                    )
+                }
             }
 
             FormItem(

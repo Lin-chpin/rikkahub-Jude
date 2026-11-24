@@ -16,6 +16,7 @@ import me.rerere.ai.util.GenerationTimingTrace
 import me.rerere.asr.ASRState
 import me.rerere.asr.ASRStatus
 import me.rerere.rikkahub.BuildConfig
+import me.rerere.rikkahub.data.voice.VoiceCallAsrCallbackGate
 import me.rerere.rikkahub.data.voice.VoiceCallAsrRecovery
 import me.rerere.rikkahub.data.voice.VoiceCallUtteranceGate
 import me.rerere.rikkahub.data.voice.VOICE_CALL_ASR_STABLE_CONNECTION_MS
@@ -67,7 +68,7 @@ internal fun rememberVoiceCallDuplexInput(
     val submit by rememberUpdatedState(onSubmit)
     val speechStarted by rememberUpdatedState(onSpeechStarted)
     val emptyFinal by rememberUpdatedState(onEmptyFinal)
-    var accepting by remember { mutableStateOf(false) }
+    val callbackGate = remember { VoiceCallAsrCallbackGate() }
     val recovery = remember(providerId) { VoiceCallAsrRecovery() }
 
     LaunchedEffect(status) {
@@ -78,21 +79,22 @@ internal fun rememberVoiceCallDuplexInput(
     }
 
     DisposableEffect(asr, enabled, permissionGranted, providerId) {
-        accepting = enabled && permissionGranted
+        if (enabled && permissionGranted) callbackGate.startAccepting()
+        else callbackGate.stopAccepting()
         state.fallback = false
         state.error = null
         state.pendingText = ""
         emptyFinal()
-        if (accepting) normalAsr.stop()
+        if (callbackGate.canAcceptCallback()) normalAsr.stop()
         state.stop = {
-            accepting = false
+            callbackGate.stopAccepting()
             state.pendingText = ""
             recovery.reset()
             emptyFinal()
             asr.stop()
         }
         onDispose {
-            accepting = false
+            callbackGate.stopAccepting()
             recovery.reset()
             asr.stop()
         }
@@ -100,14 +102,13 @@ internal fun rememberVoiceCallDuplexInput(
 
     LaunchedEffect(enabled, permissionGranted, providerId, status.status, status.isAvailable, state.muted) {
         if (!enabled || !permissionGranted || state.muted) {
-            if (accepting) asr.stop()
-            accepting = false
+            callbackGate.stopAsrIfAccepting { asr.stop() }
             state.pendingText = ""
             recovery.reset()
             emptyFinal()
             return@LaunchedEffect
         }
-        accepting = true
+        callbackGate.startAccepting()
         if (!status.isAvailable) {
             state.fallback = true
             state.error = null
@@ -117,7 +118,9 @@ internal fun rememberVoiceCallDuplexInput(
         if (state.error != null) return@LaunchedEffect
         if (status.status == ASRStatus.Connecting) {
             delay(10_000)
-            if (accepting && asr.state.value.status == ASRStatus.Connecting) asr.stop()
+            if (callbackGate.canAcceptCallback() && asr.state.value.status == ASRStatus.Connecting) {
+                callbackGate.stopAsrIfAccepting { asr.stop() }
+            }
             return@LaunchedEffect
         }
         if (status.status == ASRStatus.Listening) {
@@ -127,7 +130,7 @@ internal fun rememberVoiceCallDuplexInput(
                 emptyFinal()
             }
             delay(VOICE_CALL_ASR_STABLE_CONNECTION_MS)
-            if (accepting && asr.state.value.status == ASRStatus.Listening) {
+            if (callbackGate.canAcceptCallback() && asr.state.value.status == ASRStatus.Listening) {
                 recovery.resetIfStable(SystemClock.elapsedRealtime())
             }
             return@LaunchedEffect
@@ -138,17 +141,17 @@ internal fun rememberVoiceCallDuplexInput(
         if (status.status != ASRStatus.Idle && status.status != ASRStatus.Error) return@LaunchedEffect
         if (recovery.exhausted) {
             state.finishWithError(voiceCallTerminalAsrErrorMessage(status.errorMessage), emptyFinal)
-            accepting = false
+            callbackGate.stopAccepting()
             asr.stop()
             return@LaunchedEffect
         }
         delay(recovery.retryDelayMs)
-        if (!accepting) return@LaunchedEffect
+        if (!callbackGate.canAcceptCallback()) return@LaunchedEffect
         val attempt = recovery.startAttempt()
         val gate = VoiceCallUtteranceGate()
         val speechStops = mutableMapOf<String, Long>()
         asr.startUtterances { utterance ->
-            if (!accepting || state.fallback || !recovery.isCurrent(attempt)) return@startUtterances
+            if (!callbackGate.canAcceptCallback() || state.fallback || !recovery.isCurrent(attempt)) return@startUtterances
             val receivedAt = System.nanoTime()
             if (utterance.isSpeechStopped) {
                 if (BuildConfig.DEBUG) speechStops.putIfAbsent(utterance.id, receivedAt)

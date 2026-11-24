@@ -47,6 +47,11 @@ internal fun Settings.withAssistantUpdate(updated: Assistant, baseline: Assistan
     return editing.copy(assistants = editing.assistants.map { if (it.id == updated.id) updated else it })
 }
 
+internal fun Settings.withAssistantSystemPromptUpdate(assistantId: Uuid, systemPrompt: String): Settings {
+    val assistant = assistants.firstOrNull { it.id == assistantId } ?: return this
+    return withAssistantUpdate(assistant.copy(systemPrompt = systemPrompt), assistant)
+}
+
 internal fun mergeSettingsUpdate(current: Settings, requested: Settings): Settings {
     // Deserialized imports have no editing baseline and deliberately replace all settings.
     val baseline = requested.updateBaseline?.value ?: return requested

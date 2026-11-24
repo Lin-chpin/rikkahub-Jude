@@ -40,6 +40,7 @@ fun ChatMessageNerdLine(
     modifier: Modifier = Modifier,
     color: Color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.5f),
     showTokenUsage: Boolean = LocalSettings.current.displaySetting.showTokenUsage,
+    showGenerationSpeed: Boolean = true,
 ) {
     if (!showTokenUsage || message.role != MessageRole.ASSISTANT) return
 
@@ -64,8 +65,11 @@ fun ChatMessageNerdLine(
                         },
                         content = {
                             Text(text = "${usage.promptTokens.formatNumber()} tokens")
-                            // Cached tokens
-                            Text(text = "(${usage.cachedTokens.formatNumber()} cached)")
+                            if (usage.cachedTokensReported) {
+                                Text(text = "(${usage.cachedTokens.formatNumber()} cached)")
+                            } else {
+                                Text(text = stringResource(R.string.message_cached_tokens_unreported))
+                            }
                         }
                     )
                     // Output tokens
@@ -89,7 +93,7 @@ fun ChatMessageNerdLine(
                 if (finishedAt != null) {
                     val durationMillis = Duration.between(message.createdAt.toJavaLocalDateTime(), finishedAt.toJavaLocalDateTime()).toMillis().coerceAtLeast(0)
                     val seconds = (durationMillis / 1000f).toFixed(1)
-                    if (usage != null && durationMillis > 0) {
+                    if (showGenerationSpeed && usage != null && durationMillis > 0) {
                         val tps = usage.completionTokens.toFloat() / durationMillis * 1000
                         StatsItem(
                             icon = {

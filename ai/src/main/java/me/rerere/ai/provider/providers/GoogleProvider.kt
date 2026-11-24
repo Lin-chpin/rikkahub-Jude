@@ -28,6 +28,7 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.provider.BuiltInTools
+import me.rerere.ai.provider.GoogleAuthType
 import me.rerere.ai.provider.ImageGenerationParams
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
@@ -80,6 +81,26 @@ import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
 private const val TAG = "GoogleProvider"
+private val GOOGLE_SAFETY_CATEGORIES = listOf(
+    "HARM_CATEGORY_HARASSMENT",
+    "HARM_CATEGORY_HATE_SPEECH",
+    "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+    "HARM_CATEGORY_DANGEROUS_CONTENT",
+    "HARM_CATEGORY_CIVIC_INTEGRITY",
+)
+internal val CODE_ASSIST_SAFETY_CATEGORIES =
+    GOOGLE_SAFETY_CATEGORIES - "HARM_CATEGORY_CIVIC_INTEGRITY"
+
+internal fun buildGoogleSystemInstructionText(messages: List<UIMessage>): String? =
+    messages.asSequence()
+        .filter { it.role == MessageRole.SYSTEM }
+        .map { message ->
+            message.parts.filterIsInstance<UIMessagePart.Text>()
+                .joinToString { it.text }
+        }
+        .filter(String::isNotBlank)
+        .joinToString("\n\n")
+        .takeIf(String::isNotBlank)
 
 internal fun parseGoogleModelList(body: JsonObject): List<Model> {
     val models = body["models"] as? JsonArray ?: return emptyList()
@@ -105,8 +126,15 @@ internal fun parseGoogleModelList(body: JsonObject): List<Model> {
     }
 }
 
-class GoogleProvider(private val client: OkHttpClient, context: Context? = null) : Provider<ProviderSetting.Google> {
+class GoogleProvider(
+    private val client: OkHttpClient,
+    context: Context? = null,
+    geminiOAuthTokenProvider: GeminiOAuthTokenProvider? = null,
+) : Provider<ProviderSetting.Google> {
     private val keyRoulette = if (context != null) KeyRoulette.lru(context) else KeyRoulette.default()
+    private val geminiOAuthProvider = geminiOAuthTokenProvider?.let {
+        GeminiOAuthProvider(client, it, this)
+    }
     private val serviceAccountTokenProvider by lazy {
         ServiceAccountTokenProvider(client)
     }
@@ -147,8 +175,11 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
-    override suspend fun listModels(providerSetting: ProviderSetting.Google): List<Model> =
-        withContext(Dispatchers.IO) {
+    override suspend fun listModels(providerSetting: ProviderSetting.Google): List<Model> {
+        if (providerSetting.authType == GoogleAuthType.GEMINI_SUBSCRIPTION) {
+            return subscriptionProvider().listModels()
+        }
+        return withContext(Dispatchers.IO) {
             val url = buildUrl(providerSetting = providerSetting, path = "models?pageSize=100")
             val request = transformRequest(
                 providerSetting = providerSetting,
@@ -166,67 +197,74 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 throw response.toHttpException()
             }
         }
+    }
 
     override suspend fun generateText(
         providerSetting: ProviderSetting.Google,
         messages: List<UIMessage>,
         params: TextGenerationParams,
-    ): MessageChunk = withContext(Dispatchers.IO) {
-        val requestBody = buildCompletionRequestBody(messages, params)
+    ): MessageChunk {
+        if (providerSetting.authType == GoogleAuthType.GEMINI_SUBSCRIPTION) {
+            return subscriptionProvider().generateText(messages, params)
+        }
+        return withContext(Dispatchers.IO) {
+            val requestBody = buildCompletionRequestBody(messages, params)
 
-        val url = buildUrl(
-            providerSetting = providerSetting,
-            path = if (providerSetting.vertexAI) {
-                "publishers/google/models/${params.model.modelId}:generateContent"
-            } else {
-                "models/${params.model.modelId}:generateContent"
-            }
-        )
-
-        val request = transformRequest(
-            providerSetting = providerSetting,
-            request = Request.Builder()
-                .url(url)
-                .headers(params.customHeaders.toHeaders())
-                .suppressContentLogs(params.suppressContentLogs)
-                .post(
-                    json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()).withoutAutomaticReplay()
-                )
-                .configureReferHeaders(providerSetting.baseUrl)
-                .build()
-        )
-
-        client.newCall(request).await { response ->
-            if (!response.isSuccessful) {
-                if (params.suppressContentLogs) {
-                    val failure = privateRequestFailure(null, response.code, response)
-                    response.close()
-                    throw failure
+            val url = buildUrl(
+                providerSetting = providerSetting,
+                path = if (providerSetting.vertexAI) {
+                    "publishers/google/models/${params.model.modelId}:generateContent"
+                } else {
+                    "models/${params.model.modelId}:generateContent"
                 }
-                throw response.toHttpException()
-            }
-
-            val bodyStr = response.body?.string() ?: ""
-            val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
-
-            val candidates = bodyJson["candidates"]!!.jsonArray
-            val usage = bodyJson["usageMetadata"]!!.jsonObject
-
-            val messageChunk = MessageChunk(
-                id = Uuid.random().toString(),
-                model = params.model.modelId,
-                choices = candidates.map { candidate ->
-                    UIMessageChoice(
-                        message = parseMessage(candidate.jsonObject),
-                        index = 0,
-                        finishReason = null,
-                        delta = null
-                    )
-                },
-                usage = parseUsageMeta(usage)
             )
 
-            messageChunk
+            val request = transformRequest(
+                providerSetting = providerSetting,
+                request = Request.Builder()
+                    .url(url)
+                    .headers(params.customHeaders.toHeaders())
+                    .suppressContentLogs(params.suppressContentLogs)
+                    .post(
+                        json.encodeToString(requestBody)
+                            .toRequestBody("application/json".toMediaType())
+                            .withoutAutomaticReplay()
+                    )
+                    .configureReferHeaders(providerSetting.baseUrl)
+                    .build()
+            )
+
+            client.newCall(request).await { response ->
+                if (!response.isSuccessful) {
+                    if (params.suppressContentLogs) {
+                        val failure = privateRequestFailure(null, response.code, response)
+                        response.close()
+                        throw failure
+                    }
+                    throw response.toHttpException()
+                }
+
+                val bodyStr = response.body?.string() ?: ""
+                val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
+
+                val candidates = bodyJson["candidates"]!!.jsonArray
+                val usage = bodyJson["usageMetadata"]!!.jsonObject
+
+                val messageChunk = MessageChunk(
+                    id = Uuid.random().toString(),
+                    model = params.model.modelId,
+                    choices = candidates.map { candidate ->
+                        UIMessageChoice(
+                            message = parseMessage(candidate.jsonObject),
+                            index = 0,
+                            finishReason = null,
+                            delta = null
+                        )
+                    },
+                    usage = parseUsageMeta(usage)
+                )
+                messageChunk
+            }
         }
     }
 
@@ -234,7 +272,9 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         providerSetting: ProviderSetting.Google,
         messages: List<UIMessage>,
         params: TextGenerationParams,
-    ): Flow<MessageChunk> = callbackFlow {
+    ): Flow<MessageChunk> = if (providerSetting.authType == GoogleAuthType.GEMINI_SUBSCRIPTION) {
+        subscriptionProvider().streamText(messages, params)
+    } else callbackFlow {
         val requestBody = buildCompletionRequestBody(messages, params)
 
         val url = buildUrl(
@@ -356,20 +396,72 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
+    private fun subscriptionProvider(): GeminiOAuthProvider = geminiOAuthProvider
+        ?: error("Google subscription sign-in is not available in this context")
+
+    internal fun parseCodeAssistResponse(
+        response: JsonObject,
+        model: Model,
+        streaming: Boolean,
+    ): MessageChunk? {
+        val candidates = response["candidates"] as? JsonArray
+        val usage = parseUsageMeta(response["usageMetadata"] as? JsonObject)
+        if (candidates.isNullOrEmpty()) {
+            return usage?.let {
+                MessageChunk(
+                    id = Uuid.random().toString(),
+                    model = model.modelId,
+                    choices = emptyList(),
+                    usage = it,
+                )
+            }
+        }
+
+        return MessageChunk(
+            id = Uuid.random().toString(),
+            model = model.modelId,
+            choices = candidates.mapIndexed { index, candidate ->
+                val candidateObject = candidate.jsonObject
+                if (!streaming) {
+                    UIMessageChoice(
+                        index = index,
+                        delta = null,
+                        message = parseMessage(candidateObject),
+                        finishReason = candidateObject["finishReason"]?.jsonPrimitive?.contentOrNull,
+                    )
+                } else {
+                    val content = candidateObject["content"]?.jsonObject
+                    val grounding = candidateObject["groundingMetadata"]?.jsonObject
+                    val delta = content?.let {
+                        parseMessage(buildJsonObject {
+                            put("role", JsonPrimitive("model"))
+                            put("content", it)
+                            grounding?.let { metadata -> put("groundingMetadata", metadata) }
+                        })
+                    }
+                    UIMessageChoice(
+                        index = index,
+                        delta = delta,
+                        message = null,
+                        finishReason = candidateObject["finishReason"]?.jsonPrimitive?.contentOrNull,
+                    )
+                }
+            },
+            usage = usage,
+        )
+    }
+
     internal fun buildCompletionRequestBody(
         messages: List<UIMessage>,
-        params: TextGenerationParams
+        params: TextGenerationParams,
+        safetyCategories: List<String> = GOOGLE_SAFETY_CATEGORIES,
     ): JsonObject = buildJsonObject {
-        // System message if available
-        val systemMessage = messages.firstOrNull { it.role == MessageRole.SYSTEM }
-        if (systemMessage != null && !params.model.outputModalities.contains(Modality.IMAGE)) {
+        val systemInstructionText = buildGoogleSystemInstructionText(messages)
+        if (systemInstructionText != null && !params.model.outputModalities.contains(Modality.IMAGE)) {
             put("systemInstruction", buildJsonObject {
                 putJsonArray("parts") {
                     add(buildJsonObject {
-                        put(
-                            "text",
-                            systemMessage.parts.filterIsInstance<UIMessagePart.Text>()
-                                .joinToString { it.text })
+                        put("text", systemInstructionText)
                     })
                 }
             })
@@ -483,26 +575,12 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
         // Safety Settings
         putJsonArray("safetySettings") {
-            add(buildJsonObject {
-                put("category", "HARM_CATEGORY_HARASSMENT")
-                put("threshold", "OFF")
-            })
-            add(buildJsonObject {
-                put("category", "HARM_CATEGORY_HATE_SPEECH")
-                put("threshold", "OFF")
-            })
-            add(buildJsonObject {
-                put("category", "HARM_CATEGORY_SEXUALLY_EXPLICIT")
-                put("threshold", "OFF")
-            })
-            add(buildJsonObject {
-                put("category", "HARM_CATEGORY_DANGEROUS_CONTENT")
-                put("threshold", "OFF")
-            })
-            add(buildJsonObject {
-                put("category", "HARM_CATEGORY_CIVIC_INTEGRITY")
-                put("threshold", "OFF")
-            })
+            safetyCategories.forEach { category ->
+                add(buildJsonObject {
+                    put("category", category)
+                    put("threshold", "OFF")
+                })
+            }
         }
     }.mergeCustomBody(params.customBody)
 
@@ -764,14 +842,15 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
         val promptTokens = jsonObject["promptTokenCount"]?.jsonPrimitiveOrNull?.intOrNull ?: 0
         val thoughtTokens = jsonObject["thoughtsTokenCount"]?.jsonPrimitiveOrNull?.intOrNull ?: 0
-        val cachedTokens = jsonObject["cachedContentTokenCount"]?.jsonPrimitiveOrNull?.intOrNull ?: 0
+        val cachedTokenCount = jsonObject["cachedContentTokenCount"]?.jsonPrimitiveOrNull?.intOrNull
         val candidatesTokens = jsonObject["candidatesTokenCount"]?.jsonPrimitiveOrNull?.intOrNull ?: 0
         val totalTokens = jsonObject["totalTokenCount"]?.jsonPrimitiveOrNull?.intOrNull ?: 0
         return TokenUsage(
             promptTokens = promptTokens,
             completionTokens = candidatesTokens + thoughtTokens,
             totalTokens = totalTokens,
-            cachedTokens = cachedTokens
+            cachedTokens = cachedTokenCount ?: 0,
+            cachedTokensReported = cachedTokenCount != null,
         )
     }
 
@@ -781,6 +860,9 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
     ): ImageGenerationResult = withContext(Dispatchers.IO) {
         require(providerSetting is ProviderSetting.Google) {
             "Expected Google provider setting"
+        }
+        if (providerSetting.authType == GoogleAuthType.GEMINI_SUBSCRIPTION) {
+            return@withContext subscriptionProvider().generateImage(params)
         }
 
         val requestBody = buildJsonObject {

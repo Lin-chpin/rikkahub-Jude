@@ -5,14 +5,16 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.OpenAIAuthType
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.util.json
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
-private const val CODEX_MODELS_CLIENT_VERSION = "0.148.0"
+private const val CODEX_MODELS_CLIENT_VERSION = "0.166.0"
 
 internal fun openAIModelsUrl(providerSetting: ProviderSetting.OpenAI): HttpUrl =
     "${providerSetting.baseUrl.trimEnd('/')}/models"
@@ -46,4 +48,15 @@ internal fun parseOpenAIModels(body: String): List<Model> {
         val displayName = modelObj["display_name"]?.jsonPrimitive?.contentOrNull ?: id
         Model(modelId = id, displayName = displayName)
     }
+}
+
+fun Model.withCodexImageGenerationCapability(providerSetting: ProviderSetting.OpenAI): Model {
+    if (providerSetting.authType != OpenAIAuthType.CHATGPT_SUBSCRIPTION || !providerSetting.useResponseApi) {
+        return this
+    }
+    val supportedTools = ModelRegistry.MODEL_BUILT_IN_TOOLS.getData(modelId)
+    if (BuiltInTools.ImageGeneration !in supportedTools) return this
+
+    // Codex Responses exposes image generation as a tool on an eligible chat model.
+    return copy(tools = tools + supportedTools)
 }

@@ -109,6 +109,7 @@ private object ToolNames {
     const val TTS = "text_to_speech"
     const val ASK_USER = "ask_user"
     const val USE_SKILL = "use_skill"
+    const val GENERATE_IMAGE = "generate_image"
 }
 
 private object MemoryActions {
@@ -136,6 +137,7 @@ private fun getToolIcon(toolName: String, action: String?) = when (toolName) {
     ToolNames.TTS -> HugeIcons.VolumeHigh
     ToolNames.ASK_USER -> HugeIcons.BubbleChatQuestion
     ToolNames.USE_SKILL -> HugeIcons.MagicWand01
+    ToolNames.GENERATE_IMAGE -> HugeIcons.MagicWand01
     else -> HugeIcons.Tools
 }
 
@@ -202,6 +204,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
         }
 
         ToolNames.TTS -> stringResource(R.string.chat_message_tool_compose_voice_reply)
+        ToolNames.GENERATE_IMAGE -> stringResource(R.string.chat_message_tool_generate_image)
 
         ToolNames.USE_SKILL -> {
             val skillName = arguments.getStringContent("name") ?: ""

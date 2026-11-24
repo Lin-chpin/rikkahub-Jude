@@ -28,7 +28,7 @@ internal data class VoiceCallVisualRequest(
 internal suspend fun VoiceCallVisualCapture.prepareRequest(
     mainModel: Model?,
     maxFrameCount: Int,
-    onFramesCaptured: (List<VoiceCallVisualFrame>) -> Unit = {},
+    onFramesCaptured: suspend (List<VoiceCallVisualFrame>) -> Unit = {},
     onRecognitionChanged: (Boolean) -> Unit = {},
     onOcrFailure: (VoiceCallVisualSource, String) -> Unit = { _, _ -> },
     traceId: String? = null,
@@ -57,7 +57,12 @@ internal suspend fun VoiceCallVisualCapture.prepareRequest(
             "jpegBytes=${frames.joinToString(",") { "${it.source.name}:${it.jpeg.size}" }.ifBlank { "none" }} " +
             "discarded=${capturedFrames.size - frames.size}",
     )
-    onFramesCaptured(frames)
+    try {
+        onFramesCaptured(frames)
+    } catch (error: Throwable) {
+        frames.forEach { it.jpeg.fill(0) }
+        throw error
+    }
     if (frames.isEmpty()) {
         Log.i(TAG, "visual request prepare complete session=$trace result=no_frames elapsedMs=${SystemClock.elapsedRealtime() - startedAt}")
         return VoiceCallVisualRequest(emptyList(), hadActiveSource, 0, 0)

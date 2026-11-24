@@ -100,6 +100,7 @@ fun ModelSelector(
     modifier: Modifier = Modifier,
     onlyIcon: Boolean = false,
     allowClear: Boolean = false,
+    additionalTypes: Set<ModelType> = emptySet(),
     onSelect: (Model) -> Unit
 ) {
     var popup by remember { mutableStateOf(false) }
@@ -181,13 +182,14 @@ fun ModelSelector(
                     .imePadding(),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                val modelTypes = remember(type, additionalTypes) { additionalTypes + type }
                 val filteredProviderSettings = providers.fastFilter {
-                    it.enabled && it.models.fastAny { model -> model.type == type }
+                    it.enabled && it.models.fastAny { model -> model.type in modelTypes }
                 }
                 ModelList(
                     currentModel = modelId,
                     providers = filteredProviderSettings,
-                    modelType = type,
+                    modelTypes = modelTypes,
                     onSelect = {
                         onSelect(it)
                         scope.launch {
@@ -211,7 +213,7 @@ fun ModelSelector(
 private fun ColumnScope.ModelList(
     currentModel: Uuid? = null,
     providers: List<ProviderSetting>,
-    modelType: ModelType,
+    modelTypes: Set<ModelType>,
     onSelect: (Model) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -222,23 +224,23 @@ private fun ColumnScope.ModelList(
 
     val favoriteModels = settings.value.favoriteModels.mapNotNull { modelId ->
         val model = settings.value.providers.findModelById(modelId) ?: return@mapNotNull null
-        if (model.type != modelType) return@mapNotNull null
+        if (model.type !in modelTypes) return@mapNotNull null
         val provider = model.findProvider(providers = settings.value.providers, checkOverwrite = false) ?: return@mapNotNull null
         model to provider
     }
 
     var searchKeywords by remember { mutableStateOf("") }
 
-    val typeFilteredModelsByProvider = remember(providers, modelType) {
+    val typeFilteredModelsByProvider = remember(providers, modelTypes) {
         providers.associate { provider ->
-            provider.id to provider.models.fastFilter { it.type == modelType }
+            provider.id to provider.models.fastFilter { it.type in modelTypes }
         }
     }
 
-    val searchFilteredModelsByProvider = remember(providers, modelType, searchKeywords) {
+    val searchFilteredModelsByProvider = remember(providers, modelTypes, searchKeywords) {
         providers.associate { provider ->
             provider.id to provider.models.fastFilter {
-                it.type == modelType && it.displayName.contains(searchKeywords, true)
+                it.type in modelTypes && it.displayName.contains(searchKeywords, true)
             }
         }
     }

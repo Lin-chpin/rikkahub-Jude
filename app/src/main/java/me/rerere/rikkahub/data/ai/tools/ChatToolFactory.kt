@@ -3,9 +3,11 @@ package me.rerere.rikkahub.data.ai.tools
 import me.rerere.ai.core.Tool
 import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Model
+import me.rerere.rikkahub.data.ai.ImageGenerationService
 import me.rerere.rikkahub.data.ai.mcp.McpManager
 import me.rerere.rikkahub.data.ai.mcp.buildMcpTools
 import me.rerere.rikkahub.data.datastore.Settings
+import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.files.SkillManager
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.voice.CHAT_VOICE_REPLY_TOOL_NAME
@@ -15,6 +17,8 @@ class ChatToolFactory(
     private val localTools: LocalTools,
     private val mcpManager: McpManager,
     private val skillManager: SkillManager,
+    private val imageGenerationService: ImageGenerationService,
+    private val filesManager: FilesManager,
 ) {
     fun createTools(
         settings: Settings,
@@ -32,6 +36,9 @@ class ChatToolFactory(
         voiceCallActive: Boolean = false,
         legacyToolNames: Set<String> = emptySet(),
     ): List<Tool> = buildList {
+        if (!voiceCallActive) {
+            add(createImageGenerationTool(settings, model, imageGenerationService, filesManager))
+        }
         if (settings.enableWebSearch && BuiltInTools.Search !in model.tools) {
             addAll(createSearchTools(settings))
         }

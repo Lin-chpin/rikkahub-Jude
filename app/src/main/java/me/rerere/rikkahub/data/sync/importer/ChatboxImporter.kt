@@ -527,6 +527,8 @@ object ChatboxImporter {
             completionTokens = completionTokens,
             cachedTokens = cachedTokens,
             totalTokens = totalTokens,
+            cachedTokensReported = usage["cachedInputTokens"]?.asInt != null ||
+                usage["inputTokenDetails"]?.jsonObjectOrNull?.get("cacheReadTokens")?.asInt != null,
         )
     }
 

@@ -58,7 +58,11 @@ data class Conversation(
                 .filterIsInstance<UIMessageAnnotation.VoiceCallRecord>()
                 .flatMap { record -> record.audioSegments + record.audioSegmentsByMessageId.values.flatten() }
                 .map { it.audioUri.toUri() }
-            return (partFiles + ttsFiles + chatVoiceFiles + voiceCallFiles).distinct()
+            val voiceCallImageFiles = messages
+                .flatMap { it.annotations }
+                .filterIsInstance<UIMessageAnnotation.VoiceCallImageAttachment>()
+                .map { it.uri.toUri() }
+            return (partFiles + ttsFiles + chatVoiceFiles + voiceCallFiles + voiceCallImageFiles).distinct()
         }
 
     /**

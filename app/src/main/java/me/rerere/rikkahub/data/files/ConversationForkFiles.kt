@@ -28,6 +28,7 @@ internal fun UIMessage.copyWithForkedFiles(copyFile: (String) -> String): UIMess
                         segments.map { it.copy(audioUri = copyFile(it.audioUri)) }
                     },
                 )
+                is UIMessageAnnotation.VoiceCallImageAttachment -> annotation.copy(uri = copyFile(annotation.uri))
                 else -> annotation
             }
         },

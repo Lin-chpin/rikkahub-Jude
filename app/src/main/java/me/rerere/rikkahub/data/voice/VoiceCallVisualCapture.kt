@@ -37,7 +37,7 @@ data class VoiceCallCameraState(
 
 data class VoiceCallScreenState(val active: Boolean = false, val error: String? = null)
 
-/** 通话专属临时采集；帧只供本次发言使用，不写入消息或文件。 */
+/** 通话专属采集；原帧供本轮 OCR 使用，并在提交消息前保留受限的 JPEG 副本用于本地归档。 */
 class VoiceCallVisualCapture(context: Context) : AutoCloseable {
     private val context = context.applicationContext
     internal val camera = VoiceCallCameraCapture(this.context)

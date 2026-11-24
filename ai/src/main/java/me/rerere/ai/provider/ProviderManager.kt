@@ -3,6 +3,7 @@ package me.rerere.ai.provider
 import android.content.Context
 import me.rerere.ai.provider.providers.ClaudeProvider
 import me.rerere.ai.provider.providers.GoogleProvider
+import me.rerere.ai.provider.providers.GeminiOAuthTokenProvider
 import me.rerere.ai.provider.providers.OpenAIProvider
 import me.rerere.ai.provider.providers.openai.OpenAICodexTokenProvider
 import okhttp3.OkHttpClient
@@ -14,6 +15,7 @@ class ProviderManager(
     client: OkHttpClient,
     context: Context,
     openAICodexTokenProvider: OpenAICodexTokenProvider? = null,
+    geminiOAuthTokenProvider: GeminiOAuthTokenProvider? = null,
 ) {
     // 存储已注册的Provider实例
     private val providers = mutableMapOf<String, Provider<*>>()
@@ -24,7 +26,7 @@ class ProviderManager(
             "openai",
             OpenAIProvider(client, context, openAICodexTokenProvider),
         )
-        registerProvider("google", GoogleProvider(client, context))
+        registerProvider("google", GoogleProvider(client, context, geminiOAuthTokenProvider))
         registerProvider("claude", ClaudeProvider(client, context))
     }
 

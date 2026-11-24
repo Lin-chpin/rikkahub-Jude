@@ -19,12 +19,10 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import me.rerere.ai.provider.ImageEditParams
 import me.rerere.ai.provider.ImageGenerationParams
-import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.ui.ImageAspectRatio
 import me.rerere.ai.ui.ImageGenerationItem
+import me.rerere.rikkahub.data.ai.ImageGenerationService
 import me.rerere.rikkahub.data.datastore.SettingsStore
-import me.rerere.rikkahub.data.datastore.findModelById
-import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.db.entity.GenMediaEntity
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.repository.GenMediaRepository
@@ -52,11 +50,10 @@ private fun GenMediaEntity.toGeneratedImage(filesManager: FilesManager): Generat
         model = this.modelId
     )
 }
-
 class ImgGenVM(
     context: Application,
     val settingsStore: SettingsStore,
-    val providerManager: ProviderManager,
+    private val imageGenerationService: ImageGenerationService,
     val genMediaRepository: GenMediaRepository,
     private val filesManager: FilesManager,
 ) : AndroidViewModel(context) {
@@ -141,26 +138,18 @@ class ImgGenVM(
                 _currentGeneratedImages.value = emptyList()
 
                 val settings = settingsStore.settingsFlow.first()
-                val model = settings.findModelById(settings.imageGenerationModelId)
-                    ?: throw IllegalStateException("No model selected")
-
-                val provider = model.findProvider(settings.providers)
-                    ?: throw IllegalStateException("Provider not found")
-
-                val providerSetting = settings.providers.find { it.id == provider.id }
-                    ?: throw IllegalStateException("Provider setting not found")
+                val target = imageGenerationService.resolveTarget(settings)
 
                 val params = ImageGenerationParams(
-                    model = model,
+                    model = target.model,
                     prompt = _prompt.value,
                     numOfImages = _numberOfImages.value,
                     aspectRatio = _aspectRatio.value,
-                    customHeaders = model.customHeaders,
-                    customBody = model.customBodies
+                    customHeaders = target.model.customHeaders,
+                    customBody = target.model.customBodies + target.customBody,
                 )
 
-                val result = providerManager.getProviderByType(provider)
-                    .generateImage(providerSetting, params)
+                val result = imageGenerationService.generate(target, params)
 
                 val newImages = mutableListOf<GeneratedImage>()
 
@@ -168,7 +157,7 @@ class ImgGenVM(
                     val imageFile = saveImageToStorage(
                         item = item,
                         prompt = _prompt.value,
-                        modelName = model.displayName,
+                        modelName = target.model.displayName,
                         index = index
                     )
                     val generatedImage = GeneratedImage(
@@ -176,7 +165,7 @@ class ImgGenVM(
                         prompt = _prompt.value,
                         filePath = imageFile.absolutePath,
                         timestamp = System.currentTimeMillis(),
-                        model = model.displayName
+                        model = target.model.displayName
                     )
                     newImages.add(generatedImage)
                 }
@@ -202,28 +191,20 @@ class ImgGenVM(
                 _currentGeneratedImages.value = emptyList()
 
                 val settings = settingsStore.settingsFlow.first()
-                val model = settings.findModelById(settings.imageGenerationModelId)
-                    ?: throw IllegalStateException("No model selected")
-
-                val provider = model.findProvider(settings.providers)
-                    ?: throw IllegalStateException("Provider not found")
-
-                val providerSetting = settings.providers.find { it.id == provider.id }
-                    ?: throw IllegalStateException("Provider setting not found")
+                val target = imageGenerationService.resolveTarget(settings)
 
                 val sourceImages = _referenceImages.value
                 val params = ImageEditParams(
-                    model = model,
+                    model = target.model,
                     prompt = _prompt.value,
                     images = sourceImages,
                     numOfImages = _numberOfImages.value,
                     aspectRatio = _aspectRatio.value,
-                    customHeaders = model.customHeaders,
-                    customBody = model.customBodies
+                    customHeaders = target.model.customHeaders,
+                    customBody = target.model.customBodies + target.customBody,
                 )
 
-                val result = providerManager.getProviderByType(provider)
-                    .editImage(providerSetting, params)
+                val result = imageGenerationService.edit(target, params)
 
                 val newImages = mutableListOf<GeneratedImage>()
 
@@ -231,7 +212,7 @@ class ImgGenVM(
                     val imageFile = saveImageToStorage(
                         item = item,
                         prompt = _prompt.value,
-                        modelName = model.displayName,
+                        modelName = target.model.displayName,
                         index = index,
                         type = GenMediaEntity.TYPE_IMAGE_EDIT,
                     )
@@ -240,7 +221,7 @@ class ImgGenVM(
                         prompt = _prompt.value,
                         filePath = imageFile.absolutePath,
                         timestamp = System.currentTimeMillis(),
-                        model = model.displayName
+                        model = target.model.displayName
                     )
                     newImages.add(generatedImage)
                 }

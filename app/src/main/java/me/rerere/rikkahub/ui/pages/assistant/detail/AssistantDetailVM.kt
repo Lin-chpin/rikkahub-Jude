@@ -5,6 +5,7 @@ import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -14,9 +15,13 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.withAssistantUpdate
+import me.rerere.rikkahub.data.datastore.withAssistantSystemPromptUpdate
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.files.SkillManager
 import me.rerere.rikkahub.data.files.SkillMetadata
@@ -38,6 +43,7 @@ class AssistantDetailVM(
     private val skillManager: SkillManager,
 ) : ViewModel() {
     private val assistantId = Uuid.parse(id)
+    private val systemPromptUpdateMutex = Mutex()
 
     private val _skills = MutableStateFlow<List<SkillMetadata>>(emptyList())
     val skills = _skills.asStateFlow()
@@ -164,6 +170,20 @@ class AssistantDetailVM(
             previous?.let { old ->
                 val files = setOfNotNull((old.avatar as? Avatar.Image)?.url, old.background, old.voiceCallBackground)
                 filesManager.deleteChatFiles(files.filterNot { it in referenced }.map { it.toUri() })
+            }
+        }
+    }
+
+    suspend fun saveAssistantSystemPrompt(systemPrompt: String) {
+        persistAssistantSystemPrompt(systemPrompt)
+    }
+
+    private suspend fun persistAssistantSystemPrompt(systemPrompt: String) {
+        withContext(NonCancellable) {
+            systemPromptUpdateMutex.withLock {
+                settingsStore.update { latest ->
+                    latest.withAssistantSystemPromptUpdate(assistantId, systemPrompt)
+                }
             }
         }
     }

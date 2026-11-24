@@ -369,6 +369,11 @@ class ResponseAPI(
                     }
                 }
             }
+            if (BuiltInTools.ImageGeneration in params.model.tools) {
+                put("tool_choice", buildJsonObject {
+                    put("type", "image_generation")
+                })
+            }
         }.mergeCustomBody(params.customBody)
 
         return (if (providerSetting.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION) {
@@ -816,7 +821,8 @@ class ResponseAPI(
             promptTokens = jsonObject["input_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
             completionTokens = jsonObject["output_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
             totalTokens = jsonObject["total_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
-            cachedTokens = cachedTokens ?: 0
+            cachedTokens = cachedTokens ?: 0,
+            cachedTokensReported = cachedTokens != null,
         )
         logInfo(
             TAG,

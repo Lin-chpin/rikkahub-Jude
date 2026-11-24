@@ -353,14 +353,17 @@ private fun ChatListNormal(
     } else {
         conversation.visibleMessageNodes
     }
+    val displayItems = remember(displayedMessageNodes) {
+        displayedMessageNodes.groupAssistantToolContinuations()
+    }
     val lastMessageNodeId = displayedMessageNodes.lastOrNull()?.id
 
-    LaunchedEffect(pendingJumpNodeId, displayedMessageNodes) {
+    LaunchedEffect(pendingJumpNodeId, displayItems) {
         val nodeId = pendingJumpNodeId ?: return@LaunchedEffect
         try {
-            val index = displayedMessageNodes.indexOfFirst { it.id == nodeId }
+            val index = displayItems.indexOfFirst { item -> item.sourceNodes.any { it.id == nodeId } }
             val searchTarget = activeMessageSearch?.takeIf { it.nodeId == nodeId }?.markdownTarget
-            Log.d(HISTORY_SEARCH_TAG, "jump start node=$nodeId index=$index count=${displayedMessageNodes.size} queryLength=${searchTarget?.query?.length ?: 0}")
+            Log.d(HISTORY_SEARCH_TAG, "jump start node=$nodeId index=$index count=${displayItems.size} queryLength=${searchTarget?.query?.length ?: 0}")
             if (index >= 0) {
                 snapshotFlow { imeInsets.getBottom(density) }.first { it == 0 }
                 try {
@@ -439,17 +442,19 @@ private fun ChatListNormal(
                 ) {
 
             itemsIndexed(
-                items = displayedMessageNodes,
-                key = { index, item -> item.id },
-            ) { index, node ->
+                items = displayItems,
+                key = { _, item -> item.node.id },
+            ) { index, displayItem ->
+                val node = displayItem.node
                 Column {
                     ListSelectableItem(
                         key = node.id,
                         onSelectChange = {
-                            if (!selectedItems.contains(node.id)) {
-                                selectedItems.add(node.id)
+                            val sourceIds = displayItem.sourceNodes.mapTo(mutableSetOf()) { it.id }
+                            if (sourceIds.all { it in selectedItems }) {
+                                selectedItems.removeAll(sourceIds)
                             } else {
-                                selectedItems.remove(node.id)
+                                selectedItems.addAll(sourceIds)
                             }
                         },
                         selectedKeys = selectedItems,
@@ -457,7 +462,7 @@ private fun ChatListNormal(
                     ) {
                         CompositionLocalProvider(
                             LocalMarkdownSearchTarget provides activeMessageSearch
-                                ?.takeIf { it.nodeId == node.id }
+                                ?.takeIf { target -> displayItem.sourceNodes.any { it.id == target.nodeId } }
                                 ?.markdownTarget,
                             LocalLiquidGlassHaze provides glassHazeState,
                         ) {
@@ -465,24 +470,29 @@ private fun ChatListNormal(
                                 node = node,
                                 model = node.currentMessage.modelId?.let(modelById::get),
                                 assistant = assistant,
-                                loading = loading && node.id == lastMessageNodeId,
+                                loading = loading && displayItem.sourceNodes.any { it.id == lastMessageNodeId },
+                                allowActions = displayItem.showActions,
+                                showGenerationSpeed = displayItem.showGenerationSpeed,
                                 onRegenerate = {
-                                    onRegenerate(node.currentMessage)
+                                    onRegenerate(displayItem.sourceNodes.first().currentMessage)
                                 },
                                 onEdit = {
-                                    onEdit(node.currentMessage)
+                                    onEdit(displayItem.sourceNodes.first().currentMessage)
                                 },
                                 onFork = {
-                                    onForkMessage(node.currentMessage)
+                                    onForkMessage(displayItem.sourceNodes.first().currentMessage)
                                 },
                                 onDelete = {
-                                    onDelete(node.currentMessage)
+                                    displayItem.sourceNodes.forEach { onDelete(it.currentMessage) }
                                 },
                                 onShare = {
                                     selecting = true  // 使用 CoroutineScope 延迟状态更新
                                     selectedItems.clear()
-                                    selectedItems.addAll(displayedMessageNodes.map { it.id }
-                                        .subList(0, displayedMessageNodes.indexOf(node) + 1))
+                                    selectedItems.addAll(
+                                        displayItems.take(index + 1)
+                                            .flatMap { it.sourceNodes }
+                                            .map { it.id }
+                                    )
                                 },
                                 onUpdate = {
                                     onUpdateMessage(it)
@@ -499,7 +509,7 @@ private fun ChatListNormal(
                                 onToolApproval = onToolApproval,
                                 onToolAnswer = onToolAnswer,
                                 onOpenVoiceCallRecord = onOpenVoiceCallRecord,
-                                lastMessage = node.id == lastMessageNodeId,
+                                lastMessage = displayItem.sourceNodes.any { it.id == lastMessageNodeId },
                             )
                         }
                     }

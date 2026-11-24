@@ -47,9 +47,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -66,6 +66,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.fastForEach
 import androidx.compose.ui.util.fastForEachIndexed
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.dokar.sonner.ToastType
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
@@ -86,6 +87,7 @@ import me.rerere.rikkahub.ui.components.ui.FormItem
 import me.rerere.rikkahub.ui.components.ui.Select
 import me.rerere.rikkahub.ui.components.ui.Tag
 import me.rerere.rikkahub.ui.components.ui.TextArea
+import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.theme.ChatFontProvider
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.ui.theme.JetbrainsMono
@@ -99,7 +101,8 @@ import org.koin.core.parameter.parametersOf
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import android.os.SystemClock
 import kotlin.uuid.Uuid
 
@@ -112,7 +115,11 @@ fun AssistantPromptPage(id: String) {
     )
     val assistant by vm.assistant.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
     var promptToEdit by remember(id) { mutableStateOf<String?>(null) }
+    var savingFullPrompt by remember(id) { mutableStateOf(false) }
+    val context = LocalContext.current
+    val toaster = LocalToaster.current
 
     // Do not initialize either editor with the VM's temporary, empty assistant.
     if (!settings.init && assistant.id.toString() == id) {
@@ -121,10 +128,27 @@ fun AssistantPromptPage(id: String) {
                 AssistantFullPromptEditor(
                     prompt = promptToEdit.orEmpty(),
                     savedPrompt = assistant.systemPrompt,
+                    isSaving = savingFullPrompt,
                     onCancel = { promptToEdit = null },
                     onSave = { prompt ->
-                        vm.update(assistant.copy(systemPrompt = prompt), assistant)
-                        promptToEdit = null
+                        if (!savingFullPrompt) {
+                            scope.launch {
+                                savingFullPrompt = true
+                                try {
+                                    vm.saveAssistantSystemPrompt(prompt)
+                                    vm.assistant.first { it.systemPrompt == prompt }
+                                    promptToEdit = null
+                                } catch (error: Exception) {
+                                    if (error is CancellationException) throw error
+                                    toaster.show(
+                                        context.getString(R.string.assistant_prompt_save_failed),
+                                        type = ToastType.Error,
+                                    )
+                                } finally {
+                                    savingFullPrompt = false
+                                }
+                            }
+                        }
                     },
                 )
             } else {
@@ -150,6 +174,7 @@ fun AssistantPromptPage(id: String) {
                         assistant = assistant,
                         settings = settings,
                         onUpdate = { vm.update(it, assistant) },
+                        onSaveSystemPrompt = vm::saveAssistantSystemPrompt,
                         onEditFullPrompt = { promptToEdit = it },
                     )
                 }
@@ -164,14 +189,35 @@ private fun AssistantPromptContent(
     assistant: Assistant,
     settings: Settings,
     onUpdate: (Assistant) -> Unit,
+    onSaveSystemPrompt: suspend (String) -> Unit,
     onEditFullPrompt: (String) -> Unit,
 ) {
     val context = LocalContext.current
     val templateTransformer = koinInject<TemplateTransformer>()
     val latestAssistant by rememberUpdatedState(assistant)
     val latestOnUpdate by rememberUpdatedState(onUpdate)
+    val latestOnSaveSystemPrompt by rememberUpdatedState(onSaveSystemPrompt)
+    val scope = rememberCoroutineScope()
+    val toaster = LocalToaster.current
+    var savingPrompt by remember(assistant.id) { mutableStateOf(false) }
     val recoverSavedPrompt = remember(assistant.systemPrompt) {
         needsAssistantPromptRecovery(assistant.systemPrompt)
+    }
+    val savePrompt: (String) -> Unit = { prompt ->
+        scope.launch {
+            savingPrompt = true
+            try {
+                latestOnSaveSystemPrompt(prompt)
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                toaster.show(
+                    context.getString(R.string.assistant_prompt_save_failed),
+                    type = ToastType.Error,
+                )
+            } finally {
+                savingPrompt = false
+            }
+        }
     }
 
     LaunchedEffect(assistant.id) {
@@ -196,24 +242,13 @@ private fun AssistantPromptContent(
                 if (recoverSavedPrompt) {
                     AssistantPromptRecovery(
                         prompt = assistant.systemPrompt,
-                        onClear = { latestOnUpdate(latestAssistant.copy(systemPrompt = "")) },
+                        onClear = { onEditFullPrompt("") },
                         onEdit = { onEditFullPrompt(assistant.systemPrompt) },
                     )
                 } else {
                     val systemPromptValue = rememberTextFieldState(
                         initialText = assistant.systemPrompt,
                     )
-                    LaunchedEffect(assistant.id) {
-                        snapshotFlow { systemPromptValue.text.toString() }.drop(1).collect { prompt ->
-                            // Opening the page must neither rewrite settings nor save unsafe drafts.
-                            if (prompt != latestAssistant.systemPrompt && !needsAssistantPromptRecovery(prompt)) {
-                                latestOnUpdate(
-                                    latestAssistant.copy(systemPrompt = prompt)
-                                )
-                            }
-                        }
-                    }
-
                     if (needsAssistantPromptRecovery(systemPromptValue.text)) {
                         AssistantPromptRecovery(
                             prompt = systemPromptValue.text.toString(),
@@ -226,6 +261,16 @@ private fun AssistantPromptContent(
                             label = stringResource(R.string.assistant_page_system_prompt),
                             minLines = 5,
                             maxLines = 10,
+                            headerActions = {
+                                val currentPrompt = systemPromptValue.text.toString()
+                                TextButton(
+                                    enabled = !savingPrompt && currentPrompt != latestAssistant.systemPrompt,
+                                    onClick = { savePrompt(systemPromptValue.text.toString()) },
+                                ) {
+                                    Text(stringResource(R.string.text_area_save))
+                                }
+                            },
+                            onFullscreenSave = savePrompt,
                             supportedFileTypes = arrayOf("text/*", "application/json", "image/*",
                                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/msword"),
                             fileImporter = { uri -> importAssistantPromptFile(context, uri).text },

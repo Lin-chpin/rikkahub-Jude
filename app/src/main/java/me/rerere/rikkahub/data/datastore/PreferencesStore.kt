@@ -104,6 +104,7 @@ class SettingsStore(
         val TRANSLATE_MODEL = stringPreferencesKey("translate_model")
         val SUGGESTION_MODEL = stringPreferencesKey("suggestion_model")
         val IMAGE_GENERATION_MODEL = stringPreferencesKey("image_generation_model")
+        val IMAGE_GENERATION_OPENAI_CONFIG = stringPreferencesKey("image_generation_openai_config")
         val TITLE_PROMPT = stringPreferencesKey("title_prompt")
         val TRANSLATION_PROMPT = stringPreferencesKey("translation_prompt")
         val TRANSLATE_THINKING_BUDGET = intPreferencesKey("translate_thinking_budget")
@@ -190,6 +191,9 @@ class SettingsStore(
                 suggestionModelId = preferences[SUGGESTION_MODEL]?.let { Uuid.parse(it) }
                     ?: DEFAULT_AUTO_MODEL_ID,
                 imageGenerationModelId = preferences[IMAGE_GENERATION_MODEL]?.let { Uuid.parse(it) } ?: Uuid.random(),
+                imageGenerationOpenAIConfig = preferences[IMAGE_GENERATION_OPENAI_CONFIG]?.let {
+                    JsonInstant.decodeFromString(it)
+                } ?: ImageGenerationOpenAIConfig(),
                 titlePrompt = preferences[TITLE_PROMPT] ?: DEFAULT_TITLE_PROMPT,
                 translatePrompt = preferences[TRANSLATION_PROMPT] ?: DEFAULT_TRANSLATION_PROMPT,
                 translateThinkingBudget = preferences[TRANSLATE_THINKING_BUDGET] ?: 0,
@@ -512,6 +516,8 @@ private fun persistSettings(preferences: MutablePreferences, settings: Settings)
         preferences[SettingsStore.TRANSLATE_MODEL] = settings.translateModeId.toString()
         preferences[SettingsStore.SUGGESTION_MODEL] = settings.suggestionModelId.toString()
         preferences[SettingsStore.IMAGE_GENERATION_MODEL] = settings.imageGenerationModelId.toString()
+        preferences[SettingsStore.IMAGE_GENERATION_OPENAI_CONFIG] =
+            JsonInstant.encodeToString(settings.imageGenerationOpenAIConfig)
         preferences[SettingsStore.TITLE_PROMPT] = settings.titlePrompt
         preferences[SettingsStore.TRANSLATION_PROMPT] = settings.translatePrompt
         preferences[SettingsStore.TRANSLATE_THINKING_BUDGET] = settings.translateThinkingBudget
@@ -586,6 +592,7 @@ data class Settings(
     val chatModelId: Uuid = Uuid.random(),
     val titleModelId: Uuid = Uuid.random(),
     val imageGenerationModelId: Uuid = Uuid.random(),
+    val imageGenerationOpenAIConfig: ImageGenerationOpenAIConfig = ImageGenerationOpenAIConfig(),
     val titlePrompt: String = DEFAULT_TITLE_PROMPT,
     val translateModeId: Uuid = Uuid.random(),
     val translatePrompt: String = DEFAULT_TRANSLATION_PROMPT,
@@ -651,6 +658,15 @@ data class CompressOpenAIConfig(
     val baseUrl: String = "https://api.openai.com/v1",
     val chatCompletionsPath: String = "/chat/completions",
     val useResponseApi: Boolean = false,
+)
+
+@Serializable
+data class ImageGenerationOpenAIConfig(
+    val enabled: Boolean = false,
+    val modelId: String = "",
+    val apiKey: String = "",
+    val baseUrl: String = "https://api.openai.com/v1",
+    val size: String = "",
 )
 
 @Serializable

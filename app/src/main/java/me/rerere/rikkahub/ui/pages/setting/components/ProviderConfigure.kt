@@ -25,7 +25,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,6 +40,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.dokar.sonner.ToastType
 import me.rerere.ai.provider.ClaudePromptCacheTtl
+import me.rerere.ai.provider.GoogleAuthType
 import me.rerere.ai.provider.OPENAI_CODEX_BASE_URL
 import me.rerere.ai.provider.OpenAIAuthType
 import me.rerere.ai.provider.ProviderSetting
@@ -47,6 +48,7 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.ai.chatErrorExplanation
 import me.rerere.rikkahub.data.ai.openai.OpenAICodexAuthService
 import me.rerere.rikkahub.data.ai.openai.OpenAICodexDeviceCode
+import me.rerere.rikkahub.data.ai.gemini.GeminiOAuthAccountRepository
 import me.rerere.rikkahub.data.datastore.DEFAULT_PROVIDERS
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.View
@@ -296,16 +298,18 @@ private fun ColumnScope.ProviderConfigureOpenAI(
     var authError by remember(provider.id) { mutableStateOf<String?>(null) }
     var signingIn by remember(provider.id) { mutableStateOf(false) }
     var showCodexTutorial by remember(provider.id) { mutableStateOf(false) }
-    val supportsChatGPTSubscription = provider.supportsChatGPTSubscription()
-    val selectedAuthType = if (supportsChatGPTSubscription) {
-        provider.authType
-    } else {
-        OpenAIAuthType.API_KEY
-    }
+    var pendingAuthType by remember(provider.id) { mutableStateOf<OpenAIAuthType?>(null) }
+    val selectedAuthType = provider.authType
+    val hasApiCredentials = provider.apiKey.isNotBlank()
+    val hasSubscriptionCredentials = provider.codexCredentials != null
+    val hasAuthConflict = hasApiCredentials && hasSubscriptionCredentials
 
-    LaunchedEffect(provider.authType, supportsChatGPTSubscription) {
-        if (!supportsChatGPTSubscription && provider.authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION) {
-            onEdit(provider.copy(authType = OpenAIAuthType.API_KEY, codexCredentials = null))
+    fun selectAuthType(authType: OpenAIAuthType) {
+        if (authType == provider.authType) return
+        if (hasAuthConflict) {
+            pendingAuthType = authType
+        } else {
+            onEdit(provider.switchAuthType(authType))
         }
     }
 
@@ -315,21 +319,23 @@ private fun ColumnScope.ProviderConfigureOpenAI(
             signingIn = true
             authError = null
             try {
-                val signedIn = codexAuthService.signIn(provider.id) { code ->
+                val signedIn = codexAuthService.signIn(
+                    provider.id,
+                    activateSubscription = !hasApiCredentials,
+                ) { code ->
                     deviceCode = code
                     context.getSystemService(ClipboardManager::class.java)
                         ?.setPrimaryClip(ClipData.newPlainText("OpenAI Codex device code", code.userCode))
                     launchCodexAuthorization(context, code.verificationUrl)
                 }
                 deviceCode = null
-                onEdit(
-                    provider.copy(
-                        authType = OpenAIAuthType.CHATGPT_SUBSCRIPTION,
-                        codexCredentials = signedIn,
-                        baseUrl = OPENAI_CODEX_BASE_URL,
-                        useResponseApi = true,
-                    )
-                )
+                val updatedProvider = provider.copy(codexCredentials = signedIn)
+                onEdit(updatedProvider)
+                if (hasApiCredentials && provider.authType != OpenAIAuthType.CHATGPT_SUBSCRIPTION) {
+                    pendingAuthType = OpenAIAuthType.CHATGPT_SUBSCRIPTION
+                } else {
+                    onEdit(updatedProvider.switchAuthType(OpenAIAuthType.CHATGPT_SUBSCRIPTION))
+                }
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -366,41 +372,34 @@ private fun ColumnScope.ProviderConfigureOpenAI(
         modifier = Modifier.fillMaxWidth(),
     )
 
-    if (supportsChatGPTSubscription) {
-        Text(stringResource(R.string.setting_provider_page_auth_method))
-        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-            OpenAIAuthType.entries.forEachIndexed { index, authType ->
-                SegmentedButton(
-                    shape = SegmentedButtonDefaults.itemShape(
-                        index = index,
-                        count = OpenAIAuthType.entries.size,
-                    ),
-                    label = {
-                        Text(
-                            when (authType) {
-                                OpenAIAuthType.API_KEY -> stringResource(R.string.setting_provider_page_api_key)
-                                OpenAIAuthType.CHATGPT_SUBSCRIPTION -> stringResource(R.string.setting_provider_page_chatgpt_subscription)
-                            }
-                        )
-                    },
-                    selected = provider.authType == authType,
-                    onClick = {
-                        val baseUrl = when {
-                            authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION -> OPENAI_CODEX_BASE_URL
-                            provider.baseUrl == OPENAI_CODEX_BASE_URL -> ProviderSetting.OpenAI().baseUrl
-                            else -> provider.baseUrl
+    Text(stringResource(R.string.setting_provider_page_auth_method))
+    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+        OpenAIAuthType.entries.forEachIndexed { index, authType ->
+            SegmentedButton(
+                shape = SegmentedButtonDefaults.itemShape(
+                    index = index,
+                    count = OpenAIAuthType.entries.size,
+                ),
+                label = {
+                    Text(
+                        when (authType) {
+                            OpenAIAuthType.API_KEY -> stringResource(R.string.setting_provider_page_api_key)
+                            OpenAIAuthType.CHATGPT_SUBSCRIPTION -> stringResource(R.string.setting_provider_page_chatgpt_subscription)
                         }
-                        onEdit(
-                            provider.copy(
-                                authType = authType,
-                                baseUrl = baseUrl,
-                                useResponseApi = authType == OpenAIAuthType.CHATGPT_SUBSCRIPTION || provider.useResponseApi,
-                            )
-                        )
-                    },
-                )
-            }
+                    )
+                },
+                selected = provider.authType == authType,
+                onClick = { selectAuthType(authType) },
+            )
         }
+    }
+
+    if (hasAuthConflict) {
+        Text(
+            text = stringResource(R.string.setting_provider_page_auth_conflict_warning),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
     }
 
     when (selectedAuthType) {
@@ -482,7 +481,7 @@ private fun ColumnScope.ProviderConfigureOpenAI(
     OutlinedTextField(
         value = provider.baseUrl,
         onValueChange = {
-            onEdit(provider.copy(baseUrl = it.trim()))
+            onEdit(provider.copy(baseUrl = it.trim(), apiBaseUrl = it.trim()))
         },
         label = {
             Text(stringResource(id = R.string.setting_provider_page_api_base_url))
@@ -580,12 +579,44 @@ private fun ColumnScope.ProviderConfigureOpenAI(
             startCodexSignIn()
         },
     )
+
+    pendingAuthType?.let { authType ->
+        AuthModeConflictDialog(
+            onDismiss = { pendingAuthType = null },
+            onConfirm = {
+                pendingAuthType = null
+                onEdit(provider.switchAuthType(authType))
+            },
+        )
+    }
 }
 
 private fun launchCodexAuthorization(context: android.content.Context, verificationUrl: String) {
     runCatching {
         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(verificationUrl)))
     }
+}
+
+@Composable
+private fun AuthModeConflictDialog(
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.setting_provider_page_auth_conflict_title)) },
+        text = { Text(stringResource(R.string.setting_provider_page_auth_conflict_message)) },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(stringResource(R.string.confirm))
+            }
+        },
+    )
 }
 
 @Composable
@@ -710,6 +741,24 @@ private fun ColumnScope.ProviderConfigureGoogle(
 ) {
     val context = LocalContext.current
     val toaster = LocalToaster.current
+    val accountRepository = koinInject<GeminiOAuthAccountRepository>()
+    val subscriptionAccount by accountRepository.account.collectAsState()
+    var pendingAuthType by remember(provider.id) { mutableStateOf<GoogleAuthType?>(null) }
+    val hasApiCredentials = provider.apiKey.isNotBlank() || (
+        provider.vertexAI && provider.useServiceAccount &&
+            provider.serviceAccountEmail.isNotBlank() && provider.privateKey.isNotBlank()
+        )
+    val hasAuthConflict = hasApiCredentials && subscriptionAccount != null
+
+    fun selectAuthType(authType: GoogleAuthType) {
+        if (authType == provider.authType) return
+        if (hasAuthConflict) {
+            pendingAuthType = authType
+        } else {
+            onEdit(provider.switchAuthType(authType))
+        }
+    }
+
     val serviceAccountJsonLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -760,6 +809,46 @@ private fun ColumnScope.ProviderConfigureGoogle(
         },
         modifier = Modifier.fillMaxWidth()
     )
+
+    Text(stringResource(R.string.setting_provider_page_google_authentication))
+    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+        val authTypes = listOf(
+            GoogleAuthType.API_KEY to R.string.setting_provider_page_google_auth_api_key,
+            GoogleAuthType.GEMINI_SUBSCRIPTION to R.string.setting_provider_page_google_auth_subscription,
+        )
+        authTypes.forEachIndexed { index, (authType, label) ->
+            SegmentedButton(
+                selected = provider.authType == authType,
+                onClick = { selectAuthType(authType) },
+                shape = SegmentedButtonDefaults.itemShape(index = index, count = authTypes.size),
+            ) {
+                Text(stringResource(label))
+            }
+        }
+    }
+
+    if (hasAuthConflict) {
+        Text(
+            text = stringResource(R.string.setting_provider_page_auth_conflict_warning),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+
+    pendingAuthType?.let { authType ->
+        AuthModeConflictDialog(
+            onDismiss = { pendingAuthType = null },
+            onConfirm = {
+                pendingAuthType = null
+                onEdit(provider.switchAuthType(authType))
+            },
+        )
+    }
+
+    if (provider.authType == GoogleAuthType.GEMINI_SUBSCRIPTION) {
+        GeminiSubscriptionConfigure()
+        return
+    }
 
     Row(
         verticalAlignment = Alignment.CenterVertically

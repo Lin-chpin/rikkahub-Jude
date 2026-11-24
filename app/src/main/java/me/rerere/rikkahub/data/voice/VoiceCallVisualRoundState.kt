@@ -42,14 +42,20 @@ internal data class VoiceCallVisualRoundSnapshot(
             failedImageCount >= capturedImageCount
 }
 
-/** Accumulates recognition results for one call turn and never retains captured image bytes. */
+/** Holds OCR results and temporary JPEG copies only until the corresponding user message is saved. */
 internal class VoiceCallVisualRoundState {
     private data class Round(
         val id: String,
         val requests: MutableList<Deferred<VoiceCallVisualRequest>> = mutableListOf(),
+        val pendingArchiveImages: MutableList<ByteArray> = mutableListOf(),
         var sendAttemptId: String? = null,
         var recognitionJobs: Int = 0,
-    )
+    ) {
+        fun clearArchiveImages() {
+            pendingArchiveImages.forEach { it.fill(0) }
+            pendingArchiveImages.clear()
+        }
+    }
 
     private var round: Round? = null
     private val mutableState = MutableStateFlow(VoiceCallVisualRoundSnapshot())
@@ -61,6 +67,7 @@ internal class VoiceCallVisualRoundState {
 
     @Synchronized
     fun replace(sessionId: String, request: Deferred<VoiceCallVisualRequest>): String {
+        round?.clearArchiveImages()
         round?.requests?.forEach { it.cancel() }
         round = Round(sessionId, mutableListOf(request))
         mutableState.value = VoiceCallVisualRoundSnapshot(
@@ -75,6 +82,7 @@ internal class VoiceCallVisualRoundState {
     fun beginCapture(): String? {
         var current = round
         if (current == null || mutableState.value.completed) {
+            current?.clearArchiveImages()
             current?.requests?.forEach { it.cancel() }
             current = Round(UUID.randomUUID().toString())
             round = current
@@ -128,6 +136,9 @@ internal class VoiceCallVisualRoundState {
             frames.size,
             VOICE_CALL_VISUAL_MAX_IMAGES - mutableState.value.capturedImageCount,
         ).coerceAtLeast(0)
+        frames.take(count).forEach { frame ->
+            round?.pendingArchiveImages?.add(frame.jpeg.copyOf())
+        }
         mutableState.update { current ->
             current.copy(
                 status = if (count == 0) current.status else current.statusAfterFrameReady(),
@@ -220,6 +231,17 @@ internal class VoiceCallVisualRoundState {
         preparedRequest(sessionId)?.parts.orEmpty()
 
     @Synchronized
+    fun archiveImageCopiesForMessage(sessionId: String): List<ByteArray> {
+        val currentRound = round?.takeIf { it.id == sessionId } ?: return emptyList()
+        return currentRound.pendingArchiveImages.map(ByteArray::copyOf)
+    }
+
+    @Synchronized
+    fun clearArchiveImages(sessionId: String) {
+        round?.takeIf { it.id == sessionId }?.clearArchiveImages()
+    }
+
+    @Synchronized
     fun beginSubmission(sessionId: String): String? {
         val currentRound = round?.takeIf { it.id == sessionId } ?: return null
         if (currentRound.sendAttemptId != null || mutableState.value.completed) return null
@@ -300,6 +322,7 @@ internal class VoiceCallVisualRoundState {
     fun finishReply(sessionId: String) {
         val current = round?.takeIf { it.id == sessionId } ?: return
         if (!mutableState.value.completed || current.sendAttemptId != null) return
+        current.clearArchiveImages()
         current.requests.forEach { it.cancel() }
         round = null
         mutableState.update {
@@ -329,6 +352,7 @@ internal class VoiceCallVisualRoundState {
         val current = round?.takeIf { it.id == sessionId }
         if (current == null && mutableState.value.sessionId != sessionId) return
         round = null
+        current?.clearArchiveImages()
         current?.requests?.forEach { it.cancel() }
         mutableState.value = VoiceCallVisualRoundSnapshot()
     }

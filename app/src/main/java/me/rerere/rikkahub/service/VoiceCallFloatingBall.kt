@@ -2,6 +2,7 @@ package me.rerere.rikkahub.service
 
 import android.content.Context
 import android.graphics.Color
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
@@ -51,6 +52,7 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
     private var statusView: TextView? = null
     private var thumbnailView: ImageView? = null
     private var thumbnailBytes: ByteArray? = null
+    private var thumbnailBitmap: Bitmap? = null
     private var expanded = false
     private var status: String? = null
     private var temporarilyHidden = false
@@ -78,7 +80,8 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
     fun setVisualFeedback(value: String, thumbnail: ByteArray?) {
         Log.i(TAG, "floating ball feedback status=${value.ifBlank { "none" }} thumbnail=${thumbnail != null} bytes=${thumbnail?.size ?: 0}")
         setStatus(value)
-        thumbnailBytes = thumbnail
+        thumbnailBytes?.fill(0)
+        thumbnailBytes = thumbnail?.copyOf()
         root?.let {
             renderThumbnail(it)
             renderActions(it)
@@ -226,14 +229,20 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
         val bytes = thumbnailBytes
         if (bytes == null) {
             if (thumbnailView != null) Log.i(TAG, "floating ball thumbnail removed")
+            thumbnailView?.setImageDrawable(null)
             thumbnailView?.let(root::removeView)
             thumbnailView = null
+            thumbnailBitmap?.recycle()
+            thumbnailBitmap = null
             return
         }
         val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
         Log.i(TAG, "floating ball thumbnail decode success=${bitmap != null} bytes=${bytes.size} size=${bitmap?.width}x${bitmap?.height}")
+        if (bitmap == null) return
         if (thumbnailView != null) {
             thumbnailView?.setImageBitmap(bitmap)
+            thumbnailBitmap?.takeIf { it !== bitmap }?.recycle()
+            thumbnailBitmap = bitmap
             return
         }
         val density = appContext.resources.displayMetrics.density
@@ -250,6 +259,8 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
                 topMargin = (6 * density).toInt()
             }
         }.also { root.addView(it, 1) }
+        thumbnailBitmap?.takeIf { it !== bitmap }?.recycle()
+        thumbnailBitmap = bitmap
     }
 
     private fun statusTextSize(value: String): Float = if (value.length >= 5) 10f else 12f
@@ -279,6 +290,10 @@ internal class VoiceCallFloatingBall(context: Context) : DefaultLifecycleObserve
         closed = true
         lifecycle.removeObserver(this)
         hide()
+        thumbnailBytes?.fill(0)
+        thumbnailBytes = null
+        thumbnailBitmap?.recycle()
+        thumbnailBitmap = null
     }
 }
 

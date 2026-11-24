@@ -106,25 +106,27 @@ class McpManager(
     private val appScope: AppScope,
     private val filesManager: FilesManager,
 ) {
-    private val okHttpClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.MINUTES)
-        .writeTimeout(120, TimeUnit.SECONDS)
-        .followSslRedirects(true)
-        .followRedirects(true)
-        .build()
+    private val httpClientProvider = McpHttpClientProvider {
+        val okHttpClient = OkHttpClient.Builder()
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(10, TimeUnit.MINUTES)
+            .writeTimeout(120, TimeUnit.SECONDS)
+            .followSslRedirects(true)
+            .followRedirects(true)
+            .build()
 
-    private val client = HttpClient(OkHttp) {
-        engine {
-            preconfigured = okHttpClient
+        HttpClient(OkHttp) {
+            engine {
+                preconfigured = okHttpClient
+            }
+            install(ContentNegotiation) {
+                json(Json {
+                    prettyPrint = true
+                    isLenient = true
+                })
+            }
+            install(SSE)
         }
-        install(ContentNegotiation) {
-            json(Json {
-                prettyPrint = true
-                isLenient = true
-            })
-        }
-        install(SSE)
     }
 
     private val clients: MutableMap<McpServerConfig, Client> = mutableMapOf()
@@ -227,35 +229,38 @@ class McpManager(
         return UIMessagePart.Image(url = uri.toString())
     }
 
-    private fun getTransport(config: McpServerConfig): AbstractTransport = when (config) {
-        is McpServerConfig.SseTransportServer -> {
-            SseClientTransport(
-                urlString = config.url,
-                client = client,
-                requestBuilder = {
-                    headers.appendAll(StringValues.build {
-                        config.commonOptions.headers.forEach {
-                            append(it.first, it.second)
-                        }
-                    })
-                },
-            )
-        }
-
-        is McpServerConfig.StreamableHTTPServer -> {
-            StreamableHttpClientTransport(
-                url = config.url,
-                client = client,
-                requestBuilder = {
-                    headers.appendAll(StringValues.build {
-                        config.commonOptions.headers.forEach {
-                            append(it.first, it.second)
-                        }
-                    })
+    private suspend fun getTransport(config: McpServerConfig): AbstractTransport =
+        httpClientProvider.withClient { httpClient ->
+            when (config) {
+                is McpServerConfig.SseTransportServer -> {
+                    SseClientTransport(
+                        urlString = config.url,
+                        client = httpClient,
+                        requestBuilder = {
+                            headers.appendAll(StringValues.build {
+                                config.commonOptions.headers.forEach {
+                                    append(it.first, it.second)
+                                }
+                            })
+                        },
+                    )
                 }
-            )
+
+                is McpServerConfig.StreamableHTTPServer -> {
+                    StreamableHttpClientTransport(
+                        url = config.url,
+                        client = httpClient,
+                        requestBuilder = {
+                            headers.appendAll(StringValues.build {
+                                config.commonOptions.headers.forEach {
+                                    append(it.first, it.second)
+                                }
+                            })
+                        }
+                    )
+                }
+            }
         }
-    }
 
     suspend fun addClient(config: McpServerConfig) = withContext(Dispatchers.IO) {
         removeClient(config) // Remove first
