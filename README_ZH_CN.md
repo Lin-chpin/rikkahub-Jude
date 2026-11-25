@@ -1,127 +1,67 @@
 <div align="center">
-  <img src="docs/icon.png" alt="App 图标" width="100" />
+  <img src="docs/icon.png" alt="RikkaHub Jude 图标" width="100" />
   <h1>RikkaHub Jude</h1>
+  <p>基于 RikkaHub 的二改分支，以 <strong>RP（角色扮演）</strong> 和 <strong>本体恋</strong> 为主要特色，专注沉浸式陪伴与低延迟交互体验的原生 Android AI 客户端</p>
 
-  [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/rikkahub/rikkahub)
-  [![Ask DeepWiki](https://img.shields.io/badge/zread.ai-blue?style=flat&logo=readthedocs)](https://zread.ai/rikkahub/rikkahub)
+  [![GitHub Releases](https://img.shields.io/github/v/release/Lin-chpin/rikkahub-Jude?display_name=tag)](https://github.com/Lin-chpin/rikkahub-Jude/releases)
+  [![License](https://img.shields.io/github/license/Lin-chpin/rikkahub-Jude)](LICENSE)
 
-一个支持切换不同供应商进行对话的原生 Android LLM 聊天客户端 🤖💬
-
-点击加入 Discord 服务器 👉 [【RikkaHub】](https://discord.gg/9weBqxe5c4)
-
-[English](README.md) | [繁體中文](README_ZH_TW.md) | 简体中文
+  [主 README](README.md) | 简体中文 | [繁體中文](README_ZH_TW.md)
 </div>
-
-> [!IMPORTANT]
-> 这是基于 [RikkaHub](https://github.com/rikkahub/rikkahub) 的**非官方社区维护 fork**，不是 RikkaHub 官方版本。
-> 本仓库保留上游 Git 历史，并持续维护自动滚动摘要、上下文压缩、朋友圈和匿名提问箱等功能。
-> 可下载版本以本 fork 的 [Releases 页面](https://github.com/Lin-chpin/rikkahub-Jude/releases) 为准。
 
 <div align="center">
   <img src="docs/img/chat.png" alt="聊天界面" width="150" />
   <img src="docs/img/desktop.png" alt="模型选择器" width="450" />
 </div>
 
-## 🚀 下载本 fork
+## 这是什么
 
-🔗 **[前往 GitHub Releases 下载 APK](https://github.com/Lin-chpin/rikkahub-Jude/releases)**
+**RikkaHub Jude** 是 [RikkaHub](https://github.com/rikkahub/rikkahub) 的非官方二改分支。我们在保留多供应商、多模态与基础聊天能力的同时，重点围绕 **RP（角色扮演）和本体恋** 场景持续打磨，补齐实时陪伴、低延迟语音、主动唤醒、日常互动与缓存优化等体验。
 
-如果只是安装应用，请不要点击 **Code → Download ZIP**，那里下载的是源代码，不是 APK。
+## 特色功能
 
-默认 Debug 构建为 universal APK。安装前请先备份应用数据。由于本 fork 与官方应用可能使用不同签名，Android 可能不允许直接覆盖安装；如果提示签名冲突，请先导出备份，再考虑卸载已有版本。
+- **实时通话、视频与共享屏幕**：支持双向语音通话、摄像头视频与系统授权屏幕共享，原则上可以和 AI 一起逛任何社交软件、一起看电影，并支持通话记录与音频回放。
+- **多厂家 TTS 延迟优化与 AI 语音条**：接入 ElevenLabs（v3/v4/v4 Turbo WebSocket 流式预连接）、Fish Audio、MiniMax Speech 2.6/2.8 等多家 TTS 并针对首声延迟优化；聊天支持图文混排 AI 语音条、分段朗读与情绪/声音标签。
+- **Gemini / GPT 订阅接入与缓存提升**：支持 Gemini 订阅、ChatGPT (Codex) 订阅 OAuth 登录与额度查询；针对多协议做了 Prompt Cache 前缀稳定与命中提升，搭配 DeepSeek Flash 等快速模型可获得毫秒级响应体验。
+- **心跳与查岗模式**：支持后台定时心跳、AI 自主闹钟、晚安模式、本地应用使用统计/时长提醒、AI 应用锁与查岗/哨兵观察能力。
+- **朋友圈与匿名提问箱**：按助手隔离的独立朋友圈（AI 发帖、配图回应、点赞评论、日期筛选）与匿名提问箱，增强日常陪伴感。
+- **长对话与独立辅助接口**：支持自动滚动摘要与分块压缩、独立压缩 API/模型、独立 OCR API/模型，以及请求日志诊断和本地备份恢复。
 
-需要官方版本时，请前往 [RikkaHub 上游项目](https://github.com/rikkahub/rikkahub)。
+## 上游保留的基础能力
 
-## 🌿 本 fork 维护和新增的内容
+- 多供应商与自定义 API（兼容 OpenAI、Anthropic、Google 等接口）。
+- 多模态输入（图片、文本、PDF、Docx 等）、独立背景与透明度设置。
+- MCP、本地工具、联网搜索与网页访问。
+- Markdown、代码高亮、LaTeX、表格和 Mermaid 渲染。
+- 消息分支、助手与人设自定义、Prompt 变量、记忆、AI 翻译与角色卡导入。
+- Material You、深色模式、供应商二维码导入与导出。
 
-- **自动滚动摘要与上下文压缩**：保留最近消息，持续压缩较早的可见历史，并支持查看、编辑摘要和配置目标长度。
-- **长对话分块压缩**：超长历史和已有摘要会按容量分块处理，避免一次请求携带过多内容。
-- **独立压缩 API 与模型**：压缩任务可以单独配置 OpenAI 兼容接口、API Key、模型、Chat Completions 路径或 Responses API。
-- **独立 OCR API 与模型**：OCR 可以使用单独的 OpenAI 兼容接口和模型，不影响普通聊天供应商。
-- **分段 TTS 控制**：支持按段落朗读回复，并提供仅朗读引用、仅朗读英文和生成后自动播放等选项。
-- **使用统计与提醒**：提供本地应用使用统计和可配置的使用时长提醒。
-- **朋友圈**：按助手隔离的动态时间线，支持 AI 点赞、评论、删除、日期筛选和手动刷新诊断。
-- **匿名提问箱**：按助手隔离的匿名问题，支持延迟 AI 回答、用户一次性回答以及 AI 后续评论。
-- **备份与发布维护**：兼容较新的备份格式，恢复本地文件，提供请求日志、universal Debug APK 打包和优先检查 universal 包的更新逻辑。
+## 下载
 
-除 Release 说明特别标注外，本 fork 仍保留下方列出的 RikkaHub 上游功能。
+前往 [GitHub Releases](https://github.com/Lin-chpin/rikkahub-Jude/releases) 查看并下载最新 APK。
 
-## 🧭 仓库归属与贡献说明
+默认 Debug 构建为 Universal APK。安装前建议先备份应用数据；由于签名可能与官方版本或其他构建不同，遇到覆盖安装冲突时请先导出备份再处理旧安装包。
 
-本仓库由 **[Lin-chpin](https://github.com/Lin-chpin)** 维护，是个人/社区 fork，不是官方 RikkaHub 仓库，也不表示代码库的每一部分都是维护者从零编写的。
+## 本地构建
 
-本仓库保留了历史 Git 提交。因此，GitHub 在查看文件历史或提交作者时，可能显示 `RikkaHub Public Release` 等上游或继承的提交身份。这些名称只代表对应的 Git 元数据，不代表本仓库的所有者或维护者。上游项目及其贡献者的原始工作仍应得到相应署名；本仓库实际维护范围见上面的“本 fork 维护和新增的内容”。
+项目使用 Android Studio、Kotlin、Jetpack Compose、Koin、Room、DataStore 和 Gradle 构建。
 
-为避免混淆：
+构建 Public Universal Debug APK：
 
-- **上游项目：** [rikkahub/rikkahub](https://github.com/rikkahub/rikkahub)
-- **本 fork：** [Lin-chpin/rikkahub-Jude](https://github.com/Lin-chpin/rikkahub-Jude)
-- **本 fork 维护者：** [Lin-chpin](https://github.com/Lin-chpin)
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-universal-debug-apk.ps1
+```
 
-## 💖 赞助商
+构建前需要在 `app` 目录放置 `google-services.json`。产物位于 `app/build/outputs/apk/public/debug/`。
 
-<div align="center">
-  <img src="app/src/main/assets/icons/aihubmix-color.svg" alt="Aihubmix" width="50" />
-  <p style="font-size: 16px; font-weight: bold;">Aihubmix</p>
-  <p style="font-size: 14px;">感谢 <a href="https://aihubmix.com?aff=pG7r">aihubmix.com</a> 的资金支持。我们推荐使用 aihubmix 作为全球主流模型的一站式服务平台。（OpenAI、Claude、Google Gemini、DeepSeek、Qwen 以及数百种其他模型）。</p>
-</div>
+## 仓库归属
 
-## ✨ 功能特色
+- 上游项目：[rikkahub/rikkahub](https://github.com/rikkahub/rikkahub)
+- 本项目：[Lin-chpin/rikkahub-Jude](https://github.com/Lin-chpin/rikkahub-Jude)
+- 维护者：[Lin-chpin](https://github.com/Lin-chpin)
 
-- 🎨 Material You 设计和 🌙 深色模式
-- 🔄 多 AI 供应商支持：自定义 API / URL / 模型（兼容 OpenAI、Google、Anthropic 等接口）
-- 🖼️ 多模态输入支持（图片、文本、PDF、Docx）
-- 🖥️ Web 多端访问
-- 🛠️ MCP 支持
-- 📝 Markdown 渲染（代码高亮、LaTeX 公式、表格、Mermaid）
-- 🪾 消息分支
-- 🔍 搜索能力（Exa、Tavily、Zhipu、LinkUp、Brave、Perplexity 等）
-- 🧩 Prompt 变量（模型名称、时间等）
-- 🤳 供应商二维码导入和导出
-- 🤖 Agent 自定义
-- 🧠 类 ChatGPT 记忆功能
-- 📝 AI 翻译
-- 🌐 自定义 HTTP 请求头和请求体
-- 💌 Silly Tavern 角色卡导入
+本仓库保留上游历史提交。GitHub 文件历史中出现的上游提交身份只代表对应的 Git 元数据，不代表本项目的所有者发生变化。
 
-## ✨ 贡献
-
-本项目使用 [Android Studio](https://developer.android.com/studio) 开发，欢迎提交 PR。
-
-技术栈：
-
-- [Kotlin](https://kotlinlang.org/)（开发语言）
-- [Koin](https://insert-koin.io/)（依赖注入）
-- [Jetpack Compose](https://developer.android.com/jetpack/compose)（UI 框架）
-- [DataStore](https://developer.android.com/topic/libraries/architecture/datastore)（偏好数据存储）
-- [Room](https://developer.android.com/training/data-storage/room)（数据库）
-- [Coil](https://coil-kt.github.io/coil/)（图片加载）
-- [Material You](https://m3.material.io/)（UI 设计）
-- [Navigation Compose](https://developer.android.com/develop/ui/compose/navigation)（导航）
-- [Okhttp](https://square.github.io/okhttp/)（HTTP 客户端）
-- [kotlinx.serialization](https://github.com/Kotlin/kotlinx.serialization)（JSON 序列化）
-- [compose-icons/lucide](https://composeicons.com/icon-libraries/lucide)（图标库）
-
-> [!TIP]
-> 你需要在 `app` 文件夹下添加 `google-services.json` 文件才能构建应用。
-
-> [!IMPORTANT]
-> 以下 PR 将被拒绝：
-> 1. 翻译相关修改，例如添加新语言或更新现有翻译；
-> 2. 添加新功能，本项目对功能方向有明确取舍；
-> 3. 大规模重构以及由 AI 生成的改动。
-
-## 💰 捐赠
-
-* [Patreon](https://patreon.com/rikkahub)
-* [爱发电](https://afdian.com/a/reovo)
-
-## ⭐ Star History
-
-如果喜欢这个项目，欢迎点个 Star ⭐
-
-[![Star History Chart](https://api.star-history.com/svg?repos=re-ovo/rikkahub&type=Date)](https://star-history.com/#re-ovo/rikkahub&Date)
-
-## 📄 许可证
+## 许可证
 
 [License](LICENSE)

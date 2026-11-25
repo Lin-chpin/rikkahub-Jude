@@ -35,10 +35,10 @@ android {
     productFlavors {
         create("public") {
             dimension = "distribution"
-            versionCode = 177
-            versionName = "v1.2.1"
-            buildConfigField("String", "VERSION_NAME", "\"v1.2.1\"")
-            buildConfigField("String", "VERSION_CODE", "\"177\"")
+            versionCode = 178
+            versionName = "v2.0.1"
+            buildConfigField("String", "VERSION_NAME", "\"v2.0.1\"")
+            buildConfigField("String", "VERSION_CODE", "\"178\"")
         }
         create("personal") {
             dimension = "distribution"
