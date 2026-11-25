@@ -52,12 +52,14 @@ import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.richtext.MarkdownBlock
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.components.ui.Select
+import me.rerere.rikkahub.ui.components.ui.rememberDeferredSliderState
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.ui.theme.rememberChatFontFamily
 import me.rerere.rikkahub.utils.plus
 import org.koin.androidx.compose.koinViewModel
 import java.io.File
+import kotlin.math.roundToInt
 
 @Composable
 fun SettingPreferencesUIPage(vm: SettingVM = koinViewModel()) {
@@ -311,6 +313,18 @@ fun SettingPreferencesUIPage(vm: SettingVM = koinViewModel()) {
                     item(
                         headlineContent = { Text(stringResource(R.string.setting_display_page_font_size_title)) },
                         supportingContent = {
+                            val fontSizeState = rememberDeferredSliderState(
+                                key = "font_size_ratio",
+                                persistedValue = normalizeFontSizeRatio(displaySetting.fontSizeRatio),
+                                normalizeFloat = ::normalizeFontSizeRatio,
+                                toFloat = { it },
+                                clampFloat = { value ->
+                                    if (value.isNaN()) 1.0f else value.coerceIn(0.5f, 2f)
+                                },
+                                onPendingFlush = { ratio ->
+                                    updateDisplaySetting(displaySetting.copy(fontSizeRatio = ratio))
+                                },
+                            )
                             Column {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
@@ -318,21 +332,25 @@ fun SettingPreferencesUIPage(vm: SettingVM = koinViewModel()) {
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
                                     Slider(
-                                        value = displaySetting.fontSizeRatio,
-                                        onValueChange = {
-                                            updateDisplaySetting(displaySetting.copy(fontSizeRatio = it))
+                                        value = fontSizeState.sliderValue,
+                                        onValueChange = fontSizeState::onValueChange,
+                                        onValueChangeFinished = {
+                                            fontSizeState.onValueChangeFinished { ratio ->
+                                                updateDisplaySetting(displaySetting.copy(fontSizeRatio = ratio))
+                                            }
                                         },
                                         valueRange = 0.5f..2f,
                                         steps = 11,
                                         modifier = Modifier.weight(1f)
                                     )
-                                    Text(text = "${(displaySetting.fontSizeRatio * 100).toInt()}%")
+                                    Text(text = "${(fontSizeState.displayValue * 100).toInt()}%")
                                 }
+                                val previewRatio = fontSizeState.displayValue
                                 MarkdownBlock(
                                     content = stringResource(R.string.setting_display_page_font_size_preview),
                                     style = LocalTextStyle.current.copy(
-                                        fontSize = LocalTextStyle.current.fontSize * displaySetting.fontSizeRatio,
-                                        lineHeight = LocalTextStyle.current.lineHeight * displaySetting.fontSizeRatio,
+                                        fontSize = LocalTextStyle.current.fontSize * previewRatio,
+                                        lineHeight = LocalTextStyle.current.lineHeight * previewRatio,
                                         fontFamily = chatFontFamily
                                     )
                                 )
@@ -388,6 +406,13 @@ fun SettingPreferencesUIPage(vm: SettingVM = koinViewModel()) {
         }
     }
 }
+
+private fun normalizeFontSizeRatio(value: Float): Float =
+    if (value.isNaN()) {
+        1.0f
+    } else {
+        (value.coerceIn(0.5f, 2f) * 1000f).roundToInt() / 1000f
+    }
 
 private val CustomFontMimeTypesUI = arrayOf(
     "font/*",

@@ -4,6 +4,7 @@ import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
@@ -83,6 +84,7 @@ import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.ui.components.ui.AutoAIIcon
 import me.rerere.rikkahub.ui.components.ui.Tag
 import me.rerere.rikkahub.ui.components.ui.TagType
+import me.rerere.rikkahub.ui.components.ui.ToggleSurface
 import me.rerere.rikkahub.ui.components.ui.icons.HeartIcon
 import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.theme.extendColors
@@ -146,23 +148,34 @@ fun ModelSelector(
             }
         }
     } else {
-        IconButton(
-            onClick = {
-                popup = true
-            },
+        ToggleSurface(
+            checked = false,
+            onClick = { popup = true },
+            modifier = modifier,
         ) {
-            if (model != null) {
-                AutoAIIcon(
-                    modifier = Modifier.size(36.dp),
-                    name = model.modelId,
-                    color = Color.Transparent
-                )
-            } else {
-                Icon(
-                    imageVector = HugeIcons.Brain02,
-                    contentDescription = stringResource(R.string.setting_model_page_chat_model),
-                    modifier = Modifier.size(20.dp)
-                )
+            Row(
+                modifier = Modifier.padding(vertical = 8.dp, horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier.size(24.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (model != null) {
+                        AutoAIIcon(
+                            modifier = Modifier.size(24.dp),
+                            name = model.modelId,
+                            color = Color.Transparent,
+                            iconPadding = 0.dp,
+                        )
+                    } else {
+                        Icon(
+                            imageVector = HugeIcons.Brain02,
+                            contentDescription = stringResource(R.string.setting_model_page_chat_model),
+                            modifier = Modifier.size(24.dp),
+                        )
+                    }
+                }
             }
         }
     }

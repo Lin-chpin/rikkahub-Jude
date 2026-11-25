@@ -2,6 +2,7 @@ package me.rerere.rikkahub.service
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -16,6 +17,9 @@ class VoiceCallRuntimePromptTest {
         assertTrue(prompt.contains("within 200 Chinese characters"))
         assertTrue(prompt.contains("do not generate a longer reply and truncate it"))
         assertTrue(prompt.contains("spoken after the voice call connected"))
+        assertTrue(prompt.contains("generate_image"))
+        assertTrue(prompt.contains("text_to_speech"))
+        assertTrue(prompt.contains("request_voice_call"))
         assertTrue(prompt.contains("Do not announce or explain this runtime state"))
     }
 
@@ -54,5 +58,19 @@ class VoiceCallRuntimePromptTest {
             VoiceCallRuntimeState.INACTIVE,
             ChatRequestMode.Normal.defaultVoiceCallRuntimeState(),
         )
+    }
+
+    @Test
+    fun `request injection omits redundant inactive state and keeps active and ended`() {
+        assertNull(buildVoiceCallRuntimeRequestPrompt(VoiceCallRuntimeState.INACTIVE))
+        assertNull(buildVoiceCallRuntimeRequestPrompt(VoiceCallRuntimeState.INACTIVE, includeConnectionEvent = true))
+
+        val activePrompt = buildVoiceCallRuntimeRequestPrompt(VoiceCallRuntimeState.ACTIVE, includeConnectionEvent = true)
+        val endedPrompt = buildVoiceCallRuntimeRequestPrompt(VoiceCallRuntimeState.ENDED, includeConnectionEvent = true)
+
+        assertTrue(activePrompt!!.contains("state=ACTIVE"))
+        assertTrue(activePrompt.contains("[VOICE_CALL_RUNTIME_EVENT]"))
+        assertTrue(endedPrompt!!.contains("state=ENDED"))
+        assertTrue(endedPrompt.contains("[VOICE_CALL_RUNTIME_EVENT]"))
     }
 }

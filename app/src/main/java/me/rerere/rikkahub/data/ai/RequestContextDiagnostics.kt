@@ -112,10 +112,12 @@ internal class RequestContextDiagnostics(
                 (item as? JsonObject)?.let { Triple(index, role(item).orEmpty(), it["content"].promptDiagnosticText()) }
             }
             val systemMessages = requestMessages.filter { (_, role, _) -> role in setOf("system", "developer") }
-            val runtimeStates = systemMessages.flatMap { (index, role, text) ->
+            val lastUserIndex = requestMessages.indexOfLast { (_, role, _) -> role == "user" }
+            val lastUserMessage = requestMessages.getOrNull(lastUserIndex)
+            val runtimeMessages = systemMessages + listOfNotNull(lastUserMessage)
+            val runtimeStates = runtimeMessages.flatMap { (index, role, text) ->
                 VOICE_CALL_STATE.findAll(text).map { "${it.groupValues[1]}@$role[$index]" }
             }
-            val lastUserIndex = requestMessages.indexOfLast { (_, role, _) -> role == "user" }
             val priorContext = requestMessages.filter { (index, role, _) ->
                 index < lastUserIndex && role !in setOf("system", "developer")
             }
@@ -136,15 +138,17 @@ internal class RequestContextDiagnostics(
             }
             // ponytail: Pronoun counts can misclassify quoted dialogue; inspect captured text only if this signal is inconclusive.
             val summaryThirdPersonDominant = compressedSummary?.let(::isThirdPersonDominant)
+            val runtimeInLastUser = lastUserMessage != null && VOICE_CALL_STATE.containsMatchIn(lastUserMessage.third)
             val runtimeInstructionIndex = systemMessages.lastOrNull { (_, _, text) ->
                 VOICE_CALL_STATE.containsMatchIn(text)
             }?.first
             val summary = "request=$requestId event=serialized " +
                 "runtimeStates=${runtimeStates.ifEmpty { listOf("missing") }.joinToString(",") } " +
+                "runtimeInLastUser=$runtimeInLastUser " +
                 "runtimeAfterLastUser=${lastUserIndex >= 0 && runtimeInstructionIndex != null && runtimeInstructionIndex > lastUserIndex} " +
-                "firstPerson=${systemMessages.any { (_, _, text) -> text.contains("Speak in the first person", ignoreCase = true) || text.contains("第1人称") || text.contains("第一人称") }} " +
-                "spokenOnly=${systemMessages.any { (_, _, text) -> text.contains("output only words you would actually say", ignoreCase = true) || text.contains("只说口语") }} " +
-                "connectionEvent=${systemMessages.any { (_, _, text) -> "[VOICE_CALL_RUNTIME_EVENT]" in text }} " +
+                "firstPerson=${runtimeMessages.any { (_, _, text) -> text.contains("Speak in the first person", ignoreCase = true) || text.contains("第1人称") || text.contains("第一人称") }} " +
+                "spokenOnly=${runtimeMessages.any { (_, _, text) -> text.contains("output only words you would actually say", ignoreCase = true) || text.contains("只说口语") }} " +
+                "connectionEvent=${runtimeMessages.any { (_, _, text) -> "[VOICE_CALL_RUNTIME_EVENT]" in text }} " +
                 "priorMessages=${priorContext.size} priorAssistantMessages=${priorAssistantMessages.size} " +
                 "priorThirdPersonCueItems=$priorThirdPersonItems " +
                 "priorAssistantThirdPersonStyleItems=$priorAssistantThirdPersonStyleItems " +

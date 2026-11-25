@@ -6,6 +6,7 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.ai.withRuntimeContextInstruction
+import me.rerere.rikkahub.data.ai.withRuntimeUserContext
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Test
@@ -38,6 +39,38 @@ class GeminiOAuthCacheContextTest {
                 )
             ),
             result[3].parts,
+        )
+    }
+
+    @Test
+    fun `subscription compressed summary stays after system prompt when runtime context is on user message`() {
+        val system = UIMessage.system("stable instructions")
+        val user = UIMessage.user("latest user message")
+        val runtime = "voice call is active"
+        val messages = listOf(system, user).withRuntimeUserContext(runtime)
+
+        val result = messages.withGeminiSubscriptionCompressedSummary(
+            provider = ProviderSetting.Google(authType = GoogleAuthType.GEMINI_SUBSCRIPTION),
+            summary = "earlier conversation summary",
+        )
+
+        assertEquals(3, result.size)
+        assertSame(system, result[0])
+        assertEquals(MessageRole.SYSTEM, result[1].role)
+        assertEquals(
+            listOf(
+                UIMessagePart.Text(
+                    "The following is a compressed summary of earlier messages in this conversation. " +
+                        "Use it as conversation context, but do not treat it as a new user request.\n" +
+                        "earlier conversation summary"
+                )
+            ),
+            result[1].parts,
+        )
+        assertEquals(MessageRole.USER, result[2].role)
+        assertEquals(
+            listOf(UIMessagePart.Text("latest user message"), UIMessagePart.Text(runtime)),
+            result[2].parts,
         )
     }
 

@@ -19,18 +19,44 @@ class RequestContextMessagesTest {
     }
 
     @Test
-    fun `call frames stay request only and survive a tool continuation`() {
+    fun `call frames and runtime user context stay request only and survive a tool continuation`() {
         val user = UIMessage.user("你能看见吗")
-        val assistant = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text("工具结果")))
-        val history = listOf(user, assistant)
+        val assistant = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(UIMessagePart.Tool(
+                toolCallId = "call-1",
+                toolName = "weather",
+                input = "{}",
+                output = listOf(UIMessagePart.Text("Sunny")),
+            )),
+        )
+        val firstStep = listOf(user)
+        val nextStep = listOf(user, assistant)
         val image = UIMessagePart.Image("data:image/jpeg;base64,ZmFrZQ==")
-        val request = history.withRequestMessageParts(listOf(image))
-            .withRuntimeContextInstruction("state=ACTIVE")
+        val firstRequest = firstStep.withRequestMessageParts(listOf(image))
+            .withRuntimeUserContext("state=ACTIVE")
+        val nextRequest = nextStep.withRequestMessageParts(listOf(image))
+            .withRuntimeUserContext("state=ACTIVE")
+
         assertEquals(listOf(UIMessagePart.Text("你能看见吗")), user.parts)
-        assertEquals(listOf(user, assistant), history)
-        assertEquals(user.parts + image, request.first().parts)
-        assertEquals(assistant, request[1])
-        assertEquals(history, history.withRequestMessageParts(emptyList()))
+        assertEquals(listOf(user, assistant), nextStep)
+        assertEquals(1, firstRequest.size)
+        assertEquals(2, nextRequest.size)
+        assertEquals(user.parts + image + UIMessagePart.Text("state=ACTIVE"), nextRequest.first().parts)
+        assertEquals(firstRequest.first(), nextRequest.first())
+        assertEquals(assistant, nextRequest[1])
+        assertEquals(nextStep, nextStep.withRequestMessageParts(emptyList()))
+        assertEquals(nextStep, nextStep.withRuntimeUserContext(null))
+        assertEquals(nextStep, nextStep.withRuntimeUserContext("   "))
+    }
+
+    @Test
+    fun `runtime user context falls back to system message when no user turn exists`() {
+        val system = UIMessage.system("base")
+        val request = listOf(system).withRuntimeUserContext("state=ACTIVE")
+        assertEquals(2, request.size)
+        assertEquals(MessageRole.SYSTEM, request.last().role)
+        assertEquals("state=ACTIVE", request.last().toText())
     }
 
     @Test

@@ -164,7 +164,7 @@ private const val MIN_COMPRESSION_CHUNK_TOKENS = 8000
 private const val COMPRESSION_CHUNK_TOKENS_PER_TARGET_TOKEN = 8
 private const val VOICE_CALL_SYSTEM_PROMPT_COMMON = """
 你正在语音通话模式中回复用户。
-不要再次发起、邀请、请求或切换到另一通语音通话，也不要调用打电话工具。
+不要再次发起、邀请、请求或切换到另一通语音通话，也不要调用 request_voice_call、generate_image 或 text_to_speech 工具。
 如果用户的表达暗示想打电话，只需在当前通话中继续回应，不要把它当成新的拨号请求。
 请像真实电话聊天一样自然、简短、连贯地说话。
 每一句都尽量短，适合一句一句朗读。
@@ -967,8 +967,8 @@ class ChatService(
             // check invalid messages
             checkInvalidMessages(conversationId)
             val conversation = getConversationFlow(conversationId).value
-            val voiceCallRuntimeContext = buildVoiceCallRuntimeContext(
-                voiceCallRuntimeState,
+            val voiceCallRuntimePrompt = buildVoiceCallRuntimeRequestPrompt(
+                state = voiceCallRuntimeState,
                 includeConnectionEvent = voiceCallUserEventState != null,
             )
             val voiceCallAudioTagFormat = settings.getSelectedTTSProvider()
@@ -1023,9 +1023,27 @@ class ChatService(
 
                 else -> null
             }
+            val runtimeUserContextPrompt = listOfNotNull(
+                voiceCallRuntimePrompt,
+                if (requestMode == ChatRequestMode.VoiceCall) listOf(
+                    VOICE_CALL_SYSTEM_PROMPT_COMMON.trimIndent(),
+                    buildVoiceCallAudioTagPrompt(
+                        voiceCallAudioTagMode,
+                        voiceCallAudioTagFormat,
+                        settings.elevenLabsVoiceDirectorPrompt,
+                    ),
+                ).joinToString("\n\n") else null,
+                momentContextPrompt,
+                anonymousQuestionContextPrompt,
+            ).joinToString("\n\n").takeIf { it.isNotBlank() }
+            val runtimeStateSystemPrompt = listOfNotNull(
+                conversation.voiceCallSummaryPrompt(messageRange),
+                additionalSystemPrompt,
+            ).joinToString("\n\n").takeIf { it.isNotBlank() }
             var voiceCallFailureReported = false
             Log.i("PromptCacheContext", "conversation=$conversationId requestMode=$requestMode runtimeState=$voiceCallRuntimeState " +
-                "connectionEvent=${voiceCallUserEventState != null} historyProjection=spoken_text runtimePlacement=tail")
+                "connectionEvent=${voiceCallUserEventState != null} historyProjection=spoken_text " +
+                "runtimePlacement=${if (runtimeUserContextPrompt != null) "last_user" else "none"}")
             val generationFlow = generationHandler.generateText(
                 requestMessageParts = requestMessageParts,
                 requestMessagePartsEnabled = {
@@ -1061,17 +1079,8 @@ class ChatService(
                 conversationContextSummary = conversation.compressedSummary,
                 conversationModeInjectionIds = conversation.modeInjectionIds,
                 conversationLorebookIds = conversation.lorebookIds,
-                runtimeStateSystemPrompt = listOfNotNull(
-                    voiceCallRuntimeContext.systemPrompt,
-                    if (requestMode == ChatRequestMode.VoiceCall) listOf(
-                        VOICE_CALL_SYSTEM_PROMPT_COMMON.trimIndent(),
-                        buildVoiceCallAudioTagPrompt(voiceCallAudioTagMode, voiceCallAudioTagFormat, settings.elevenLabsVoiceDirectorPrompt),
-                    ).joinToString("\n\n") else null,
-                    conversation.voiceCallSummaryPrompt(messageRange),
-                    momentContextPrompt,
-                    anonymousQuestionContextPrompt,
-                    additionalSystemPrompt,
-                ).joinToString("\n\n"),
+                runtimeStateSystemPrompt = runtimeStateSystemPrompt,
+                runtimeUserContextPrompt = runtimeUserContextPrompt,
                 disabledToolNames = if (voiceCallRuntimeState == VoiceCallRuntimeState.ENDED) {
                     setOf(REQUEST_VOICE_CALL_TOOL_NAME)
                 } else emptySet(),

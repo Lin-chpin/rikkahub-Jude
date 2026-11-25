@@ -23,7 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
@@ -37,6 +37,7 @@ fun BackgroundPicker(
     modifier: Modifier = Modifier,
     background: String?,
     backgroundOpacity: Float = 1.0f,
+    backgroundOpacityProvider: (() -> Float)? = null,
     labelResId: Int = R.string.assistant_page_chat_background,
     descriptionResId: Int = R.string.assistant_page_chat_background_desc,
     onUpdate: (String?) -> Unit
@@ -56,8 +57,6 @@ fun BackgroundPicker(
             }
         }
     }
-
-    val previewOpacity = backgroundOpacity.coerceIn(0f, 1f)
 
     FormItem(
         modifier = modifier,
@@ -109,7 +108,9 @@ fun BackgroundPicker(
                 contentDescription = null,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .alpha(previewOpacity)
+                    .graphicsLayer {
+                        alpha = (backgroundOpacityProvider?.invoke() ?: backgroundOpacity).coerceIn(0f, 1f)
+                    }
             )
         }
     }

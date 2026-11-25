@@ -40,11 +40,14 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -544,22 +547,55 @@ private fun ColorPickerRow(
     color: Color,
     onColorChange: (Color) -> Unit,
 ) {
-    val hsl = remember(color) {
+    var isDragging by remember { mutableStateOf(false) }
+    var lastCommittedColor by remember { mutableStateOf<Color?>(null) }
+    val initialHsl = remember {
         FloatArray(3).also { ColorUtils.colorToHSL(color.toArgb(), it) }
     }
-    var hue by remember(color) { mutableFloatStateOf(hsl[0]) }
-    var saturation by remember(color) { mutableFloatStateOf(hsl[1]) }
-    var lightness by remember(color) { mutableFloatStateOf(hsl[2]) }
-    var hslCode by remember(color) { mutableStateOf(formatHslCode(hsl[0], hsl[1], hsl[2])) }
-    var hslCodeError by remember(color) { mutableStateOf(false) }
+    var hue by remember { mutableFloatStateOf(initialHsl[0]) }
+    var saturation by remember { mutableFloatStateOf(initialHsl[1]) }
+    var lightness by remember { mutableFloatStateOf(initialHsl[2]) }
+    var hslCode by remember { mutableStateOf(formatHslCode(initialHsl[0], initialHsl[1], initialHsl[2])) }
+    var hslCodeError by remember { mutableStateOf(false) }
+    val latestOnColorChange by rememberUpdatedState(onColorChange)
 
-    fun updateColor(newHue: Float, newSaturation: Float, newLightness: Float) {
+    LaunchedEffect(color) {
+        if (!isDragging && color != lastCommittedColor) {
+            lastCommittedColor = null
+            val hsl = FloatArray(3).also { ColorUtils.colorToHSL(color.toArgb(), it) }
+            hue = hsl[0]
+            saturation = hsl[1]
+            lightness = hsl[2]
+            hslCode = formatHslCode(hsl[0], hsl[1], hsl[2])
+            hslCodeError = false
+        }
+    }
+
+    fun currentPreviewColor(): Color =
+        Color(ColorUtils.HSLToColor(floatArrayOf(hue, saturation, lightness)))
+
+    fun updateLocalColor(newHue: Float, newSaturation: Float, newLightness: Float) {
+        isDragging = true
         hue = newHue
         saturation = newSaturation
         lightness = newLightness
         hslCode = formatHslCode(newHue, newSaturation, newLightness)
         hslCodeError = false
-        onColorChange(Color(ColorUtils.HSLToColor(floatArrayOf(newHue, newSaturation, newLightness))))
+    }
+
+    fun commitCurrentColor() {
+        isDragging = false
+        val committed = currentPreviewColor()
+        lastCommittedColor = committed
+        latestOnColorChange(committed)
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            if (isDragging) {
+                commitCurrentColor()
+            }
+        }
     }
 
     Column(
@@ -574,7 +610,7 @@ private fun ColorPickerRow(
                     .size(40.dp)
                     .clip(CircleShape)
             ) {
-                drawCircle(color = color)
+                drawCircle(color = currentPreviewColor())
             }
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -582,8 +618,9 @@ private fun ColorPickerRow(
                     Slider(
                         value = hue,
                         onValueChange = {
-                            updateColor(it, saturation, lightness)
+                            updateLocalColor(it, saturation, lightness)
                         },
+                        onValueChangeFinished = ::commitCurrentColor,
                         valueRange = 0f..360f,
                         modifier = Modifier.weight(1f),
                     )
@@ -593,8 +630,9 @@ private fun ColorPickerRow(
                     Slider(
                         value = saturation,
                         onValueChange = {
-                            updateColor(hue, it, lightness)
+                            updateLocalColor(hue, it, lightness)
                         },
+                        onValueChangeFinished = ::commitCurrentColor,
                         valueRange = 0f..1f,
                         modifier = Modifier.weight(1f),
                     )
@@ -604,8 +642,9 @@ private fun ColorPickerRow(
                     Slider(
                         value = lightness,
                         onValueChange = {
-                            updateColor(hue, saturation, it)
+                            updateLocalColor(hue, saturation, it)
                         },
+                        onValueChangeFinished = ::commitCurrentColor,
                         valueRange = 0f..1f,
                         modifier = Modifier.weight(1f),
                     )
@@ -623,7 +662,9 @@ private fun ColorPickerRow(
                     hue = parsedHsl[0]
                     saturation = parsedHsl[1]
                     lightness = parsedHsl[2]
-                    onColorChange(Color(ColorUtils.HSLToColor(parsedHsl)))
+                    val committed = Color(ColorUtils.HSLToColor(parsedHsl))
+                    lastCommittedColor = committed
+                    latestOnColorChange(committed)
                 }
             },
             label = { Text("HSL") },

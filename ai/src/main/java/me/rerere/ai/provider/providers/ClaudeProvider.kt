@@ -35,6 +35,8 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.ImageGenerationResult
 import me.rerere.ai.ui.MessageChunk
+import me.rerere.ai.ui.SYSTEM_PROMPT_SECTION_METADATA_KEY
+import me.rerere.ai.ui.SYSTEM_PROMPT_STABLE_SECTION
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
@@ -263,7 +265,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
-    private fun buildMessageRequest(
+    internal fun buildMessageRequest(
         providerSetting: ProviderSetting.Claude,
         messages: List<UIMessage>,
         params: TextGenerationParams,
@@ -286,15 +288,31 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             put("stream", stream)
 
             // system prompt
-            val systemMessage = messages.firstOrNull { it.role == MessageRole.SYSTEM }
-            val systemTextParts = systemMessage?.parts?.filterIsInstance<UIMessagePart.Text>().orEmpty()
+            val systemTextParts = messages
+                .asSequence()
+                .filter { it.role == MessageRole.SYSTEM }
+                .flatMap { it.parts.asSequence() }
+                .filterIsInstance<UIMessagePart.Text>()
+                .filter { it.text.isNotBlank() }
+                .toList()
             if (systemTextParts.isNotEmpty()) {
+                val lastStableIndex = systemTextParts.indexOfLast {
+                    it.metadata
+                        ?.get(SYSTEM_PROMPT_SECTION_METADATA_KEY)
+                        ?.jsonPrimitiveOrNull
+                        ?.contentOrNull == SYSTEM_PROMPT_STABLE_SECTION
+                }
+                val cacheControlIndex = if (lastStableIndex >= 0) {
+                    lastStableIndex
+                } else {
+                    systemTextParts.lastIndex
+                }
                 put("system", buildJsonArray {
                     systemTextParts.forEachIndexed { index, part ->
                         add(buildJsonObject {
                             put("type", "text")
                             put("text", part.text)
-                            if (providerSetting.promptCaching && index == systemTextParts.lastIndex) {
+                            if (providerSetting.promptCaching && index == cacheControlIndex) {
                                 put("cache_control", cacheControlEphemeral(providerSetting.promptCacheTtl))
                             }
                         })

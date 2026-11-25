@@ -21,6 +21,21 @@ internal fun List<UIMessage>.withRequestMessageParts(parts: List<UIMessagePart>)
 internal suspend fun List<UIMessagePart>.onlyWhile(enabled: suspend () -> Boolean): List<UIMessagePart> =
     if (isEmpty() || enabled()) this else emptyList()
 
+// Transient per-turn runtime instructions attach to a request-only copy of the last USER message
+// so prior history and tool-continuation prefixes stay cacheable without mutating stored messages.
+internal fun List<UIMessage>.withRuntimeUserContext(text: String?): List<UIMessage> {
+    if (text.isNullOrBlank()) return this
+    val userIndex = indexOfLast { it.role == MessageRole.USER }
+    if (userIndex < 0) return withRuntimeContextInstruction(text)
+    return mapIndexed { index, message ->
+        if (index == userIndex) {
+            message.copy(parts = message.parts + UIMessagePart.Text(text))
+        } else {
+            message
+        }
+    }
+}
+
 internal fun List<UIMessage>.withRuntimeContextInstruction(text: String?): List<UIMessage> =
     if (text.isNullOrBlank()) this else this + UIMessage(
         role = MessageRole.SYSTEM,

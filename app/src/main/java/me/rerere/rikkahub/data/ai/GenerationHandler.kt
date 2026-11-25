@@ -101,6 +101,7 @@ class GenerationHandler(
         conversationLorebookIds: Set<Uuid> = emptySet(),
         extraSystemPrompt: String? = null,
         runtimeStateSystemPrompt: String? = null,
+        runtimeUserContextPrompt: String? = null,
         requestMessageParts: List<UIMessagePart> = emptyList(),
         requestMessagePartsEnabled: suspend () -> Boolean = { true },
         disabledToolNames: Set<String> = emptySet(),
@@ -208,6 +209,7 @@ class GenerationHandler(
                         conversationLorebookIds = conversationLorebookIds,
                         extraSystemPrompt = extraSystemPrompt,
                         runtimeStateSystemPrompt = runtimeStateSystemPrompt,
+                        runtimeUserContextPrompt = runtimeUserContextPrompt,
                         requestMessageParts = requestMessageParts.onlyWhile(requestMessagePartsEnabled),
                         maxTokensOverride = maxTokensOverride,
                         conversationId = conversationId,
@@ -432,6 +434,7 @@ class GenerationHandler(
         conversationLorebookIds: Set<Uuid> = emptySet(),
         extraSystemPrompt: String? = null,
         runtimeStateSystemPrompt: String? = null,
+        runtimeUserContextPrompt: String? = null,
         requestMessageParts: List<UIMessagePart> = emptyList(),
         maxTokensOverride: Int? = null,
         conversationId: Uuid? = null,
@@ -534,6 +537,7 @@ class GenerationHandler(
             processingStatus = processingStatus,
             onWarning = onInputWarning,
         ).withRequestMessageParts(requestMessageParts)
+            .withRuntimeUserContext(runtimeUserContextPrompt)
             .withRuntimeContextInstruction(runtimeStateSystemPrompt)
             .withGeminiSubscriptionCompressedSummary(provider, conversationContextSummary)
             .let { requestMessages ->

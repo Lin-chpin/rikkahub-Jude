@@ -28,10 +28,12 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.DisplaySetting
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.CardGroup
+import me.rerere.rikkahub.ui.components.ui.rememberDeferredSliderState
 import me.rerere.rikkahub.ui.hooks.rememberSharedPreferenceBoolean
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.plus
 import org.koin.androidx.compose.koinViewModel
+import kotlin.math.roundToInt
 
 @Composable
 fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
@@ -214,20 +216,37 @@ fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
                         item(
                             headlineContent = { Text(stringResource(R.string.setting_display_page_paste_long_text_threshold_title)) },
                             supportingContent = {
+                                val thresholdState = rememberDeferredSliderState(
+                                    key = "paste_long_text_threshold",
+                                    persistedValue = displaySetting.pasteLongTextThreshold.coerceIn(100, 10000),
+                                    normalizeFloat = { value ->
+                                        if (value.isNaN()) 100 else value.roundToInt().coerceIn(100, 10000)
+                                    },
+                                    toFloat = Int::toFloat,
+                                    clampFloat = { value ->
+                                        if (value.isNaN()) 100f else value.coerceIn(100f, 10000f)
+                                    },
+                                    onPendingFlush = { threshold ->
+                                        updateDisplaySetting(displaySetting.copy(pasteLongTextThreshold = threshold))
+                                    },
+                                )
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
                                     Slider(
-                                        value = displaySetting.pasteLongTextThreshold.toFloat(),
-                                        onValueChange = {
-                                            updateDisplaySetting(displaySetting.copy(pasteLongTextThreshold = it.toInt()))
+                                        value = thresholdState.sliderValue,
+                                        onValueChange = thresholdState::onValueChange,
+                                        onValueChangeFinished = {
+                                            thresholdState.onValueChangeFinished { threshold ->
+                                                updateDisplaySetting(displaySetting.copy(pasteLongTextThreshold = threshold))
+                                            }
                                         },
                                         valueRange = 100f..10000f,
                                         modifier = Modifier.weight(1f)
                                     )
-                                    Text(text = "${displaySetting.pasteLongTextThreshold}")
+                                    Text(text = "${thresholdState.displayValue}")
                                 }
                             },
                         )
@@ -248,21 +267,36 @@ fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
                         item(
                             headlineContent = { Text(stringResource(R.string.setting_display_page_volume_key_scroll_ratio)) },
                             supportingContent = {
+                                val scrollRatioState = rememberDeferredSliderState(
+                                    key = "volume_key_scroll_ratio",
+                                    persistedValue = normalizeVolumeKeyScrollRatio(displaySetting.volumeKeyScrollRatio),
+                                    normalizeFloat = ::normalizeVolumeKeyScrollRatio,
+                                    toFloat = { it },
+                                    clampFloat = { value ->
+                                        if (value.isNaN()) 0.5f else value.coerceIn(0.25f, 1.0f)
+                                    },
+                                    onPendingFlush = { ratio ->
+                                        updateDisplaySetting(displaySetting.copy(volumeKeyScrollRatio = ratio))
+                                    },
+                                )
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
                                     Slider(
-                                        value = displaySetting.volumeKeyScrollRatio,
-                                        onValueChange = {
-                                            updateDisplaySetting(displaySetting.copy(volumeKeyScrollRatio = it))
+                                        value = scrollRatioState.sliderValue,
+                                        onValueChange = scrollRatioState::onValueChange,
+                                        onValueChangeFinished = {
+                                            scrollRatioState.onValueChangeFinished { ratio ->
+                                                updateDisplaySetting(displaySetting.copy(volumeKeyScrollRatio = ratio))
+                                            }
                                         },
                                         valueRange = 0.25f..1.0f,
                                         steps = 2,
                                         modifier = Modifier.weight(1f)
                                     )
-                                    Text(text = "${(displaySetting.volumeKeyScrollRatio * 100).toInt()}%")
+                                    Text(text = "${(scrollRatioState.displayValue * 100).roundToInt()}%")
                                 }
                             }
                         )
@@ -328,3 +362,10 @@ fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
         }
     }
 }
+
+private fun normalizeVolumeKeyScrollRatio(value: Float): Float =
+    if (value.isNaN()) {
+        0.5f
+    } else {
+        (value.coerceIn(0.25f, 1.0f) * 100f).roundToInt() / 100f
+    }

@@ -71,6 +71,68 @@ class RequestContextDiagnosticsTest {
         assertTrue(logs.last().contains("compare=previousNormal baseline=missing"))
     }
 
+    @Test
+    fun `voice call diagnostics inspect runtime instructions in last user message and trailing system`() {
+        val logs = mutableListOf<String>()
+        val diagnostics = RequestContextDiagnostics { tag, message -> logs.add("$tag $message") }
+
+        val userPlacedBody = Json.parseToJsonElement(
+            """{
+                "model":"deepseek-v4-pro",
+                "messages":[
+                    {"role":"system","content":"stable system"},
+                    {"role":"user","content":"earlier"},
+                    {"role":"assistant","content":"earlier reply"},
+                    {"role":"user","content":[
+                        {"type":"text","text":"hello"},
+                        {"type":"text","text":"[VOICE_CALL_RUNTIME_STATE]\nstate=ACTIVE\nSpeak in the first person and output only words you would actually say.\n[VOICE_CALL_RUNTIME_EVENT]\nconnected"}
+                    ]}
+                ]
+            }"""
+        ).jsonObject
+        diagnostics.begin("conversation", "VoiceCall", "ChatCompletions", "provider")
+            .request(
+                body = userPlacedBody,
+                geminiRelayCacheEnabled = false,
+                sessionHeaderCount = 0,
+                sessionHeaderMatchesSessionId = false,
+                expectedSessionId = null,
+            )
+
+        val userPlacedLog = logs.first { it.startsWith("VoiceCallRequest ") }
+        assertTrue(userPlacedLog.contains("runtimeStates=ACTIVE@user[3]"))
+        assertTrue(userPlacedLog.contains("runtimeInLastUser=true"))
+        assertTrue(userPlacedLog.contains("runtimeAfterLastUser=false"))
+        assertTrue(userPlacedLog.contains("firstPerson=true"))
+        assertTrue(userPlacedLog.contains("spokenOnly=true"))
+        assertTrue(userPlacedLog.contains("connectionEvent=true"))
+
+        logs.clear()
+        val trailingSystemBody = Json.parseToJsonElement(
+            """{
+                "model":"deepseek-v4-pro",
+                "messages":[
+                    {"role":"system","content":"stable system"},
+                    {"role":"user","content":"hello"},
+                    {"role":"system","content":"[VOICE_CALL_RUNTIME_STATE]\nstate=ENDED"}
+                ]
+            }"""
+        ).jsonObject
+        diagnostics.begin("conversation", "VoiceCall", "ChatCompletions", "provider")
+            .request(
+                body = trailingSystemBody,
+                geminiRelayCacheEnabled = false,
+                sessionHeaderCount = 0,
+                sessionHeaderMatchesSessionId = false,
+                expectedSessionId = null,
+            )
+
+        val trailingSystemLog = logs.first { it.startsWith("VoiceCallRequest ") }
+        assertTrue(trailingSystemLog.contains("runtimeStates=ENDED@system[2]"))
+        assertTrue(trailingSystemLog.contains("runtimeInLastUser=false"))
+        assertTrue(trailingSystemLog.contains("runtimeAfterLastUser=true"))
+    }
+
     private fun body(system: String, history: String, tool: String) = Json.parseToJsonElement(
         """{"model":"deepseek-v4-pro","messages":[{"role":"system","content":"$system"},$history],"tools":[{"type":"function","function":{"name":"$tool","parameters":{}}}]}"""
     ).jsonObject

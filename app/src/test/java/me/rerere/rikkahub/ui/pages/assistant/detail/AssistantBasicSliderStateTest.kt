@@ -1,10 +1,12 @@
 package me.rerere.rikkahub.ui.pages.assistant.detail
 
+import me.rerere.rikkahub.ui.components.ui.DeferredSliderState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.roundToInt
 
 class AssistantBasicSliderStateTest {
     private fun newContextState(initial: Int = 80): DeferredSliderState<Int> =
@@ -189,5 +191,45 @@ class AssistantBasicSliderStateTest {
         assertFalse(state.isDragging)
         assertEquals(140, state.pendingCommit)
         assertEquals(140, state.displayValue)
+    }
+
+    @Test
+    fun deferredSliderStateSupportsFloatRangesAndThresholdBounds() {
+        val fontSizeState = DeferredSliderState(
+            persistedValue = 1.0f,
+            normalizeFloat = { value ->
+                if (value.isNaN()) 1.0f else (value.coerceIn(0.5f, 2f) * 1000f).roundToInt() / 1000f
+            },
+            toFloat = { it },
+            clampFloat = { value ->
+                if (value.isNaN()) 1.0f else value.coerceIn(0.5f, 2f)
+            },
+        )
+        val commits = mutableListOf<Float>()
+
+        fontSizeState.onValueChange(0.6254f)
+        fontSizeState.syncFromPersisted(1.25f)
+        assertTrue(fontSizeState.isDragging)
+        assertEquals(0.625f, fontSizeState.displayValue, 0.0001f)
+        assertTrue(commits.isEmpty())
+
+        fontSizeState.onValueChangeFinished(commits::add)
+        assertFalse(fontSizeState.isDragging)
+        assertEquals(listOf(0.625f), commits)
+
+        val thresholdState = DeferredSliderState(
+            persistedValue = 1000,
+            normalizeFloat = { value ->
+                if (value.isNaN()) 100 else value.roundToInt().coerceIn(100, 10000)
+            },
+            toFloat = Int::toFloat,
+            clampFloat = { value ->
+                if (value.isNaN()) 100f else value.coerceIn(100f, 10000f)
+            },
+        )
+        thresholdState.onValueChange(50f)
+        assertEquals(100, thresholdState.displayValue)
+        thresholdState.onValueChange(12000f)
+        assertEquals(10000, thresholdState.displayValue)
     }
 }

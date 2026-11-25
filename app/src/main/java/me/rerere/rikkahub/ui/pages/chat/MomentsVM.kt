@@ -373,12 +373,15 @@ class MomentsVM(
         maxTokens: Int,
     ): String {
         var output = ""
-        val chatHistory = conversation.messagesForGeneration()
-            .map(UIMessage::withoutVoiceCallAudioTagsForNormalContext)
+        val chatHistory = trimMomentsChatHistory(
+            conversation.messagesForGeneration()
+                .map(UIMessage::withoutVoiceCallAudioTagsForNormalContext)
+        )
         generationHandler.generateText(
             settings = settings,
             model = model,
             conversationId = conversation.id,
+            sessionIdOverride = "moments-${conversation.id}",
             requestSource = "Moments",
             messages = chatHistory + messages,
             inputTransformers = chatInputTransformers + templateTransformer,
@@ -506,4 +509,102 @@ internal fun Settings.hasConfiguredVisionOcrModel(): Boolean {
         ?.supportsImageInput() == true
     val customOcrModelConfigured = ocrOpenAIConfig.enabled && ocrOpenAIConfig.modelId.isNotBlank()
     return configuredModelSupportsImages || customOcrModelConfigured
+}
+
+internal fun trimMomentsChatHistory(
+    messages: List<UIMessage>,
+    maxMessages: Int = 20,
+): List<UIMessage> {
+    if (maxMessages <= 0 || messages.isEmpty()) return emptyList()
+    if (messages.size <= maxMessages) return messages
+
+    val minStart = messages.size - maxMessages
+    for (startIndex in minStart..messages.lastIndex) {
+        if (messages.isSafeMomentsUserTurnBoundary(startIndex)) {
+            return messages.subList(startIndex, messages.size)
+        }
+    }
+    return emptyList()
+}
+
+@Suppress("DEPRECATION")
+private fun List<UIMessage>.isSafeMomentsUserTurnBoundary(startIndex: Int): Boolean {
+    val candidate = this[startIndex]
+    if (candidate.role != MessageRole.USER || candidate.parts.any { it is UIMessagePart.ToolResult }) {
+        return false
+    }
+
+    val openIdsBefore = mutableSetOf<String>()
+    var openAnonymousBefore = 0
+    for (i in 0 until startIndex) {
+        for (part in this[i].parts) {
+            when (part) {
+                is UIMessagePart.Tool -> {
+                    if (!part.isExecuted) {
+                        if (part.toolCallId.isNotBlank()) openIdsBefore.add(part.toolCallId) else openAnonymousBefore++
+                    } else {
+                        if (part.toolCallId.isNotBlank()) openIdsBefore.remove(part.toolCallId) else if (openAnonymousBefore > 0) openAnonymousBefore--
+                    }
+                }
+
+                is UIMessagePart.ToolCall -> {
+                    if (part.toolCallId.isNotBlank()) openIdsBefore.add(part.toolCallId) else openAnonymousBefore++
+                }
+
+                is UIMessagePart.ToolResult -> {
+                    if (part.toolCallId.isNotBlank()) openIdsBefore.remove(part.toolCallId) else if (openAnonymousBefore > 0) openAnonymousBefore--
+                }
+
+                else -> Unit
+            }
+        }
+    }
+
+    if (openIdsBefore.isEmpty() && openAnonymousBefore == 0) return true
+
+    var openAnonymousInSuffix = 0
+    for (i in startIndex..lastIndex) {
+        val message = this[i]
+        var hasToolResultPart = false
+        for (part in message.parts) {
+            when (part) {
+                is UIMessagePart.Tool -> {
+                    if (!part.isExecuted) {
+                        if (part.toolCallId.isBlank()) openAnonymousInSuffix++
+                    } else if (part.toolCallId.isNotBlank()) {
+                        if (part.toolCallId in openIdsBefore) return false
+                    } else if (openAnonymousInSuffix > 0) {
+                        openAnonymousInSuffix--
+                    } else {
+                        return false
+                    }
+                }
+
+                is UIMessagePart.ToolCall -> {
+                    if (part.toolCallId.isBlank()) openAnonymousInSuffix++
+                }
+
+                is UIMessagePart.ToolResult -> {
+                    hasToolResultPart = true
+                    if (part.toolCallId.isNotBlank()) {
+                        if (part.toolCallId in openIdsBefore) return false
+                    } else if (openAnonymousInSuffix > 0) {
+                        openAnonymousInSuffix--
+                    } else {
+                        return false
+                    }
+                }
+
+                else -> Unit
+            }
+        }
+        if (message.role == MessageRole.TOOL && !hasToolResultPart) {
+            if (openAnonymousInSuffix > 0) {
+                openAnonymousInSuffix--
+            } else {
+                return false
+            }
+        }
+    }
+    return true
 }

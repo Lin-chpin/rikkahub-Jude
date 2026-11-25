@@ -337,8 +337,26 @@ fun List<UIMessagePart>.isEmptyUIMessage(): Boolean {
 fun List<UIMessage>.limitContext(size: Int): List<UIMessage> {
     if (size <= 0 || this.size <= size) return this
 
-    val startIndex = this.size - size
-    var adjustedStartIndex = startIndex
+    val startIndex = alignContextStart(this.size - size)
+    return this.subList(startIndex, this.size)
+}
+
+fun List<UIMessage>.limitContextBySteps(limit: Int): List<UIMessage> {
+    if (limit <= 0 || size <= limit) return this
+
+    val target = (limit * 0.5f).roundToInt().coerceIn(1, limit)
+    val stride = (limit - target).coerceAtLeast(1)
+    val startIndex = (((size - limit) / stride + 1) * stride).coerceAtMost(size - 1)
+    val alignedStart = alignContextStart(startIndex)
+    // Only scan [0, alignedStart] (<= startIndex) so appending messages within a stride never shifts the cut index.
+    val userTurnStart = findValidUserTurnStart(alignedStart)
+
+    return subList(userTurnStart ?: alignedStart, size)
+}
+
+private fun List<UIMessage>.alignContextStart(startIndex: Int): Int {
+    if (isEmpty()) return 0
+    var adjustedStartIndex = startIndex.coerceIn(0, lastIndex)
 
     // 循环往前查找，直到满足所有依赖条件
     var needsAdjustment = true
@@ -348,26 +366,30 @@ fun List<UIMessage>.limitContext(size: Int): List<UIMessage> {
         needsAdjustment = false
 
         // 防止无限循环
-        if (adjustedStartIndex in visitedIndices) break
-        visitedIndices.add(adjustedStartIndex)
+        if (!visitedIndices.add(adjustedStartIndex)) break
 
         val currentMessage = this[adjustedStartIndex]
 
-        // 如果当前消息包含已执行的tool（有output），往前查找对应的tool call
-        if (currentMessage.getTools().any { it.isExecuted }) {
+        // 如果当前消息包含已执行的tool（有output）或tool结果，往前查找对应的tool call
+        if (currentMessage.hasExecutedToolOrResult()) {
+            val executedIds = currentMessage.executedToolCallIds()
             for (i in adjustedStartIndex - 1 downTo 0) {
-                if (this[i].getTools().any { !it.isExecuted }) {
+                val candidate = this[i]
+                if (candidate.hasMatchingUnexecutedTool(executedIds)) {
                     adjustedStartIndex = i
                     needsAdjustment = true
+                    break
+                }
+                if (candidate.isRealUserMessage()) {
                     break
                 }
             }
         }
 
         // 如果当前消息包含未执行的tool call，往前查找对应的用户消息
-        if (currentMessage.getTools().any { !it.isExecuted }) {
+        if (!needsAdjustment && currentMessage.hasUnexecutedTool()) {
             for (i in adjustedStartIndex - 1 downTo 0) {
-                if (this[i].role == MessageRole.USER) {
+                if (this[i].isRealUserMessage()) {
                     adjustedStartIndex = i
                     needsAdjustment = true
                     break
@@ -376,19 +398,120 @@ fun List<UIMessage>.limitContext(size: Int): List<UIMessage> {
         }
     }
 
-    return this.subList(adjustedStartIndex, this.size)
+    return adjustedStartIndex
 }
 
-fun List<UIMessage>.limitContextBySteps(limit: Int): List<UIMessage> {
-    if (limit <= 0 || size <= limit) return this
-
-    val target = (limit * 0.5f).roundToInt().coerceIn(1, limit)
-    val stride = (limit - target).coerceAtLeast(1)
-    val startIndex = (((size - limit) / stride + 1) * stride).coerceAtMost(size - 1)
-    val userTurnStart = subList(0, startIndex + 1).indexOfLast { it.role == MessageRole.USER }
-
-    return subList(if (userTurnStart >= 0) userTurnStart else startIndex, size)
+private fun List<UIMessage>.findValidUserTurnStart(maxIndex: Int): Int? {
+    for (index in maxIndex.coerceAtMost(lastIndex) downTo 0) {
+        if (this[index].isRealUserMessage() && !isPrecededByDanglingToolState(index)) {
+            return index
+        }
+    }
+    return null
 }
+
+@Suppress("DEPRECATION")
+private fun List<UIMessage>.isPrecededByDanglingToolState(candidateIndex: Int): Boolean {
+    if (candidateIndex <= 0) return false
+
+    var scanStart = 0
+    for (i in candidateIndex - 1 downTo 0) {
+        if (this[i].isRealUserMessage()) {
+            scanStart = i
+            break
+        }
+    }
+
+    val openToolIds = mutableSetOf<String>()
+    var openAnonymousToolCount = 0
+
+    for (i in scanStart until candidateIndex) {
+        for (part in this[i].parts) {
+            when (part) {
+                is UIMessagePart.Tool -> {
+                    if (!part.isExecuted) {
+                        if (part.toolCallId.isNotBlank()) {
+                            openToolIds.add(part.toolCallId)
+                        } else {
+                            openAnonymousToolCount++
+                        }
+                    } else {
+                        if (part.toolCallId.isNotBlank()) {
+                            openToolIds.remove(part.toolCallId)
+                        } else if (openAnonymousToolCount > 0) {
+                            openAnonymousToolCount--
+                        }
+                    }
+                }
+
+                is UIMessagePart.ToolCall -> {
+                    if (part.toolCallId.isNotBlank()) {
+                        openToolIds.add(part.toolCallId)
+                    } else {
+                        openAnonymousToolCount++
+                    }
+                }
+
+                is UIMessagePart.ToolResult -> {
+                    if (part.toolCallId.isNotBlank()) {
+                        openToolIds.remove(part.toolCallId)
+                    } else if (openAnonymousToolCount > 0) {
+                        openAnonymousToolCount--
+                    }
+                }
+
+                else -> Unit
+            }
+        }
+    }
+
+    return openToolIds.isNotEmpty() || openAnonymousToolCount > 0
+}
+
+@Suppress("DEPRECATION")
+private fun UIMessage.hasExecutedToolOrResult(): Boolean =
+    role == MessageRole.TOOL ||
+        parts.any { it is UIMessagePart.ToolResult } ||
+        getTools().any { it.isExecuted }
+
+@Suppress("DEPRECATION")
+private fun UIMessage.executedToolCallIds(): Set<String> = buildSet {
+    for (part in parts) {
+        when (part) {
+            is UIMessagePart.Tool -> if (part.isExecuted && part.toolCallId.isNotBlank()) add(part.toolCallId)
+            is UIMessagePart.ToolResult -> if (part.toolCallId.isNotBlank()) add(part.toolCallId)
+            else -> Unit
+        }
+    }
+}
+
+@Suppress("DEPRECATION")
+private fun UIMessage.hasUnexecutedTool(): Boolean =
+    parts.any { (it is UIMessagePart.Tool && !it.isExecuted) || it is UIMessagePart.ToolCall }
+
+@Suppress("DEPRECATION")
+private fun UIMessage.hasMatchingUnexecutedTool(executedIds: Set<String>): Boolean =
+    parts.any { part ->
+        when (part) {
+            is UIMessagePart.Tool -> !part.isExecuted &&
+                (executedIds.isEmpty() || part.toolCallId.isBlank() || part.toolCallId in executedIds)
+            is UIMessagePart.ToolCall ->
+                executedIds.isEmpty() || part.toolCallId.isBlank() || part.toolCallId in executedIds
+            else -> false
+        }
+    }
+
+@Suppress("DEPRECATION")
+private fun UIMessage.isToolResultOnlyWrapper(): Boolean {
+    if (role != MessageRole.USER) return false
+    val hasToolParts = parts.any {
+        it is UIMessagePart.ToolResult || it is UIMessagePart.Tool
+    }
+    return hasToolParts && parts.isEmptyInputMessage()
+}
+
+private fun UIMessage.isRealUserMessage(): Boolean =
+    role == MessageRole.USER && !isToolResultOnlyWrapper()
 
 @Serializable
 sealed class ToolApprovalState {

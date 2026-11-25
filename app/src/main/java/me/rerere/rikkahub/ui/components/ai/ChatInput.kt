@@ -457,6 +457,7 @@ fun ChatInput(
                                 modifier = Modifier
                                     .weight(1f)
                                     .horizontalScroll(rememberScrollState()),
+                                verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
                                 // Model Picker
@@ -513,11 +514,10 @@ fun ChatInput(
                                     )
                                 }
 
+                                SubscriptionQuotaButton(
+                                    model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId),
+                                )
                             }
-
-                            SubscriptionQuotaButton(
-                                model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId),
-                            )
 
                             ActionIconButton(
                                 onClick = {

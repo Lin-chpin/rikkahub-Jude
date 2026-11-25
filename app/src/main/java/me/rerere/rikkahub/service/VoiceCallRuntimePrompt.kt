@@ -48,6 +48,15 @@ internal fun ChatRequestMode.defaultVoiceCallRuntimeState(): VoiceCallRuntimeSta
         ChatRequestMode.Normal -> VoiceCallRuntimeState.INACTIVE
     }
 
+internal fun buildVoiceCallRuntimeRequestPrompt(
+    state: VoiceCallRuntimeState,
+    includeConnectionEvent: Boolean = false,
+): String? = when (state) {
+    VoiceCallRuntimeState.INACTIVE -> null
+    VoiceCallRuntimeState.ACTIVE,
+    VoiceCallRuntimeState.ENDED -> buildVoiceCallRuntimeContext(state, includeConnectionEvent).systemPrompt
+}
+
 internal fun buildVoiceCallRuntimeContext(
     state: VoiceCallRuntimeState,
     includeConnectionEvent: Boolean = false,
@@ -64,6 +73,7 @@ internal fun buildVoiceCallRuntimeContext(
             Do not include inner thoughts, private mental state, actions, expressions, environment details, narration, stage directions, or other non-spoken descriptions.
             If the active audio-tag mode requires audio tags, keep only the required protocol tags; do not turn them into narration or extra descriptions.
             Keep the complete reply within $ACTIVE_VOICE_CALL_REPLY_CHARACTER_LIMIT Chinese characters or an equivalently brief length in other languages. Compose a naturally complete short reply within this limit; do not generate a longer reply and truncate it.
+            Do not call generate_image, text_to_speech, or request_voice_call during an active voice call.
             Do not announce or explain this runtime state unless the user's message makes it relevant.
             """.trimIndent(),
         )

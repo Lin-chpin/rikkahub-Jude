@@ -1,20 +1,19 @@
 package me.rerere.rikkahub.ui.components.ai
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -43,6 +42,7 @@ import me.rerere.rikkahub.data.ai.gemini.GeminiOAuthQuotaBucket
 import me.rerere.rikkahub.data.ai.gemini.GeminiOAuthQuotaGroup
 import me.rerere.rikkahub.data.ai.openai.OpenAICodexAuthService
 import me.rerere.rikkahub.data.datastore.findProvider
+import me.rerere.rikkahub.ui.components.ui.ToggleSurface
 import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.utils.formatQuotaResetTimeInShanghai
 import org.koin.compose.koinInject
@@ -142,24 +142,29 @@ internal fun SubscriptionQuotaButton(model: Model?) {
         }
     }
 
-    Surface(
+    ToggleSurface(
+        checked = showDialog,
         onClick = {
             rows = emptyList()
             errorText = null
             showDialog = true
             refreshQuota()
         },
-        modifier = Modifier.size(30.dp),
-        shape = CircleShape,
-        color = androidx.compose.ui.graphics.Color.Transparent,
     ) {
-        androidx.compose.foundation.layout.Box(contentAlignment = Alignment.Center) {
-            Icon(
-                imageVector = HugeIcons.Time02,
-                contentDescription = stringResource(R.string.subscription_quota_button),
-                modifier = Modifier.size(20.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        Row(
+            modifier = Modifier.padding(vertical = 8.dp, horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier.size(24.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = HugeIcons.Time02,
+                    contentDescription = stringResource(R.string.subscription_quota_button),
+                    modifier = Modifier.size(24.dp),
+                )
+            }
         }
     }
 
