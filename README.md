@@ -3,15 +3,6 @@
   <h1>RikkaHub Jude</h1>
   <p>基于 RikkaHub 的二改分支，以 <strong>RP（角色扮演）</strong> 和 <strong>本体恋</strong> 为主要特色，专注沉浸式陪伴与低延迟交互体验的原生 Android AI 客户端</p>
 
-  [![GitHub Releases](https://img.shields.io/github/v/release/Lin-chpin/rikkahub-Jude?display_name=tag)](https://github.com/Lin-chpin/rikkahub-Jude/releases)
-  [![License](https://img.shields.io/github/license/Lin-chpin/rikkahub-Jude)](LICENSE)
-
-  简体中文 | [繁體中文](README_ZH_TW.md)
-</div>
-
-<div align="center">
-  <img src="docs/img/chat.png" alt="聊天界面" width="150" />
-  <img src="docs/img/desktop.png" alt="模型选择器" width="450" />
 </div>
 
 ## 这是什么
